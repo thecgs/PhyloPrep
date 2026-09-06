@@ -9,6 +9,21 @@ from pathlib import Path
 
 from Bio import SeqIO
 
+def expand_input_paths(items):
+    """Expand FASTA paths and arbitrary-extension text path lists."""
+    paths = []
+    for item in items:
+        path = Path(item)
+        if path.is_file():
+            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+            first = next((line.strip() for line in lines if line.strip() and not line.lstrip().startswith(("#", ";"))), "")
+            if not first.startswith(">"):
+                paths.extend(line.strip() for line in lines
+                             if line.strip() and not line.lstrip().startswith(("#", ";")))
+                continue
+        paths.append(str(path))
+    return paths
+
 
 def read_fasta_alignment(infile, codon=False, count=None):
     records = list(SeqIO.parse(infile, "fasta"))

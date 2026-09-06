@@ -5,7 +5,7 @@ import os
 import sys
 import argparse
 from Bio import SeqIO
-from msap_io import atomic_output
+from msap_io import atomic_output, expand_input_paths
 
 def tidy_name(file):
     file = os.path.basename(file).replace('.', '_').replace('-', '_')
@@ -212,8 +212,8 @@ if __name__ == '__main__':
     )
     required = parser.add_argument_group('required arguments')
     optional = parser.add_argument_group('optional arguments')
-    required.add_argument('-i', '--input', metavar='FASTA',
-                          help='Input FASTA alignments.', nargs='+', required=True)
+    required.add_argument('-i', '--input', metavar='FASTA|LIST',
+                          help='FASTA files and/or path-list files (one FASTA path per line).', nargs='+', required=True)
     required.add_argument('-p', '--prefix', metavar='PREFIX', required=True,
                           help='Prefix for supermatrix, partition, and report files.')
     optional.add_argument('--missing-taxa', choices=['skip-gene', 'pad-gaps'],
@@ -224,5 +224,5 @@ if __name__ == '__main__':
     optional.add_argument('-v', '--version', action='version', version='get_supergenes v1.00',
                           help="Show program's version number and exit.")
     args = parser.parse_args()
-    get_supergenes(infiles=args.input, prefix=args.prefix, missing_taxa=args.missing_taxa)
+    get_supergenes(infiles=expand_input_paths(args.input), prefix=args.prefix, missing_taxa=args.missing_taxa)
     

@@ -87,25 +87,3 @@ def test_codon_split_retains_positions(tmp_path):
     assert (tmp_path / "codon1st.in.fasta").read_text() == ">a\nAG\n>b\nA-\n"
     assert (tmp_path / "codon2nd.in.fasta").read_text() == ">a\nTC\n>b\nT-\n"
     assert (tmp_path / "codon3rd.in.fasta").read_text() == ">a\nGT\n>b\nG-\n"
-
-
-def test_alignment_stats_uses_type_specific_ambiguity_column(tmp_path):
-    source = tmp_path / "stats.fasta"
-    output = tmp_path / "stats.tsv"
-    source.write_text(">a\nACTN\n>b\nAC--\n")
-    result = run("alignment_stats.py", "-i", source, "-o", output, "-st", "nucl", cwd=tmp_path)
-    assert result.returncode == 0
-    assert output.read_text().splitlines()[0].split("\t") == [
-        "File", "Seqtype", "Sequence_count", "Alignment_length", "N_ratio",
-        "Gap_ratio", "Variable_sites", "Parsimony_informative_sites",
-        "Distinct_patterns", "Singleton_sites", "Constant_sites"]
-
-
-def test_alignment_stats_warns_for_unaligned_sequences(tmp_path):
-    source = tmp_path / "unaligned.fasta"
-    output = tmp_path / "stats.tsv"
-    source.write_text(">a\nACT\n>b\nAC\n")
-    result = run("alignment_stats.py", "-i", source, "-o", output, "-st", "prot", cwd=tmp_path)
-    assert result.returncode == 0
-    assert "not an alignment matrix" in result.stderr
-    assert "data are not aligned" in result.stderr

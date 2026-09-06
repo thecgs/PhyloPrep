@@ -5,6 +5,7 @@ import os
 import sys
 import math
 import argparse
+from msap_io import expand_input_paths
 import tempfile
 from Bio import SeqIO
 from Bio.Data import CodonTable
@@ -153,11 +154,11 @@ The genetic-code table uses NCBI IDs (default: 1).""",
     )
     required = parser.add_argument_group('required arguments')
     optional = parser.add_argument_group('optional arguments')
-    required.add_argument('-i', '--input', metavar='CODON_FASTA', help='Input codon alignments in FASTA format.', required=True, nargs='+')
+    required.add_argument('-i', '--input', metavar='FASTA|LIST', help='FASTA files and/or path-list files (one FASTA path per line).', required=True, nargs='+')
     required.add_argument('-o', '--output', metavar='TSV', help='Output TSV file.', required=True)
     optional.add_argument('-g', '--genetic_code', '--genetic-code', metavar='TABLE', default=1, type=int,
                           help='NCBI genetic-code table (default: 1).')
     optional.add_argument('-h', '--help', action='help', help="Show program's help message and exit.")
     optional.add_argument('-v', '--version', action='version', version='calulate_4dtv_and_correction v1.00', help="Show program's version number and exit.")
     args = parser.parse_args()
-    main(infiles=args.input, outfile=args.output, genetic_code=args.genetic_code)
+    main(infiles=expand_input_paths(args.input), outfile=args.output, genetic_code=args.genetic_code)

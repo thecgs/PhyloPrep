@@ -21,7 +21,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from msap_io import atomic_output, read_fasta_alignment
+from msap_io import atomic_output, read_fasta_alignment, expand_input_paths
 
 
 STOP = False
@@ -150,6 +150,20 @@ def _manifest_valid(manifest: dict[str, Any], root: Path, expected: list[Path]) 
     return True
 
 
+def _write_path_lists(root: Path, args: argparse.Namespace) -> None:
+    """Write absolute-path lists for each alignment type produced by the batch."""
+    list_dir = root / "path-lists"
+    list_dir.mkdir(parents=True, exist_ok=True)
+    suffixes = ["prot.aln", "codon.aln"] if args.seqtype == "codon" else [f"{args.seqtype}.aln"]
+    if not args.notrim:
+        suffixes += [f"{suffix}.trimal.aln" for suffix in ("prot" , "codon")]
+    for suffix in suffixes:
+        files = sorted(path for path in root.glob(f"*.{suffix}") if path.is_file())
+        list_path = list_dir / f"all.{suffix}.pathlist"
+        with atomic_output(list_path) as handle:
+            handle.write("".join(f"{path.resolve()}\n" for path in files))
+
+
 def _terminate_group(process: subprocess.Popen) -> None:
     # The child has its own session; descendants share its process group.
     try:
@@ -253,6 +267,10 @@ def build_parser() -> argparse.ArgumentParser:
 Batch-only options:
   -j/--jobs controls how many input files run concurrently.
   -t/--thread controls alignment threads inside each MSAP.py task.
+  Input accepts individual FASTA paths, multiple FASTA paths, a path-list file
+  (one FASTA path per line, any extension), or any mixture of these forms.
+  After completion, all path lists are written under the output directory's
+  path-lists/ subdirectory (for example, path-lists/all.codon.aln.pathlist).
   Results are written directly into <output-dir> only after success; incomplete work remains in
   .msap-batch-staging and is restarted on the next run.""",
     )
@@ -261,7 +279,7 @@ Batch-only options:
     trim_seq = parser.add_argument_group("MSAP.py trimAlnSeq.py options")
     trim_al = parser.add_argument_group("MSAP.py trimAl options")
     batch = parser.add_argument_group("batch-only options")
-    required.add_argument("-i", "--input", nargs="+", required=True, metavar="FASTA", help="Input FASTA files.")
+    required.add_argument("-i", "--input", nargs="+", required=True, metavar="FASTA|LIST", help="FASTA files and/or path-list files (one FASTA path per line).")
     workflow.add_argument("-t", "--thread", type=int, default=os.cpu_count(), help="Alignment threads per input file (default: %(default)s).")
     workflow.add_argument("-s", "--align_software", "--align-software", default="mafft", choices=["mafft", "muscle", "prank", "clustalw2"], help="Alignment program (default: mafft).")
     workflow.add_argument("-n", "--notrim", action="store_true", help="Skip alignment trimming.")
@@ -288,7 +306,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--trimal-args requires --trim-software trimal")
     if any(not 0 <= value <= 1 for value in (args.G, args.N, args.X)):
         parser.error("-G, -N, and -X must be between 0 and 1")
-    inputs = [Path(item).resolve() for item in args.input]
+    inputs = [Path(item).resolve() for item in expand_input_paths(args.input)]
     missing = [str(path) for path in inputs if not path.is_file()]
     if missing:
         parser.error("input file(s) do not exist: " + ", ".join(missing))
@@ -335,6 +353,8 @@ def main(argv: list[str] | None = None) -> int:
                     future.cancel()
                 print("Cancellation requested; active jobs will not be promoted to results.", file=sys.stderr)
                 failures += 1
+        if not STOP:
+            _write_path_lists(root, args)
         return 130 if STOP else (1 if failures else 0)
 
 

@@ -127,6 +127,13 @@ The two trimmed files are omitted when `--notrim` is used.
 workflow and trimming options, then adds controls for concurrent input files
 and output management.
 
+For scripts that accept multiple alignments (`MSAP_batch.py`, `get_supergenes.py`
+and `calulate_4dtv_and_correction.py`), `-i` accepts individual FASTA paths,
+multiple paths, a text file containing one path per line (the extension is
+irrelevant), or any mixture of these forms. `alignment_qc.py` accepts the same
+input forms. A file is recognized as a path list when its first non-comment
+line does not begin with `>`.
+
 ```bash
 MSAP_batch.py -i gene1.fasta gene2.fasta gene3.fasta \
   -o msap-results -j 3 -t 4 -st codon
@@ -149,6 +156,13 @@ Completed tasks are recorded as hidden `.msap-batch-state-*.json` files. A
 subsequent run skips a task only when its input path, size and modification time
 still match the checkpoint.
 
+After a successful batch run, the `path-lists/` subdirectory contains
+absolute-path lists grouped by alignment type, such as
+`path-lists/all.prot.aln.pathlist`, `path-lists/all.codon.aln.pathlist`,
+`path-lists/all.prot.trimal.aln.pathlist` and
+`path-lists/all.codon.trimal.aln.pathlist`. These files can be passed directly to
+the multi-file QC and downstream scripts.
+
 ## Supermatrix construction
 
 Use `get_supergenes.py` to concatenate aligned genes:
@@ -160,6 +174,9 @@ get_supergenes.py -i gene1.fasta gene2.fasta gene3.fasta -p supermatrix
 # Keep incomplete genes and pad missing taxa with gaps.
 get_supergenes.py -i gene1.fasta gene2.fasta gene3.fasta -p supermatrix \
   --missing-taxa pad-gaps
+
+# The same input can be supplied through a path list.
+get_supergenes.py -i alignments.list -p supermatrix
 ```
 
 Outputs:
@@ -187,10 +204,9 @@ PartitionFinder configuration references the PHYLIP alignment, not FASTA.
 | `fasta2axt.py` | Convert FASTA to AXT |
 | `fasta2nex.py` | Convert FASTA to NEXUS |
 | `fasta2phy.py` | Convert FASTA to PHYLIP |
-| `sequence_qc.py` | Check individual FASTA sequences, symbols, length, gaps, ambiguity, CDS frame and stop codons; write TSV/HTML reports |
+| `alignment_qc.py` | Check FASTA alignment matrices, symbols, length, gaps, ambiguity, informative sites and codon stop codons; write QC reports |
 | `rename_taxa.py` | Rename sequence IDs from a mapping table and sanitize names for phylogenetic software |
 | `filter_sequences.py` | Filter sequences by length, gap/N content, or taxon lists |
-| `alignment_stats.py` | Summarize alignment length, missing data, variable sites and parsimony-informative sites |
 
 Every script provides a help page:
 
@@ -200,17 +216,16 @@ MSAP_batch.py --help
 AA2Codon.py --help
 trimAlnSeq.py --help
 get_supergenes.py --help
-sequence_qc.py --help
+alignment_qc.py --help
 rename_taxa.py --help
 filter_sequences.py --help
-alignment_stats.py --help
 ```
 
 Run alignment quality control before concatenation:
 
 ```bash
-sequence_qc.py -i alignments/*.fasta -st codon -o qc/alignment.tsv
-sequence_qc.py -i alignments/*.fasta -st nucl -o qc/alignment.html
+alignment_qc.py -i alignments/*.fasta -st codon -p qc/alignment
+alignment_qc.py -i alignments/*.fasta -st nucl -p qc/alignment
 ```
 
 `filter_sequences.py` removes complete taxa. Its gap and `N` ratios, and the
