@@ -1,133 +1,294 @@
+# PhyloPrep
+
+**PhyloPrep: Reproducible preprocessing for phylogenetic and phylogenomic analyses**
+
+Reproducible preparation of coding DNA,
+protein and nucleotide FASTA files.
+
+PhyloPrep combines sequence validation, codon-aware alignment, optional trimming,
+supermatrix construction and downstream phylogenetic preparation in a small
+set of command-line scripts.
+
+![PhyloPrep workflow](docs/workflow.svg)
+
+PhyloPrep is the collective name for this workflow. `MSAP.py` is the main
+multiple-sequence-alignment component, while `MSAP_batch.py` provides batch
+execution.
+
+> **Scope.** PhyloPrep prepares alignments and matrices; it does not replace the
+> external aligners or phylogenetic programs used by the workflow.
+
+## Highlights
+
+- Codon-aware workflow: CDS → protein alignment → codon back-translation.
+- Direct protein and nucleotide alignment workflows.
+- MAFFT, MUSCLE, PRANK and ClustalW2 support.
+- `trimAlnSeq.py` by default, or trimAl with user-supplied arguments.
+- Validation of FASTA IDs, sequence type, CDS length and protein/CDS concordance.
+- Supermatrix construction with `skip-gene` and `pad-gaps` missing-taxon modes.
+- Four-fold degenerate-site extraction and raw/HKY-corrected 4DTV calculation.
+- Concurrent batch execution with resumable checkpoints via `MSAP_batch.py`.
+
 ## Installation
 
-Before use, you need to install Python, and biopython.
+Requirements:
 
-Python3 >= 3.8
+- Python ≥ 3.8
+- Biopython
+- At least one supported aligner (MAFFT is the default)
 
-Supports four multiple sequence alignment softwares (mafft, muscle, clustalw2, prank), with mafft as the default. Therefore, the appropriate multiple sequence alignment software should be installed in the environment according to requirements before use.
-
-```
+```bash
 git clone https://github.com/thecgs/MSAP.git
-pip install biopython
-conda install bioconda::mafft
+cd MSAP
+python -m pip install biopython
+conda install -c bioconda mafft
 ```
 
-Note:
-1. Sequence IDs in the input FASTA format file must be unique.
-2. All Python scripts require executable permissions.
+Optional programs:
 
-## Usage
-
-### Main Script Usage:
-
-```
-usage: MSAP.py -i str [-t int] [-s str] [-n] [-G float] [-N float] [-X float] [-st str] [-g int] [-h] [-v]
-
-Run multiple sequence alignment pipeline (MSAP).
-
-Codon Seqence Alignment Pipeline:
-step1. Remove stop codon.
-step2. The biopython used to CDS seqence convert to protein seqence.
-step3. Alignment software (such as mafft (v7.525), muscle (v5.2), clustalw2 (v2.1), prank (v170427)) to align protein seqence.
-step4. The AA2Codon.py script used to protein alignment convert codon aligment.
-step5. The trimAlnSeq.py script used to trim codon seqence.
-
-Nucletic or Protein Seqence Alignment Pipeline:
-step1. Alignment software (such as mafft (v7.525), muscle (v5.2), clustalw2 (v2.1), prank (v170427)) to align nucletic or protein seqence.
-step2. The trimAlnSeq.py script used to trim nucletic or protein seqence.
-
-used example:
-            MASP.py -i CDS.fasta -g 1 -st codon
-            MASP.py -i protein.fasta -s muscle -t 1 -st prot
-            MASP.py -i 16S.fasta -s mafft -t 1 -n -st nucl
-
-Translate Tables/Genetic Codes:
-1: The Standard
-2: The Vertebrate Mitochondrial
-3: The Yeast Mitochondrial
-4: The Mold, Protozoan, and Coelenterate Mitochondrial Code and the Mycoplasma/Spiroplasma
-5: The Invertebrate Mitochondrial
-6: The Ciliate, Dasycladacean and Hexamita Nuclear
-9: The Echinoderm and Flatworm Mitochondrial
-10: The Euplotid Nuclear
-11: The Bacterial, Archaeal and Plant Plastid
-12: The Alternative Yeast Nuclear
-13: The Ascidian Mitochondrial
-14: The Alternative Flatworm Mitochondrial
-15: Blepharisma Macronuclear
-16: Chlorophycean Mitochondrial
-21: Trematode Mitochondrial
-22: Scenedesmus obliquus Mitochondrial
-23: Thraustochytrium Mitochondrial
-24: Pterobranchia Mitochondrial
-25: Candidate Division SR1 and Gracilibacteria
-26: Pachysolen tannophilus Nuclear
-27: Karyorelict Nuclear
-28: Condylostoma Nuclear
-29: Mesodinium Nuclear
-30: Peritrich Nuclear
-31: Blastocrithidia Nuclear
-32: Balanophoraceae Plastid
-33: Cephalodiscidae Mitochondrial
-Reference website: https://www.ncbi.nlm.nih.gov/Taxonomy/taxonomyhome.html/index.cgi?chapter=tgencodes
-
-Note:
-clustalw2 and prank does not allow multiple sequences to use the same name.
-
-required arguments:
-  -i, --input str       A file of fasta format.
-
-optional arguments:
-  -t, --thread int      Align software thread number. default=24
-  -s, --align_software str
-                        Align software. such as mafft, muscle, clustalw2, prank. default=mafft
-  -n, --notrim          No trim align file. The trimAlnSeq.py script used to trim codon, nucletic, or protein alignment.
-  -G, --G float         Gap maxinum ratio for per site. range 0-1. default=0
-  -N, --N float         N maxinum ratio for per site in Nucl or Codon sequence. range 0-1. default=0
-  -X, --X float         X maxinum ratio for per site in protein sequence. range 0-1. default=0
-  -st, --seqtype str    Sequence type. such as nucl, prot or codon. default=codon
-  -g, --genetic_code int
-                        Genetic code, only "--model codon" take effect. default=1
-  -h, --help            Show program's help message and exit.
-  -v, --version         Show program's version number and exit.
-
-Date:2026/02/12 Author:Guisen Chen Email:thecgs001@foxmail.com
+```bash
+conda install -c bioconda muscle prank clustalw2 trimal
 ```
 
-### Format Conversion:
-The default format for multiple sequence alignment files is FASTA. You can use fasta2axt.py, fasta2nex.py, and fasta2phy.py to convert them to AXT, NEXUS, and PHYLIP formats respectively.
-```
-fasta2axt.py -i input.fasta -o output.axt
-fasta2nex.py -i input.fasta -o output.nex
-fasta2phy.py -i input.fasta -o output.phy
+## `MSAP.py` workflow (PhyloPrep alignment component)
+
+| Input type | Processing route |
+| --- | --- |
+| `codon` | Validate CDS → remove terminal/internal stops → translate → align proteins → back-translate → optionally trim protein and codon alignments |
+| `prot` | Validate proteins → align → optionally trim |
+| `nucl` | Validate nucleotides → align → optionally trim |
+
+Before invoking an aligner, MSAP checks that the input contains at least two
+non-empty sequences with unique IDs. Codon input must be ungapped and have a
+length divisible by three. Alternative initiator codons such as `GTG` are
+treated as methionine at the first codon position.
+
+### Quick start
+
+```bash
+# Codon alignment; MAFFT and trimAlnSeq.py are used by default.
+MSAP.py -i CDS.fasta -st codon -g 1
+
+# Protein alignment with MUSCLE and four alignment threads.
+MSAP.py -i proteins.fasta -st prot -s muscle -t 4
+
+# Nucleotide alignment with no trimming.
+MSAP.py -i 16S.fasta -st nucl --notrim
 ```
 
-### Split Codon Alignment:
-Split the multiple sequence alignment of codons in FASTA format into positions 1, 2, and 3.
-```
-split_codon_seqence_alignment.py codon.aln.fasta
+Use `MSAP.py --help` for the complete interface. The public option aliases
+include both hyphenated and legacy underscore forms where applicable.
+
+### Trimming
+
+`trimAlnSeq.py` is the default trimmer. Its thresholds are independent:
+
+```bash
+MSAP.py -i CDS.fasta -st codon \
+  --trimAlnSeq-G 0.2 --trimAlnSeq-N 0.2 --trimAlnSeq-X 0.2
 ```
 
-### Construct a Super Alignment Matrix:
-Merge multiple gene multiple sequence alignment files of FASTA format into a single superalignment matrix.
-```
-get_supergenes.py -i aln1.fasta aln2.fasta aln3.fasta -o supergene.aln.fasta
-```
+Select trimAl instead:
 
-### Four-Fold Degenerated Sites:
-Batch calculations of 4dtv (transversion rate on 4-fold degenerate sites) are performed using HKY substitution models.
-```
-calulate_4dtv_and_correction.py -i aln1.fasta aln2.fasta aln3.fasta -o 4dtv.tsv -g 1
+```bash
+MSAP.py -i 16S.fasta -st nucl --trim-software trimal
 ```
 
-Extract four-fold degenerate sites from a multiple sequence alignment file in FASTA format.
+Without custom arguments, trimAl uses `-automated1`. Pass trimAl arguments
+unchanged with `--trimal-args`; this option must be last and replaces the
+default:
+
+```bash
+MSAP.py -i 16S.fasta -st nucl --trim-software trimal \
+  --trimal-args -gt 0.8 -cons 60
 ```
-extract_4-fold_degenerated_sites.py -i aln.fasta -o 4-fold_degenerated_sites.aln.fasta -g 1
+
+`--notrim` disables all alignment trimming, including both protein and codon
+outputs in the codon workflow.
+
+### Common output files
+
+For `sample.fasta` aligned with MAFFT, a codon workflow typically produces:
+
+| File | Description |
+| --- | --- |
+| `sample.CDS.fasta` | Cleaned CDS sequences |
+| `sample.pep.fasta` | Translated protein sequences |
+| `sample.mafft.prot.aln` | Protein alignment |
+| `sample.mafft.codon.aln` | Back-translated codon alignment |
+| `sample.mafft.prot.trimal.aln` | Trimmed protein alignment |
+| `sample.mafft.codon.trimal.aln` | Trimmed codon alignment |
+
+The two trimmed files are omitted when `--notrim` is used.
+
+## Batch processing: `MSAP_batch.py` (PhyloPrep batch component)
+
+`MSAP_batch.py` is the batch version of `MSAP.py`. It accepts the same MSAP
+workflow and trimming options, then adds controls for concurrent input files
+and output management.
+
+```bash
+MSAP_batch.py -i gene1.fasta gene2.fasta gene3.fasta \
+  -o msap-results -j 3 -t 4 -st codon
 ```
 
-### Other Script:
-AA2Codon.py script is an alternative to [pal2nal](https://github.com/liaochenlanruo/PAL2NAL)
+| Option | Meaning |
+| --- | --- |
+| `-j`, `--jobs` | Number of input files processed simultaneously |
+| `-t`, `--thread` | Alignment threads used by each individual MSAP task |
+| `-o`, `--output-dir` | Flat result directory; default `msap-results` |
+| `--no-resume` | Ignore completed checkpoint records and rerun inputs |
 
+Each input runs in a private staging directory. Files are promoted directly
+into the flat output directory only after MSAP succeeds and expected alignment
+files are present. Ctrl-C terminates active child processes; incomplete tasks
+are not marked complete. Input basenames must be unique in a flat output
+directory.
 
-trimAlnSeq.py script is an alternative to [trimal](https://github.com/inab/trimal)
+Completed tasks are recorded as hidden `.msap-batch-state-*.json` files. A
+subsequent run skips a task only when its input path, size and modification time
+still match the checkpoint.
 
+## Supermatrix construction
+
+Use `get_supergenes.py` to concatenate aligned genes:
+
+```bash
+# Default: omit a gene from the final matrix when any taxon is missing.
+get_supergenes.py -i gene1.fasta gene2.fasta gene3.fasta -p supermatrix
+
+# Keep incomplete genes and pad missing taxa with gaps.
+get_supergenes.py -i gene1.fasta gene2.fasta gene3.fasta -p supermatrix \
+  --missing-taxa pad-gaps
+```
+
+Outputs:
+
+```text
+supermatrix.fasta
+supermatrix.phy
+supermatrix_partition_finder.cfg
+supermatrix_part_iqtree.txt
+supermatrix.report.tsv
+```
+
+The report records skipped genes and gap-padded taxa. The generated
+PartitionFinder configuration references the PHYLIP alignment, not FASTA.
+
+## Utility scripts
+
+| Script | Purpose |
+| --- | --- |
+| `AA2Codon.py` | Back-translate a protein alignment to codons |
+| `trimAlnSeq.py` | Trim alignments by gap, `N` and `X` thresholds |
+| `split_codon_seqence_alignment.py` | Split codon alignments into first, second and third positions |
+| `extract_4-fold_degenerated_sites.py` | Extract four-fold degenerate third positions |
+| `calulate_4dtv_and_correction.py` | Calculate raw and HKY-corrected 4DTV |
+| `fasta2axt.py` | Convert FASTA to AXT |
+| `fasta2nex.py` | Convert FASTA to NEXUS |
+| `fasta2phy.py` | Convert FASTA to PHYLIP |
+| `sequence_qc.py` | Check individual FASTA sequences, symbols, length, gaps, ambiguity, CDS frame and stop codons; write TSV/HTML reports |
+| `rename_taxa.py` | Rename sequence IDs from a mapping table and sanitize names for phylogenetic software |
+| `filter_sequences.py` | Filter sequences by length, gap/N content, or taxon lists |
+| `alignment_stats.py` | Summarize alignment length, missing data, variable sites and parsimony-informative sites |
+
+Every script provides a help page:
+
+```bash
+MSAP.py --help
+MSAP_batch.py --help
+AA2Codon.py --help
+trimAlnSeq.py --help
+get_supergenes.py --help
+sequence_qc.py --help
+rename_taxa.py --help
+filter_sequences.py --help
+alignment_stats.py --help
+```
+
+Run alignment quality control before concatenation:
+
+```bash
+sequence_qc.py -i alignments/*.fasta -st codon -o qc/alignment.tsv
+sequence_qc.py -i alignments/*.fasta -st nucl -o qc/alignment.html
+```
+
+`filter_sequences.py` removes complete taxa. Its gap and `N` ratios, and the
+protein `X` ratio, are calculated across each whole sequence. After taxa
+filtering it also removes alignment columns that contain only missing states
+(`N`/`-` for nucleotide, `X`/`-` for protein, and `NNN`/`---` codons). Use
+`trimAlnSeq.py` for threshold-based site-level or codon-site trimming.
+
+```bash
+filter_sequences.py -i alignment.fasta -o filtered.fasta -st nucl \
+  --max-gap-ratio 0.5 --max-n-ratio 0.1
+filter_sequences.py -i proteins.fasta -o filtered.fasta -st prot --max-x-ratio 0.2
+```
+
+## 4DTV formulas
+
+`calulate_4dtv_and_correction.py` accepts a codon alignment containing two
+sequences. A codon site is counted only when both codons are four-fold
+degenerate and share the same first two bases.
+
+### Raw 4DTV
+
+Let `N` be the number of accepted codon sites and `V` the number of sites
+whose third bases differ by a transversion:
+
+$$
+\mathrm{raw\ 4DTV}=p=\frac{V}{N}
+$$
+
+### Base frequencies
+
+The two third-base observations at every accepted site are pooled. If `n_A`,
+`n_C`, `n_G` and `n_T` are their counts:
+
+$$
+\begin{aligned}
+A&=\frac{n_A}{2N}, & C&=\frac{n_C}{2N},\\
+G&=\frac{n_G}{2N}, & T&=\frac{n_T}{2N}
+\end{aligned}
+$$
+
+$$
+R=A+G,\qquad Y=C+T
+$$
+
+Adjacent symbols denote multiplication; for example, `TCR` means `T × C × R`
+and `AGY` means `A × G × Y`.
+
+### HKY-style correction
+
+$$
+a=-\ln\left[1-p\frac{TCR/Y+AGY/R}{2(TCR+AGY)}\right]
+$$
+
+$$
+b=-\ln\left(1-\frac{p}{2YR}\right)
+$$
+
+$$
+\mathrm{corrected\ 4DTV}
+=2a\left(\frac{TC}{Y}+\frac{AG}{R}\right)
+-2b\left(\frac{TCR}{Y}+\frac{AGY}{R}-YR\right)
+$$
+
+If any base frequency is zero, or a logarithm argument is non-positive, the
+corrected value is reported as `NA`. Raw 4DTV and site counts are still
+reported.
+
+## Genetic-code tables
+
+Options accepting `-g` or `--genetic-code` use NCBI genetic-code table IDs.
+The default is table `1` (Standard). See the [NCBI genetic code tables](https://www.ncbi.nlm.nih.gov/Taxonomy/Utils/wprintgc.cgi).
+
+## Reproducibility notes
+
+- Keep FASTA sequence IDs unique within every input file.
+- Quote paths containing spaces or shell-special characters.
+- `clustalw2` and `prank` do not accept duplicated sequence IDs.
+- Run each analysis in a dedicated output directory when inputs share a
+  basename.
+- The example sequences in the workflow figures are illustrative only.

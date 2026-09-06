@@ -5,6 +5,7 @@ import sys
 import gzip
 import argparse
 from Bio import SeqIO
+from msap_io import atomic_output, check_output_path
 
 
 def open_input(filename):
@@ -27,7 +28,7 @@ def open_output(filename):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Trim fasta format alignment sequence.",
+        description="Trim fasta format alignment sequence. For codon mode, filtering is performed per codon triplet.",
         add_help=False,
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="Date:2026/06/21 Author:Guisen Chen Email:thecgs001@foxmail.com"
@@ -60,26 +61,26 @@ if __name__ == "__main__":
 
     optional.add_argument(
         "-G", "--G",
-        default=0,
+        default=0.2,
         type=float,
         metavar="float",
-        help="Maximum gap ratio per site. range 0-1. default=0"
+        help="Maximum gap ratio per site. range 0-1. default=0.2"
     )
 
     optional.add_argument(
         "-N", "--N",
-        default=0,
+        default=0.2,
         type=float,
         metavar="float",
-        help="Maximum N ratio per site for nucleotide/codon. default=0"
+        help="Maximum N ratio per site for nucleotide/codon. default=0.2"
     )
 
     optional.add_argument(
         "-X", "--X",
-        default=0,
+        default=0.2,
         type=float,
         metavar="float",
-        help="Maximum X ratio per site for protein. default=0"
+        help="Maximum X ratio per site for protein. default=0.2"
     )
 
     optional.add_argument(
@@ -186,10 +187,10 @@ if __name__ == "__main__":
                 elif codon != first:
                     invariant = False
 
-                # gap takes priority
+                # Gap and N thresholds are independent, including partial gaps.
                 if "-" in codon:
                     gap_count += 1
-                elif "N" in codon:
+                if "N" in codon:
                     n_count += 1
 
             if gap_count / seqnum > G:
@@ -250,16 +251,12 @@ if __name__ == "__main__":
     # Output
     # --------------------------------------------------
 
-    out = open_output(outfile)
-
-    if st == "codon":
-        for name, seq in zip(ids, seqs):
-            trimmed = "".join(seq[start:end] for start, end in keep)
-            out.write(f">{name}\n{trimmed}\n")
-    else:
-        for name, seq in zip(ids, seqs):
-            trimmed = "".join(seq[i] for i in keep)
-            out.write(f">{name}\n{trimmed}\n")
-
-    if out is not sys.stdout:
-        out.close()
+    with atomic_output(outfile, inputs=[infile]) as out:
+        if st == "codon":
+            for name, seq in zip(ids, seqs):
+                trimmed = "".join(seq[start:end] for start, end in keep)
+                out.write(f">{name}\n{trimmed}\n")
+        else:
+            for name, seq in zip(ids, seqs):
+                trimmed = "".join(seq[i] for i in keep)
+                out.write(f">{name}\n{trimmed}\n")

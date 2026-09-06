@@ -1,0 +1,17 @@
+# Local third-party alignment and trimming binaries
+clustalw2-2.1/
+mafft-7.525/
+muscle-5.2/
+prank-170427/
+trimAl-1.5.0/
+
+# Python cache files
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Generated example and temporary office files
+example/run-results/
+example/*.tsv
+docs/.~*
+.DS_Store

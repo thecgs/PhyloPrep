@@ -5,6 +5,7 @@ import argparse
 from Bio import SeqIO
 from Bio.Data import CodonTable
 from collections import Counter, defaultdict
+from msap_io import atomic_output
 
 #def get_four_fold_codons(genetic_code=1):
 #    """
@@ -164,7 +165,7 @@ def extract_four_fold_site(infile, outfile, genetic_code=1):
             #output[j].append(seqs[j][pos:pos + 3])
             output[j].append(seqs[j][pos + 2])
 
-    with open(outfile, "w") as out:
+    with atomic_output(outfile, inputs=[infile]) as out:
         for seq_id, fragments in zip(ids, output):
             out.write(f">{seq_id}\n")
             out.write("".join(fragments))
@@ -172,42 +173,22 @@ def extract_four_fold_site(infile, outfile, genetic_code=1):
     return None
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description="""extract four-fold degenerated sites
+    parser = argparse.ArgumentParser(
+        description="Extract third positions from four-fold degenerate codon sites in a codon FASTA alignment.",
+        add_help=False,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""Example:
+  extract_4-fold_degenerated_sites.py -i codon.aln.fasta -o fourfold.fasta -g 1
 
-Translate Tables/Genetic Codes:
- 1: Standard
- 2: Vertebrate Mitochondrial
- 3: YeastMitochondrial
- 4: Mold Mitochondrial, Protozoan Mitochondrial, Coelenterate Mitochondrial, Mycoplasma, Spiroplasma
- 5: Invertebrate Mitochondrial
- 6: Ciliate Nuclear, Dasycladacean Nuclear, Hexamita Nuclear
- 9: Echinoderm Mitochondrial, Flatworm Mitochondrial
-10: Euplotid Nuclear
-11: Bacterial, Archaeal, Plant Plastid
-12: Alternative Yeast Nuclear
-13: Ascidian Mitochondrial
-14: Alternative Flatworm Mitochondrial
-16: Chlorophycean Mitochondrial
-21: Trematode Mitochondrial
-22: Scenedesmus obliquus Mitochondrial
-23: Thraustochytrium Mitochondrial
-24: Rhabdopleuridae Mitochondrial
-25: Candidate Division SR1, Gracilibacteria
-26: Pachysolen tannophilus Nuclear
-27: Karyorelict Nuclear
-28: Condylostoma Nuclear
-29: Mesodinium Nuclear
-30: Peritrich Nuclear
-31: Blastocrithidia Nuclear
-33: Cephalodiscidae Mitochondrial UAA-Tyr
-
-""", add_help=False, epilog='Date:2024/12/25 Author:Guisen Chen Email:thecgs001@foxmail.com', formatter_class=argparse.RawDescriptionHelpFormatter)
+The genetic-code table uses NCBI IDs (default: 1).""",
+    )
     required = parser.add_argument_group('required arguments')
     optional = parser.add_argument_group('optional arguments')
-    required.add_argument('-i', '--input', metavar='str', help='A fasta format input file.', required=True)    
-    required.add_argument('-o', '--output', metavar='str', help='A fasta format output file.', required=True)
-    optional.add_argument('-g', '--genetic_code', metavar='int', default=1, type=int, help=f'Genetic code. default=1')
+    required.add_argument('-i', '--input', metavar='CODON_FASTA', help='Input codon alignment in FASTA format.', required=True)
+    required.add_argument('-o', '--output', metavar='FASTA', help='Output four-fold-site alignment in FASTA format.', required=True)
+    optional.add_argument('-g', '--genetic_code', '--genetic-code', metavar='TABLE', default=1, type=int,
+                          help='NCBI genetic-code table (default: 1).')
     optional.add_argument('-h', '--help', action='help', help="Show program's help message and exit.")
-    optional.add_argument('-v', '--version', action='version', version='v1.00', help="Show program's version number and exit.")
+    optional.add_argument('-v', '--version', action='version', version='extract_4-fold_degenerated_sites v1.00', help="Show program's version number and exit.")
     args = parser.parse_args()
     extract_four_fold_site(infile=args.input, outfile=args.output, genetic_code=args.genetic_code)

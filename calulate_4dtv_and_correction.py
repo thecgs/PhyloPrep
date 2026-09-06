@@ -5,6 +5,7 @@ import os
 import sys
 import math
 import argparse
+import tempfile
 from Bio import SeqIO
 from Bio.Data import CodonTable
 from collections import defaultdict
@@ -46,25 +47,31 @@ def is_transversion(base1, base2):
     return res
 
 def calculate_4DTV_correction(infile, four_fold_codons, error=sys.stderr):
-    print(infile)
+    if not os.path.isfile(infile):
+        raise ValueError(f"Input file does not exist: {infile}")
     file_prefix = os.path.splitext(os.path.basename(infile))[0]
-    
-    for i, record in enumerate(SeqIO.parse(infile, 'fasta')):
-        if i == 0:
-            seq1 = record.seq.upper()
-            seq1_name = record.id
-        elif i == 1:
-            seq2 = record.seq.upper()
-            seq2_name = record.id
-        else:
-            print(f'Warning: The {infile} alignment file contains more than two sequences, only the first two records are used.', file=error)
-            break
-            #sys.exit()
-    
-    #print(infile, len(seq1), len(seq2))
+    records = list(SeqIO.parse(infile, 'fasta'))
+    if len(records) != 2:
+        raise ValueError(
+            f"{infile}: expected exactly two sequences, found {len(records)}"
+        )
+    if records[0].id == records[1].id:
+        raise ValueError(f"{infile}: sequence IDs must be different")
+
+    seq1_name = records[0].id
+    seq2_name = records[1].id
+    seq1 = str(records[0].seq).upper()
+    seq2 = str(records[1].seq).upper()
+    if not seq1 or not seq2:
+        raise ValueError(f"{infile}: sequences must not be empty")
     if len(seq1) != len(seq2):
-        print('Error: sequence1 length is not equal to sequence2 length, please check if it is a alignment file.', file=error)
-        sys.exit()
+        raise ValueError(
+            f"{infile}: sequence lengths differ ({len(seq1)} and {len(seq2)})"
+        )
+    if len(seq1) % 3 != 0:
+        raise ValueError(
+            f"{infile}: alignment length {len(seq1)} is not divisible by 3"
+        )
     
     seq = ''
     fourfold_sites_total_number = 0
@@ -79,7 +86,13 @@ def calculate_4DTV_correction(infile, four_fold_codons, error=sys.stderr):
             if is_transversion(codon1[2], codon2[2]):
                 fourfold_sites_transversion_number += 1
 
-    raw_4dtv = fourfold_sites_transversion_number/fourfold_sites_total_number
+    if fourfold_sites_total_number == 0:
+        return (
+            file_prefix, seq1_name, seq2_name, "NA", "NA",
+            fourfold_sites_total_number, fourfold_sites_transversion_number,
+        )
+
+    raw_4dtv = fourfold_sites_transversion_number / fourfold_sites_total_number
 
     A = 0.5*seq.count('A')/fourfold_sites_total_number
     C = 0.5*seq.count('C')/fourfold_sites_total_number
@@ -104,54 +117,47 @@ def calculate_4DTV_correction(infile, four_fold_codons, error=sys.stderr):
 
 def main(infiles, outfile, genetic_code=1):
     four_fold_codons = get_four_fold_codons(genetic_code=genetic_code)
-    #print(four_fold_codons)
-    out = open(outfile, 'w')
-    print('Input file prefix\tSeqence1 name\tSeqence2 name\tcorrected_4dtv\traw_4dtv\tfourfold_sites_total_number\tfourfold_sites_transversion_number', file=out)
+    # Calculate every input before touching the destination file. This keeps
+    # an existing result intact when one alignment is invalid.
+    results = []
     for infile in infiles:
-        file_prefix, seq1_name, seq2_name, corrected_4dtv, raw_4dtv, fourfold_sites_total_number, fourfold_sites_transversion_number = calculate_4DTV_correction(infile, four_fold_codons)
-        print(file_prefix, seq1_name, seq2_name, corrected_4dtv, raw_4dtv, fourfold_sites_total_number, fourfold_sites_transversion_number, sep='\t', file=out)
-    out.close()
+        results.append(calculate_4DTV_correction(infile, four_fold_codons))
+
+    output_dir = os.path.dirname(os.path.abspath(outfile)) or "."
+    os.makedirs(output_dir, exist_ok=True)
+    temporary_name = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=output_dir,
+            prefix=".4dtv-", suffix=".tmp", delete=False
+        ) as out:
+            temporary_name = out.name
+            print('Input file prefix\tSequence1 name\tSequence2 name\tcorrected_4dtv\traw_4dtv\tfourfold_sites_total_number\tfourfold_sites_transversion_number', file=out)
+            for result in results:
+                print(*result, sep='\t', file=out)
+        os.replace(temporary_name, outfile)
+    finally:
+        if temporary_name and os.path.exists(temporary_name):
+            os.unlink(temporary_name)
     return None
     
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description="""4dtv (transversion rate on 4-fold degenerated sites) are calculated with HKY substitution models 
+    parser = argparse.ArgumentParser(
+        description="Calculate raw and HKY-corrected 4DTV from codon FASTA alignments.",
+        add_help=False,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""Example:
+  calulate_4dtv_and_correction.py -i gene1.fasta gene2.fasta -o 4dtv.tsv -g 1
 
-Reference: M. Hasegawa, H. Kishino, and T. Yano, J. Mol. Evol. 22 (2), 160 (1985)
-
-Translate Tables/Genetic Codes:
- 1: Standard
- 2: Vertebrate Mitochondrial
- 3: YeastMitochondrial
- 4: Mold Mitochondrial, Protozoan Mitochondrial, Coelenterate Mitochondrial, Mycoplasma, Spiroplasma
- 5: Invertebrate Mitochondrial
- 6: Ciliate Nuclear, Dasycladacean Nuclear, Hexamita Nuclear
- 9: Echinoderm Mitochondrial, Flatworm Mitochondrial
-10: Euplotid Nuclear
-11: Bacterial, Archaeal, Plant Plastid
-12: Alternative Yeast Nuclear
-13: Ascidian Mitochondrial
-14: Alternative Flatworm Mitochondrial
-16: Chlorophycean Mitochondrial
-21: Trematode Mitochondrial
-22: Scenedesmus obliquus Mitochondrial
-23: Thraustochytrium Mitochondrial
-24: Rhabdopleuridae Mitochondrial
-25: Candidate Division SR1, Gracilibacteria
-26: Pachysolen tannophilus Nuclear
-27: Karyorelict Nuclear
-28: Condylostoma Nuclear
-29: Mesodinium Nuclear
-30: Peritrich Nuclear
-31: Blastocrithidia Nuclear
-33: Cephalodiscidae Mitochondrial UAA-Tyr
-
-""", add_help=False, epilog='Date:2024/12/24 Author:Guisen Chen Email:thecgs001@foxmail.com', formatter_class=argparse.RawDescriptionHelpFormatter)
+The genetic-code table uses NCBI IDs (default: 1).""",
+    )
     required = parser.add_argument_group('required arguments')
     optional = parser.add_argument_group('optional arguments')
-    required.add_argument('-i', '--input', metavar='str', help='A fasta format input file.', required=True, nargs='*')    
-    required.add_argument('-o', '--output', metavar='str', help='A tsv format output file.', required=True)
-    optional.add_argument('-g', '--genetic_code', metavar='int', default=1, type=int, help=f'Genetic code. default=1')
+    required.add_argument('-i', '--input', metavar='CODON_FASTA', help='Input codon alignments in FASTA format.', required=True, nargs='+')
+    required.add_argument('-o', '--output', metavar='TSV', help='Output TSV file.', required=True)
+    optional.add_argument('-g', '--genetic_code', '--genetic-code', metavar='TABLE', default=1, type=int,
+                          help='NCBI genetic-code table (default: 1).')
     optional.add_argument('-h', '--help', action='help', help="Show program's help message and exit.")
-    optional.add_argument('-v', '--version', action='version', version='v1.00', help="Show program's version number and exit.")
+    optional.add_argument('-v', '--version', action='version', version='calulate_4dtv_and_correction v1.00', help="Show program's version number and exit.")
     args = parser.parse_args()
     main(infiles=args.input, outfile=args.output, genetic_code=args.genetic_code)
