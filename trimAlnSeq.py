@@ -41,14 +41,14 @@ if __name__ == "__main__":
         "-i", "--input",
         metavar="str",
         required=True,
-        help="An input alignment file in FASTA format."
+        help="Input FASTA alignment, optionally gzip-compressed; use - for stdin."
     )
 
     optional.add_argument(
         "-o", "--output",
         metavar="str",
         default="-",
-        help="Output FASTA file. default=stdout"
+        help="Output FASTA file, optionally .gz; - or omitted means stdout. Zero retained sites is an error."
     )
 
     optional.add_argument(
@@ -251,7 +251,12 @@ if __name__ == "__main__":
     # Output
     # --------------------------------------------------
 
-    with atomic_output(outfile, inputs=[infile]) as out:
+    if not keep:
+        sys.exit("No alignment sites remain after trimming; no output was written.")
+
+    destination = None if outfile == "-" else outfile
+    sources = [] if infile == "-" else [infile]
+    with atomic_output(destination, inputs=sources) as out:
         if st == "codon":
             for name, seq in zip(ids, seqs):
                 trimmed = "".join(seq[start:end] for start, end in keep)

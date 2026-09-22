@@ -8,6 +8,8 @@ import pytest
 
 SCRIPT = Path(__file__).parents[1] / "trimAlnSeq.py"
 MSAP_SCRIPT = Path(__file__).parents[1] / "MSAP.py"
+sys.path.insert(0, str(MSAP_SCRIPT.parent))
+import MSAP
 
 
 def run_trim(tmp_path, seqtype, sequences):
@@ -63,7 +65,8 @@ def test_codon_site_with_gap_and_n_is_filtered_by_n_threshold(tmp_path):
     output_file = tmp_path / "output.fasta"
     input_file.write_text(">seq0\nATG\n>seq1\nN--\n")
 
-    subprocess.run(
+    output_file.write_text("previous matrix\n")
+    result = subprocess.run(
         [
             sys.executable,
             str(SCRIPT),
@@ -78,10 +81,13 @@ def test_codon_site_with_gap_and_n_is_filtered_by_n_threshold(tmp_path):
             "-N",
             "0",
         ],
-        check=True,
+        capture_output=True,
+        text=True,
     )
 
-    assert output_file.read_text() == ">seq0\n\n>seq1\n\n"
+    assert result.returncode != 0
+    assert "No alignment sites remain" in result.stderr
+    assert output_file.read_text() == "previous matrix\n"
 
 
 def test_msap_can_use_trimal_with_a_path_containing_spaces(tmp_path):
@@ -106,6 +112,7 @@ def test_msap_can_use_trimal_with_a_path_containing_spaces(tmp_path):
         "  esac\n"
         "done\n"
         "cp \"$infile\" \"$outfile\"\n"
+        "printf '#ColumnsMap\\t0,1,2\\n'\n"
     )
     mafft.chmod(0o755)
     trimal.chmod(0o755)
@@ -185,7 +192,6 @@ def test_msap_can_use_trimal_with_a_path_containing_spaces(tmp_path):
     ("seqtype", "fasta", "error"),
     [
         ("nucl", ">sp1\nACT\n>sp1\nACT\n", "Duplicate sequence ID: sp1"),
-        ("codon", ">sp1\nATGA\n>sp2\nATG\n", "CDS length 4 is not divisible by 3"),
     ],
 )
 def test_msap_validates_input_before_checking_external_dependencies(
@@ -196,9 +202,81 @@ def test_msap_validates_input_before_checking_external_dependencies(
 
     result = subprocess.run(
         [sys.executable, str(MSAP_SCRIPT), "-i", str(input_file), "-st", seqtype],
+        cwd=tmp_path,
         capture_output=True,
         text=True,
     )
 
     assert result.returncode == 2
     assert error in result.stderr
+
+
+def _fake_trimal(path, output_fasta, columns):
+    """Write a minimal trimAl replacement for codon-transfer tests."""
+    path.write_text(
+        "#!/bin/sh\n"
+        "while [ \"$#\" -gt 0 ]; do\n"
+        "  case \"$1\" in\n"
+        "    -out) outfile=\"$2\"; shift 2 ;;\n"
+        "    *) shift ;;\n"
+        "  esac\n"
+        "done\n"
+        f"cat > \"$outfile\" <<'EOF'\n{output_fasta}EOF\n"
+        f"printf '#ColumnsMap\\t{columns}\\n'\n"
+    )
+    path.chmod(0o755)
+
+
+def test_trimal_codon_columns_are_transferred_as_whole_triplets(tmp_path):
+    protein = tmp_path / "protein.aln"
+    codon = tmp_path / "codon.aln"
+    protein_out = tmp_path / "protein.trim.aln"
+    codon_out = tmp_path / "codon.trim.aln"
+    trimal = tmp_path / "trimal"
+    protein.write_text(">a\nMKA\n>b\nMKA\n")
+    codon.write_text(">a\nATGAAAGCT\n>b\nATGAAGGCC\n")
+    _fake_trimal(trimal, ">a\nMA\n>b\nMA\n", "0,2")
+
+    MSAP.trim_codon_with_trimal(
+        str(trimal), [], str(protein), str(codon), str(protein_out), str(codon_out)
+    )
+
+    assert protein_out.read_text() == ">a\nMA\n>b\nMA\n"
+    assert codon_out.read_text() == ">a\nATGGCT\n>b\nATGGCC\n"
+    assert all(len(line) % 3 == 0 for line in codon_out.read_text().splitlines()
+               if line and not line.startswith(">"))
+
+
+def test_trimal_codon_rejects_changed_sequence_set_without_writing_outputs(tmp_path):
+    protein = tmp_path / "protein.aln"
+    codon = tmp_path / "codon.aln"
+    protein_out = tmp_path / "protein.trim.aln"
+    codon_out = tmp_path / "codon.trim.aln"
+    trimal = tmp_path / "trimal"
+    protein.write_text(">a\nMKA\n>b\nMKA\n")
+    codon.write_text(">a\nATGAAAGCT\n>b\nATGAAGGCC\n")
+    protein_out.write_text("previous protein\n")
+    codon_out.write_text("previous codon\n")
+    _fake_trimal(trimal, ">a\nMA\n", "0,2")
+
+    with pytest.raises(ValueError, match="changed the sequence set"):
+        MSAP.trim_codon_with_trimal(
+            str(trimal), [], str(protein), str(codon), str(protein_out), str(codon_out)
+        )
+
+    assert protein_out.read_text() == "previous protein\n"
+    assert codon_out.read_text() == "previous codon\n"
+
+
+@pytest.mark.parametrize("option", ["-in", "-out", "-fasta", "-backtrans", "-colnumbering"])
+def test_trimal_codon_rejects_arguments_that_override_its_mapping_contract(tmp_path, option):
+    protein = tmp_path / "protein.aln"
+    codon = tmp_path / "codon.aln"
+    protein.write_text(">a\nMKA\n>b\nMKA\n")
+    codon.write_text(">a\nATGAAAGCT\n>b\nATGAAGGCC\n")
+
+    with pytest.raises(ValueError, match="managed automatically"):
+        MSAP.trim_codon_with_trimal(
+            "unused", [option], str(protein), str(codon),
+            str(tmp_path / "protein.out"), str(tmp_path / "codon.out")
+        )

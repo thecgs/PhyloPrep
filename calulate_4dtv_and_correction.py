@@ -5,7 +5,7 @@ import os
 import sys
 import math
 import argparse
-from msap_io import expand_input_paths
+from msap_io import expand_input_paths, check_output_path
 import tempfile
 from Bio import SeqIO
 from Bio.Data import CodonTable
@@ -61,8 +61,8 @@ def calculate_4DTV_correction(infile, four_fold_codons, error=sys.stderr):
 
     seq1_name = records[0].id
     seq2_name = records[1].id
-    seq1 = str(records[0].seq).upper()
-    seq2 = str(records[1].seq).upper()
+    seq1 = str(records[0].seq).upper().replace('U', 'T')
+    seq2 = str(records[1].seq).upper().replace('U', 'T')
     if not seq1 or not seq2:
         raise ValueError(f"{infile}: sequences must not be empty")
     if len(seq1) != len(seq2):
@@ -116,7 +116,9 @@ def calculate_4DTV_correction(infile, four_fold_codons, error=sys.stderr):
         corrected_4dtv = 'NA'
     return file_prefix, seq1_name, seq2_name, corrected_4dtv, raw_4dtv, fourfold_sites_total_number, fourfold_sites_transversion_number
 
-def main(infiles, outfile, genetic_code=1):
+def main(infiles, outfile, genetic_code=1, input_lists=()):
+    infiles = list(infiles)
+    check_output_path(outfile, infiles + list(input_lists))
     four_fold_codons = get_four_fold_codons(genetic_code=genetic_code)
     # Calculate every input before touching the destination file. This keeps
     # an existing result intact when one alignment is invalid.
@@ -161,4 +163,4 @@ The genetic-code table uses NCBI IDs (default: 1).""",
     optional.add_argument('-h', '--help', action='help', help="Show program's help message and exit.")
     optional.add_argument('-v', '--version', action='version', version='calulate_4dtv_and_correction v1.00', help="Show program's version number and exit.")
     args = parser.parse_args()
-    main(infiles=expand_input_paths(args.input), outfile=args.output, genetic_code=args.genetic_code)
+    main(infiles=expand_input_paths(args.input), outfile=args.output, genetic_code=args.genetic_code, input_lists=args.input)

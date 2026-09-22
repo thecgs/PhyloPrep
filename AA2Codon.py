@@ -6,7 +6,7 @@ import textwrap
 import argparse
 from Bio import SeqIO, Seq
 from Bio.Data import CodonTable
-from msap_io import atomic_output
+from msap_io import atomic_output, normalize_dna
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(
@@ -20,7 +20,7 @@ if __name__ == '__main__':
     required = parser.add_argument_group('required arguments')
     optional = parser.add_argument_group('optional arguments')
     required.add_argument('-c', '--cds', metavar='CDS_FASTA', required=True,
-                          help='Input CDS FASTA file.')
+                          help='Input CDS FASTA file; RNA U is normalized to DNA T.')
     required.add_argument('-p', '--protaln', '--protein-alignment', metavar='PROTEIN_FASTA', required=True,
                           help='Input protein alignment in FASTA format.')
     optional.add_argument('-o', '--out', '--output', metavar='CODON_FASTA', default=None,
@@ -46,7 +46,7 @@ if __name__ == '__main__':
             raise ValueError(
                 f"{record.id}: CDS length {len(record.seq)} is not divisible by 3"
             )
-        mapping[record.id] = textwrap.wrap(str(record.seq.upper()), 3)
+        mapping[record.id] = textwrap.wrap(normalize_dna(record.seq), 3)
 
     if not mapping:
         raise ValueError("No CDS sequences found.")
@@ -99,7 +99,7 @@ if __name__ == '__main__':
                 # validation as well.
                 expected = translated
                 table = CodonTable.unambiguous_dna_by_id[genetic_code]
-                if codon_index == 0 and (codon in table.start_codons or codon == "GTG"):
+                if codon_index == 0 and (codon in table.start_codons):
                     expected = "M"
                 if expected != amino_acid:
                     raise ValueError(

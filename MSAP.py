@@ -11,33 +11,21 @@ import shutil
 import tempfile
 from Bio import SeqIO, Seq
 from Bio.Data import CodonTable
-from msap_io import atomic_output, read_fasta_alignment
+from msap_io import atomic_output, read_fasta_alignment, normalize_dna
+from sequence_audit import (preprocess_codon, preprocess_nucl, rejected_input, add_macse_options,
+                            normalize_workflow, macse_align, preprocess_protein, add_protein_options,
+                            merge_reports)
 
 def remove_stop_codon(infile, outfile, genetic_code):
-    with atomic_output(outfile, inputs=[infile]) as out:
-        for record in SeqIO.parse(infile, 'fasta'):
-            if len(record.seq) % 3 == 1:
-                sequence = record.seq[:-1].upper()
-            elif len(record.seq) % 3 == 2:
-                sequence = record.seq[:-2].upper()
-            elif record.seq[-3:].translate(table=genetic_code, stop_symbol='*') == '*':
-                sequence = record.seq[:-3].upper()
-            else:
-                sequence = record.seq.upper()
-            fixed_sequence = ""
-            for i in range(0, len(sequence), 3):
-                codon = sequence[i:i + 3]
-                if codon in CodonTable.unambiguous_dna_by_id[genetic_code].stop_codons:
-                    codon = "NNN"
-                fixed_sequence += codon
-            print(f'>{record.id}\n{fixed_sequence}', file=out)
-    return None
+    preprocess_codon(infile, outfile, genetic_code, get_prefix(infile) + '.sequence_changes.tsv')
+
 
 def translate_seq(infile, outfile, genetic_code):
     with atomic_output(outfile, inputs=[infile]) as out:
         for record in SeqIO.parse(infile, 'fasta'):
+            record.seq = Seq.Seq(normalize_dna(record.seq))
             start_codon = str(record.seq[:3]).upper()
-            if start_codon in Seq.CodonTable.unambiguous_dna_by_id[genetic_code].start_codons or start_codon == "GTG":
+            if start_codon in Seq.CodonTable.unambiguous_dna_by_id[genetic_code].start_codons:
                 protein_sequence = list(record.seq.translate(table=genetic_code, cds=False))
                 protein_sequence[0] = "M"
                 protein_sequence = ''.join(protein_sequence)
@@ -106,7 +94,7 @@ def check_dependencies(softwares):
     return software_path
 
 
-def validate_input_fasta(infile, seqtype):
+def validate_input_fasta(infile, seqtype, protein_stop_symbol='*'):
     """Validate FASTA records before invoking an external alignment program."""
     if not os.path.isfile(infile):
         raise ValueError(f"Input FASTA file does not exist: {infile}")
@@ -123,10 +111,10 @@ def validate_input_fasta(infile, seqtype):
         if not record.seq:
             raise ValueError(f"{record.id}: sequence is empty")
 
-    if seqtype in {"nucl", "codon"}:
-        allowed_characters = set("ACGTURYSWKMBDHVN-")
+    if seqtype in {"nucl", "codon", "pseudogene"}:
+        allowed_characters = set("ACGTURYSWKMBDHVN?-")
     else:
-        allowed_characters = set("ACDEFGHIKLMNPQRSTVWYBXZJUO*-")
+        allowed_characters = set("ACDEFGHIKLMNPQRSTVWYBXZJUO?-") | {protein_stop_symbol}
 
     for record in records:
         invalid_characters = set(str(record.seq).upper()) - allowed_characters
@@ -134,13 +122,11 @@ def validate_input_fasta(infile, seqtype):
             invalid = "".join(sorted(invalid_characters))
             raise ValueError(f"{record.id}: invalid {seqtype} character(s): {invalid}")
 
+        if seqtype == "pseudogene" and ("-" in record.seq or "U" in record.seq.upper()):
+            raise ValueError(f"{record.id}: pseudogene input must be ungapped DNA (use T, not U)")
         if seqtype == "codon":
             if "-" in record.seq:
                 raise ValueError(f"{record.id}: codon input must not contain gaps")
-            if len(record.seq) % 3 != 0:
-                raise ValueError(
-                    f"{record.id}: CDS length {len(record.seq)} is not divisible by 3"
-                )
 
 
 def trim_alignment(
@@ -192,6 +178,17 @@ def trim_alignment(
 def trim_codon_with_trimal(trimal_path, trimal_args, protein_file, codon_file,
                           protein_output, codon_output):
     """Apply trimAl's original protein column indices to whole codons."""
+    # This function owns the input, output, format and column-map contract.
+    # Letting a forwarded argument replace any of them could make trimAl
+    # operate on another alignment or return a back-translated product, while
+    # the following code still interpreted its columns as protein positions.
+    reserved_options = {"-in", "-out", "-fasta", "-backtrans", "-colnumbering"}
+    conflicting = sorted(reserved_options.intersection(trimal_args))
+    if conflicting:
+        raise ValueError(
+            "--trimal-args must not contain " + ", ".join(conflicting) +
+            "; these options are managed automatically for codon trimming"
+        )
     proteins = {r.id: str(r.seq) for r in read_fasta_alignment(protein_file)}
     codons = {r.id: str(r.seq) for r in read_fasta_alignment(codon_file, codon=True)}
     if proteins.keys() != codons.keys() or any(
@@ -221,6 +218,19 @@ def trim_codon_with_trimal(trimal_path, trimal_args, protein_file, codon_file,
                 columns[0] < 0 or columns[-1] >= original_length):
             raise ValueError("trimAl column mapping is empty, unordered, or out of range")
         trimmed = read_fasta_alignment(trimmed_path)
+        trimmed_ids = {record.id for record in trimmed}
+        if trimmed_ids != proteins.keys() or len(trimmed) != len(proteins):
+            missing = sorted(proteins.keys() - trimmed_ids)
+            unexpected = sorted(trimmed_ids - proteins.keys())
+            details = []
+            if missing:
+                details.append("removed IDs: " + ", ".join(missing))
+            if unexpected:
+                details.append("unexpected IDs: " + ", ".join(unexpected))
+            raise ValueError(
+                "trimAl changed the sequence set during codon trimming (" +
+                "; ".join(details) + ")"
+            )
         for record in trimmed:
             if record.id not in proteins or str(record.seq).upper() != "".join(
                 proteins[record.id][i] for i in columns
@@ -233,28 +243,72 @@ def trim_codon_with_trimal(trimal_path, trimal_args, protein_file, codon_file,
         with atomic_output(protein_output, inputs=[protein_file, codon_file]) as out:
             SeqIO.write(trimmed, out, "fasta")
 
+def run_pseudogene(args, infile, prefix, tools):
+    # MACSE accepts a narrower alphabet than the rest of the workflow.  Make
+    # uncertainty explicit before invocation, then retain those audit rows.
+    cleaned = prefix + '.pseudogene.cleaned.fasta'
+    input_report = prefix + '.input.sequence_changes.tsv'
+    preprocess_nucl(infile, cleaned, input_report)
+    nt, aa = macse_align(args, cleaned, prefix, tools['java'])
+    merge_reports([input_report, prefix + '.sequence_changes.tsv'], prefix + '.merged.sequence_changes.tsv')
+    os.replace(prefix + '.merged.sequence_changes.tsv', prefix + '.sequence_changes.tsv')
+    os.remove(cleaned)
+    os.remove(input_report)
+    if args.notrim:
+        return
+    out_nt, out_aa = prefix + '.macse.codon.trimal.aln', prefix + '.macse.prot.trimal.aln'
+    if args.trim_software == 'trimal':
+        trim_codon_with_trimal(tools['trimal'], args.trimal_args, aa, nt, out_aa, out_nt)
+        return
+    nucleotides = read_fasta_alignment(nt, codon=True)
+    proteins = {r.id: str(r.seq).upper() for r in read_fasta_alignment(aa)}
+    length = len(nucleotides[0].seq) // 3
+    count = len(nucleotides)
+    keep = []
+    for i in range(length):
+        codons = [str(r.seq[3*i:3*i+3]).upper() for r in nucleotides]
+        residues = [proteins[r.id][i] for r in nucleotides]
+        if (sum('-' in c for c in codons) / count <= args.G and
+                sum('N' in c for c in codons) / count <= args.N and
+                residues.count('X') / count <= args.X):
+            keep.append(i)
+    if not keep:
+        raise ValueError('No codons remain after paired pseudogene trimming')
+    with atomic_output(out_nt) as handle_nt, atomic_output(out_aa) as handle_aa:
+        for r in nucleotides:
+            handle_nt.write(f'>{r.id}\n' + ''.join(str(r.seq[3*i:3*i+3]) for i in keep) + '\n')
+            handle_aa.write(f'>{r.id}\n' + ''.join(proteins[r.id][i] for i in keep) + '\n')
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(
         description="""Align nucleotide, protein, or CDS FASTA sequences.
 
 Workflows:
-  codon  Remove terminal/internal stop codons, translate CDS, align proteins,
+  codon  Remove terminal stops, mask internal stops as NNN, translate and align,
          back-translate to codons, then optionally trim both alignments.
+  pseudogene  MACSE alignment allowing frameshifts/stops; audited export and paired trimming.
   prot   Align protein sequences, then optionally trim the alignment.
   nucl   Align nucleotide sequences, then optionally trim the alignment.""",
         add_help=False,
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""Examples:
   MSAP.py -i CDS.fasta -st codon -g 1
+  MSAP.py -i gene.fa -st pseudogene --macse-jar macse_v2.07.jar
   MSAP.py -i protein.fasta -st prot -s muscle -t 4
   MSAP.py -i 16S.fasta -st nucl --trim-software trimal
   MSAP.py -i 16S.fasta -st nucl --trim-software trimal \\
       --trimal-args -automated1
 
 Notes:
+  * nucl/codon accept RNA: U is normalized to T and IUPAC ambiguity codes are
+    normalized to N, with one audit row per edit. Inputs remain unchanged.
+  * prot removes trailing stop symbols and masks internal stops, ambiguous and
+    non-standard residues as X, with an audit report. Use --protein-stop-symbol
+    '.' for dot-encoded stops (default: '*').
   * Input FASTA must contain at least two non-empty sequences with unique IDs.
-  * Codon input must contain ungapped nucleotide sequences whose lengths are
-    divisible by three.
+  * Codon input must contain ungapped nucleotide sequences. A terminal excess
+    of one or two bases is trimmed with a warning and audit record.
   * clustalw2 and prank do not accept duplicated sequence IDs.
   * -g/--genetic-code uses NCBI genetic-code table IDs (default: 1).
     https://www.ncbi.nlm.nih.gov/Taxonomy/Utils/wprintgc.cgi""",
@@ -266,10 +320,10 @@ Notes:
     required.add_argument('-i', '--input', metavar='FASTA', required=True,
                           help='Input FASTA file.')
     optional.add_argument('-t', '--thread', metavar='N', default=os.cpu_count(),
-                          type=int, help=f'Number of alignment threads (default: {os.cpu_count()}).')
-    optional.add_argument('-s', '--align_software', '--align-software', default='mafft',
-                          choices=["mafft", "muscle", "prank", "clustalw2"],
-                          help='Alignment program (default: mafft).')
+                          type=int, help=f'MAFFT/MUSCLE threads; not used by PRANK, ClustalW2 or MACSE (default: {os.cpu_count()}).')
+    optional.add_argument('-s', '--align_software', '--align-software', default=None,
+                          choices=["mafft", "muscle", "prank", "clustalw2", "macse"],
+                          help='Alignment program (default: mafft; pseudogene requires macse).')
     optional.add_argument('-n', '--notrim', action='store_true',
                           help='Skip alignment trimming, regardless of the selected trimming software.')
     optional.add_argument('-ts', '--trim-software', default='trimAlnSeq',
@@ -285,9 +339,9 @@ Notes:
                                       type=float, metavar='float',
                                       help='Maximum X ratio per site in protein data. default=0.2')
     trimal_options.add_argument('--trimal-args', nargs=argparse.REMAINDER, default=[],
-                                help='Arguments passed directly to trimal; must be the final option. Overrides -automated1.')
+                                help='Arguments passed to trimAl; must be final and override -automated1. In codon/pseudogene mode, do not pass -in, -out, -fasta, -backtrans or -colnumbering.')
     optional.add_argument('-st', '--seqtype', '--seq-type', default='codon',
-                          choices=['codon', 'prot', 'nucl'],
+                          choices=['codon', 'prot', 'nucl', 'pseudogene'],
                           help='Input sequence type (default: codon).')
     optional.add_argument('-g', '--genetic_code', '--genetic-code', metavar='TABLE', default=1,
                           type=int, help='NCBI genetic-code table for codon workflow (default: 1).')
@@ -296,10 +350,16 @@ Notes:
     optional.add_argument('-v', '--version', action='version', version='MSAP v2.00',
                           help="Show program's version number and exit.")
     
+    add_macse_options(optional)
+    add_protein_options(optional)
     args = parser.parse_args()
+    try:
+        normalize_workflow(args)
+    except ValueError as error:
+        parser.error(str(error))
     if args.thread is None or args.thread < 1:
         parser.error("--thread must be a positive integer")
-    if args.seqtype == "codon" and args.genetic_code not in CodonTable.unambiguous_dna_by_id:
+    if args.seqtype in {"codon", "pseudogene"} and args.genetic_code not in CodonTable.unambiguous_dna_by_id:
         parser.error("Unknown NCBI genetic-code table")
     infile=args.input
     thread = args.thread
@@ -316,12 +376,14 @@ Notes:
     if not notrim and trimal_args and trim_software != "trimal":
         parser.error("--trimal-args requires --trim-software trimal")
     try:
-        validate_input_fasta(infile, seqtype)
+        validate_input_fasta(infile, seqtype, args.protein_stop_symbol)
     except ValueError as error:
+        if seqtype in {"codon", "pseudogene"}:
+            rejected_input(infile, get_prefix(infile), seqtype, genetic_code, str(error))
         parser.error(str(error))
 
 
-    softwares = [align_software]
+    softwares = ["java" if seqtype == "pseudogene" else align_software]
     if not notrim and trim_software == "trimal":
         softwares.append("trimal")
     software_path = check_dependencies(softwares=softwares)
@@ -329,14 +391,21 @@ Notes:
     # run main
     prefix = get_prefix(infile)
     infile = os.path.realpath(infile)
+    if seqtype == "pseudogene":
+        run_pseudogene(args, infile, prefix, software_path)
+        sys.exit(0)
     if seqtype == "codon":
         infile_tmp = prefix + '.CDS.fasta'
         remove_stop_codon(infile, outfile=infile_tmp, genetic_code=genetic_code)      # remove stop codon, if there is stop codon, codeml can not work.
         infile = infile_tmp
         translate_seq(infile, outfile=prefix + '.pep.fasta', genetic_code=genetic_code)
         align_infile = os.path.realpath(f"{prefix}.pep.fasta")
+    elif seqtype == 'nucl':
+        align_infile = os.path.realpath(prefix + '.DNA.fasta')
+        preprocess_nucl(infile, align_infile, prefix + '.sequence_changes.tsv')
     else:
-        align_infile = infile
+        align_infile = os.path.realpath(prefix + '.protein.cleaned.fasta')
+        preprocess_protein(infile, align_infile, prefix + '.sequence_changes.tsv', args.protein_stop_symbol)
     
     ## run align
     if align_software == "mafft":
@@ -346,7 +415,8 @@ Notes:
             align_outfile = os.path.realpath(f"{prefix}.mafft.nucl.aln")
         with atomic_output(align_outfile, inputs=[align_infile]) as out:
             subprocess.run(
-                [software_path["mafft"], "--thread", str(thread), "--quiet", "--auto", align_infile],
+                [software_path["mafft"], "--amino" if seqtype in {"prot", "codon"} else "--nuc",
+                 "--thread", str(thread), "--quiet", "--auto", align_infile],
                 stdout=out,
                 check=True,
             )
@@ -365,7 +435,8 @@ Notes:
     
     elif align_software == "prank":
         subprocess.run(
-            [software_path["prank"], f"-d={align_infile}", f"-o={prefix}.prank.aln", "-f=fasta"],
+            [software_path["prank"], f"-d={align_infile}", f"-o={prefix}.prank.aln", "-f=fasta",
+             "-DNA" if seqtype == "nucl" else "-protein"],
             check=True,
         )
         if seqtype == "codon" or seqtype == "prot":
@@ -394,7 +465,11 @@ Notes:
         print("Please input a align software. [matff, muscle, prank, clustalw2]")
         sys.exit()
     
-    read_fasta_alignment(align_outfile)
+    aligned = read_fasta_alignment(align_outfile)
+    source_sequences = {r.id: str(r.seq).upper().replace('-', '') for r in SeqIO.parse(align_infile, 'fasta')}
+    aligned_sequences = {r.id: str(r.seq).upper().replace('-', '') for r in aligned}
+    if source_sequences != aligned_sequences:
+        raise ValueError('Alignment changed taxon IDs or non-gap sequence content; results rejected')
 
     ## run AA2codon.py
     if seqtype == "codon":
@@ -442,3 +517,5 @@ Notes:
 
     if seqtype == "codon":
         os.remove(infile)
+    elif seqtype in {'nucl', 'prot'}:
+        os.remove(align_infile)

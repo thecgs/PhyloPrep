@@ -12,14 +12,14 @@ from pathlib import Path
 
 from Bio import SeqIO
 from Bio.Data import CodonTable
-from msap_io import atomic_output
+from msap_io import atomic_output, check_output_path, is_stop_codon
 from msap_io import expand_input_paths
 
 def alignment_stats(path, seqtype="nucl"):
     records = list(SeqIO.parse(path, "fasta"))
     if not records:
         raise ValueError(f"{path}: no sequences found")
-    seqs = [str(r.seq).upper() for r in records]
+    seqs = [str(r.seq).upper() if seqtype == 'prot' else str(r.seq).upper().replace('U', 'T') for r in records]
     lengths = [len(s) for s in seqs]
     aligned = len(set(lengths)) == 1
     nchar = lengths[0] if aligned else 0
@@ -31,8 +31,11 @@ def alignment_stats(path, seqtype="nucl"):
               ("X_ratio" if seqtype == "prot" else "N_ratio"): sum(s.count(ambiguity) for s in seqs) / (sum(lengths) or 1)}
     if aligned:
         patterns = [tuple(s[i] for s in seqs) for i in range(nchar)]
+        # Count only resolved states; ambiguity is not an additional allele.
+        alphabet = set("ACDEFGHIKLMNPQRSTVWYOU") if seqtype == "prot" else set("ACGT")
         for col in patterns:
-            valid = [x for x in col if x not in ("-?" + ("" if seqtype == "prot" else "N"))]
+            valid = [x if seqtype == "prot" else x.replace("U", "T") for x in col]
+            valid = [x for x in valid if x in alphabet]
             states = set(valid)
             if len(states) <= 1: result["constant_sites"] += 1
             else:
@@ -87,14 +90,16 @@ def alignment_qc(path: str, seqtype: str, genetic_code: int = 1,
             "short": len(sequence) < min_length,
         }
         if actual_type == "codon":
-            row["frame_ok"] = len(sequence) % 3 == 0
+            codons = [sequence[i:i + 3] for i in range(0, len(sequence), 3)]
+            row["frame_ok"] = len(sequence) % 3 == 0 and all(
+                "-" not in codon or codon == "---" for codon in codons)
             row["terminal_stop"] = "NA"
             row["internal_stop_count"] = "NA"
-            if row["frame_ok"] and sequence and "-" not in sequence:
-                table = CodonTable.unambiguous_dna_by_id[genetic_code]
-                codons = [sequence[i:i + 3] for i in range(0, len(sequence), 3)]
-                row["terminal_stop"] = codons[-1] if codons[-1] in table.stop_codons else "NA"
-                hits = [f"{i + 1}-{codon}" for i, codon in enumerate(codons[:-1]) if codon in table.stop_codons]
+            if len(sequence) % 3 == 0 and sequence:
+                occupied = [i for i, codon in enumerate(codons) if codon != '---']
+                last = occupied[-1] if occupied else -1
+                row["terminal_stop"] = codons[last] if last >= 0 and is_stop_codon(codons[last], genetic_code) else "NA"
+                hits = [f"{i + 1}-{codon}" for i, codon in enumerate(codons) if i != last and is_stop_codon(codon, genetic_code)]
                 row["internal_stop_count"] = ";".join(hits) if hits else "NA"
         sequence_rows.append(row)
 
@@ -193,7 +198,14 @@ def write_html(results, output):
     with atomic_output(output) as handle:
         handle.write("<!doctype html><meta charset='utf-8'><title>Alignment QC</title>" + body)
 
+def validate_report_paths(prefix, inputs):
+    outputs = [str(prefix) + suffix for suffix in (".pass.tsv", ".fail.tsv", ".details.tsv")]
+    for i, output in enumerate(outputs):
+        check_output_path(output, list(inputs) + outputs[:i])
+
+
 def write_qc_reports(results, passed, failed, prefix, seqtype, allow_terminal, allow_internal):
+    validate_report_paths(prefix, [result["file"] for result in results])
     summary = ["File", "Seqtype", "Sequence_count", "Alignment_length",
                "N_ratio" if seqtype != "prot" else "X_ratio", "Gap_ratio",
                "Variable_sites", "Parsimony_informative_sites", "Distinct_patterns",
@@ -213,7 +225,7 @@ def write_qc_reports(results, passed, failed, prefix, seqtype, allow_terminal, a
         w = csv.writer(handle, delimiter="\t"); w.writerow(detail)
         for r in results:
             for row in rows([r]):
-                extra = ["NA", "NA"]
+                extra = []
                 if seqtype == "codon":
                     stops = [(x["id"], x["terminal_stop"]) for x in r["sequences"] if x["terminal_stop"] != "NA"]
                     internal = [(x["id"], x["internal_stop_count"]) for x in r["sequences"] if x["internal_stop_count"] != "NA"]
@@ -242,6 +254,14 @@ Notes:
     characters), while --max-gap-ratio is the corresponding gap ratio.
   * --min-parsimony-informative-sites requires the whole matrix to contain at
     least N parsimony-informative sites; use 0 to disable this requirement.
+    Site statistics count resolved states only (DNA A/C/G/T, U treated as T;
+    protein residues excluding B/J/X/Z, gaps, unknowns and stop symbols).
+  * Codon gaps must occupy complete triplets (---); partial triplet gaps fail
+    with frame_error. This check cannot be disabled by stop-codon options.
+  * Stop checks normalize U to T and recognize IUPAC codons only when every
+    possible expansion is a stop in the selected genetic code (e.g. TAR in 1).
+    Dual-coding codons also encoding amino acids are not definite stops in an
+    alignment, even at its end; complete-CDS preprocessing handles terminal stops.
   * In codon mode, terminal and internal stop codons fail QC by default.
     --allow-terminal-stop and --allow-internal-stop independently permit them.
   * Output files are PREFIX.pass.tsv, PREFIX.fail.tsv and PREFIX.details.tsv.
@@ -283,6 +303,7 @@ Notes:
         parser.error("length thresholds must be non-negative and ratios must be between 0 and 1")
     try:
         paths = expand_input_paths(args.input)
+        validate_report_paths(args.prefix, [*args.input, *paths])
         results, passed, failed = [], [], []
         for path in paths:
             result = alignment_qc(path, args.seqtype, args.genetic_code, args.min_length)

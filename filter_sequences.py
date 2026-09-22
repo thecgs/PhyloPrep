@@ -36,25 +36,29 @@ def filter_fasta(infile, outfile, seqtype, min_length=0, max_gap_ratio=1.0,
                  remove_ids=None):
     records=list(SeqIO.parse(infile,"fasta"));
     if not records: raise ValueError("No sequences found in input FASTA.")
-    keep_ids=keep_ids or set(); remove_ids=remove_ids or set(); selected=[]
+    if keep_ids is not None and not keep_ids:
+        raise ValueError("--keep-taxa list is empty; refusing to retain all taxa")
+    remove_ids=remove_ids or set(); selected=[]
     for record in records:
         sequence=str(record.seq).upper(); length=len(sequence)
         if (length < min_length or (sequence.count("-")/length if length else 1)>max_gap_ratio or
                 (seqtype in {"nucl", "codon"} and (sequence.count("N")/length if length else 1)>max_n_ratio) or
                 (seqtype == "prot" and (sequence.count("X")/length if length else 1)>max_x_ratio)): continue
-        if keep_ids and record.id not in keep_ids: continue
+        if keep_ids is not None and record.id not in keep_ids: continue
         if record.id in remove_ids: continue
         selected.append(record)
     if not selected: raise ValueError("No sequences remain after filtering.")
     if (keep_ids or remove_ids) and len(selected) < 2:
         raise ValueError("taxon filtering retained fewer than two sequences; refusing to write a matrix")
     removed_sites = _remove_empty_sites(selected, seqtype)
+    if any(not record.seq for record in selected):
+        raise ValueError("No alignment sites remain after filtering; no output was written")
     with atomic_output(outfile,inputs=[infile]) as handle: SeqIO.write(selected,handle,"fasta")
     return {"input":len(records),"output":len(selected), "removed":len(records)-len(selected), "sites_removed":removed_sites}
 
 def main(argv=None):
     parser=argparse.ArgumentParser(description="Filter complete FASTA sequences (taxa) by quality and taxon lists.",add_help=False,formatter_class=argparse.RawDescriptionHelpFormatter,epilog="""Examples:
-  filter_sequences.py -i alignment.fasta -o filtered.fasta --min-length 100
+  filter_sequences.py -i alignment.fasta -o filtered.fasta -st nucl --min-length 100
   filter_sequences.py -i alignment.fasta -o filtered.fasta -st nucl --max-gap-ratio 0.5 --max-n-ratio 0.1
   filter_sequences.py -i proteins.fasta -o filtered.fasta -st prot --max-x-ratio 0.2
   filter_sequences.py -i alignment.fasta -o filtered.fasta -st codon --keep-taxa taxa.txt
@@ -64,7 +68,8 @@ Important:
   This script removes whole sequences/taxa. N, gap, and X ratios are calculated
   within each complete sequence. After taxa filtering, columns containing only
   missing states are removed: N/- for nucl, X/- for prot, and NNN/--- codons
-  for codon. Other site-level trimming remains the job of trimAlnSeq.py.""")
+  for codon. Zero retained sites is an error and leaves existing output intact.
+  Other site-level trimming remains the job of trimAlnSeq.py.""")
     required=parser.add_argument_group("required arguments"); optional=parser.add_argument_group("filtering options")
     required.add_argument("-i","--input",required=True,metavar="FASTA",help="Input FASTA file."); required.add_argument("-o","--output",required=True,metavar="FASTA",help="Filtered FASTA file."); required.add_argument("-st","--seqtype","--seq-type",required=True,choices=["nucl","prot","codon"],help="Sequence type: nucl, prot, or codon.")
     optional.add_argument("--min-length",type=int,default=0,metavar="N",help="Remove sequences shorter than N."); optional.add_argument("--max-gap-ratio",type=float,default=1.0,metavar="RATIO",help="Maximum per-sequence gap ratio (default: 1)."); optional.add_argument("--max-n-ratio",type=float,default=1.0,metavar="RATIO",help="Maximum per-sequence N ratio (default: 1)."); optional.add_argument("--max-x-ratio",type=float,default=1.0,metavar="RATIO",help="Maximum per-sequence X ratio in protein mode (default: 1).")

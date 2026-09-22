@@ -4,10 +4,37 @@ import os
 import sys
 import tempfile
 import gzip
+from functools import lru_cache
+from itertools import product
 from contextlib import contextmanager
 from pathlib import Path
 
 from Bio import SeqIO
+from Bio.Data import CodonTable, IUPACData
+
+
+def normalize_dna(sequence):
+    """Represent a nucleotide sequence as uppercase DNA; never use on protein."""
+    return str(sequence).upper().replace("U", "T")
+
+
+@lru_cache(maxsize=None)
+def is_stop_codon(codon, genetic_code=1, terminal=False):
+    """True only when every IUPAC expansion is a stop under this table.
+
+    U is equivalent to T. Mixed sense/stop ambiguity and partial gaps are
+    not classified as definite stops. Dual-coding codons are sense codons
+    unless terminal=True explicitly supplies a complete-CDS terminal context.
+    """
+    codon = codon.upper().replace("U", "T")
+    if len(codon) != 3 or any(c not in IUPACData.ambiguous_dna_values for c in codon):
+        return False
+    table = CodonTable.unambiguous_dna_by_id[genetic_code]
+    stops = set(table.stop_codons)
+    if not terminal:
+        stops.difference_update(table.forward_table)
+    return all("".join(bases) in stops for bases in
+               product(*(IUPACData.ambiguous_dna_values[c] for c in codon)))
 
 def expand_input_paths(items):
     """Expand FASTA paths and arbitrary-extension text path lists."""
@@ -17,6 +44,8 @@ def expand_input_paths(items):
         if path.is_file():
             lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
             first = next((line.strip() for line in lines if line.strip() and not line.lstrip().startswith(("#", ";"))), "")
+            if not first:
+                raise ValueError(f"Empty input FASTA or path list: {path}")
             if not first.startswith(">"):
                 paths.extend(line.strip() for line in lines
                              if line.strip() and not line.lstrip().startswith(("#", ";")))
@@ -55,6 +84,8 @@ def check_output_path(outfile, inputs=()):
     output = Path(outfile)
     output.parent.mkdir(parents=True, exist_ok=True)
     for infile in inputs:
+        if infile is None:
+            continue
         source = Path(infile)
         if output.resolve() == source.resolve() or (
             output.exists() and source.exists() and os.path.samefile(output, source)

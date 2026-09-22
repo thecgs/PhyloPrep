@@ -4,9 +4,12 @@ from __future__ import annotations
 import argparse, csv, re, sys
 from pathlib import Path
 from Bio import SeqIO
-from msap_io import atomic_output
+from msap_io import atomic_output, check_output_path
 
-def rename_fasta(infile, outfile, mapping_file=None, replace_special=True, map_output=None):
+def rename_fasta(infile, outfile, mapping_file=None, map_output=None, allow_duplicate_ids=False):
+    inputs = [infile] + ([mapping_file] if mapping_file else [])
+    check_output_path(outfile, inputs)
+    check_output_path(map_output, inputs + [outfile])
     records = list(SeqIO.parse(infile, "fasta"))
     if not records:
         raise ValueError("No sequences found in input FASTA.")
@@ -16,15 +19,21 @@ def rename_fasta(infile, outfile, mapping_file=None, replace_special=True, map_o
             for row in csv.reader(handle, delimiter="\t"):
                 if not row or row[0].startswith("#"): continue
                 if len(row) < 2: raise ValueError("Mapping table requires two tab-separated columns: old_id and new_id")
-                if row[0] in mapping and mapping[row[0]] != row[1]: raise ValueError(f"Duplicate mapping for ID: {row[0]}")
-                mapping[row[0]] = row[1]
+                old_id = row[0].replace(":", "_").replace(",", "_").replace("(", "_").replace(")", "_")
+                new_id = row[1].replace(":", "_").replace(",", "_").replace("(", "_").replace(")", "_")
+                if old_id in mapping and mapping[old_id] != new_id:
+                    raise ValueError(f"Conflicting mapping after OrthoFinder normalization: {row[0]}")
+                mapping[old_id] = new_id
     result, seen, map_rows = [], set(), []
     for record in records:
-        old = record.id
+        old = record.id.replace(":", "_").replace(",", "_").replace("(", "_").replace(")", "_")
         new = mapping.get(old, old)
-        if replace_special: new = re.sub(r"[^A-Za-z0-9_.-]+", "_", new).strip("_")
+
         if not new: raise ValueError(f"{old}: renamed ID is empty")
-        if new in seen: raise ValueError(f"Duplicate ID after renaming: {new}")
+        if any(char.isspace() for char in new):
+            raise ValueError(f'{old}: FASTA IDs must not contain whitespace, even with --keep-special: {new!r}')
+        if new in seen and not allow_duplicate_ids:
+            raise ValueError(f"Duplicate ID after renaming: {new}")
         seen.add(new); record.id = new; record.name = new; record.description = ""
         result.append(record); map_rows.append((old, new))
     with atomic_output(outfile, inputs=[infile]) as handle: SeqIO.write(result, handle, "fasta")
@@ -45,11 +54,13 @@ Special characters are replaced with underscores by default.""")
     required.add_argument("-o","--output",required=True,metavar="FASTA",help="Output FASTA file.")
     optional.add_argument("-m","--mapping","--map",metavar="TSV",help="Two-column ID mapping table.")
     optional.add_argument("--map-output",metavar="TSV",help="Write original-to-renamed IDs.")
-    optional.add_argument("--keep-special",action="store_true",help="Do not replace spaces, parentheses, colons, or other special characters.")
+    optional.add_argument("--allow-duplicate-ids", action="store_true",
+                        help="Write duplicate renamed IDs for a downstream validator; normally duplicates are an error.")
+    optional.add_argument("--keep-special", action="store_true", help="Deprecated compatibility option; OrthoFinder substitutions still apply.")
     optional.add_argument("-h","--help",action="help",help="Show this help message and exit.")
     optional.add_argument("-v","--version",action="version",version="rename_taxa v1.00",help="Show program's version number and exit.")
     args=parser.parse_args(argv)
-    try: rename_fasta(args.input,args.output,args.mapping,not args.keep_special,args.map_output)
+    try: rename_fasta(args.input,args.output,args.mapping,args.map_output,args.allow_duplicate_ids)
     except (OSError,ValueError) as error: print(f"rename_taxa: {error}",file=sys.stderr); return 2
     return 0
 if __name__ == "__main__": raise SystemExit(main())

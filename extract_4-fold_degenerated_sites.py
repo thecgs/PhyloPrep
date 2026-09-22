@@ -108,7 +108,7 @@ def extract_four_fold_site(infile, outfile, genetic_code=1):
 
     for record in SeqIO.parse(infile, "fasta"):
         ids.append(record.id)
-        seqs.append(str(record.seq).upper())
+        seqs.append(str(record.seq).upper().replace('U', 'T'))
 
     if not seqs:
         raise ValueError("No sequences found in input FASTA.")

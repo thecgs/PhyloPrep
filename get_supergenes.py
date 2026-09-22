@@ -4,8 +4,9 @@
 import os
 import sys
 import argparse
+import re
 from Bio import SeqIO
-from msap_io import atomic_output, expand_input_paths
+from msap_io import atomic_output, expand_input_paths, check_output_path
 
 def tidy_name(file):
     file = os.path.basename(file).replace('.', '_').replace('-', '_')
@@ -42,6 +43,9 @@ def tidy_name(file):
     file = file.replace("_clustalw2_codon_trimal_fasta", "")
     file = file.replace("_prank_codon_trimal_fasta", "")
 
+    file = re.sub(r'[^A-Za-z0-9_]', '_', file)
+    if not file or not file[0].isalpha():
+        file = 'gene_' + file
     return file
 
 
@@ -67,8 +71,13 @@ def read_alignment(file):
     return sequences, None
 
 
-def get_supergenes(infiles, prefix, missing_taxa="skip-gene"):
+def get_supergenes(infiles, prefix, missing_taxa="skip-gene", input_lists=()):
     """Create a supermatrix while handling taxa missing from individual genes."""
+    infiles = list(infiles)
+    destinations = [prefix + suffix for suffix in
+                    (".report.tsv", "_partition_finder.cfg", "_part_iqtree.txt", ".fasta", ".phy")]
+    for i, destination in enumerate(destinations):
+        check_output_path(destination, infiles + list(input_lists) + destinations[:i])
     alignments = []
     taxa_order = []
     taxa_seen = set()
@@ -224,5 +233,5 @@ if __name__ == '__main__':
     optional.add_argument('-v', '--version', action='version', version='get_supergenes v1.00',
                           help="Show program's version number and exit.")
     args = parser.parse_args()
-    get_supergenes(infiles=expand_input_paths(args.input), prefix=args.prefix, missing_taxa=args.missing_taxa)
+    get_supergenes(infiles=expand_input_paths(args.input), prefix=args.prefix, missing_taxa=args.missing_taxa, input_lists=args.input)
     
