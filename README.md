@@ -2,6 +2,8 @@
 
 PhyloPrep prepares nucleotide, CDS, protein, and pseudogene alignments for phylogenetic analysis. It includes a complete workflow (`phyloprep.py`) and standalone utilities for alignment, QC, concatenation, format conversion, trimming, taxon renaming, four-fold-site extraction, and 4DTV.
 
+![PhyloPrep executable-script workflow](docs/phyloprep.png)
+
 ## Contents
 
 1. [Install](#install)
@@ -13,6 +15,7 @@ PhyloPrep prepares nucleotide, CDS, protein, and pseudogene alignments for phylo
 7. [QC and tree building](#qc-and-tree-building)
 8. [Divergence statistics: 4DTV and related values](#divergence-statistics-4dtv-and-related-values)
 9. [Testing and troubleshooting](#testing-and-troubleshooting)
+10. [Containerized examples](#containerized-examples)
 
 ## Install
 
@@ -24,6 +27,37 @@ Optional: MUSCLE, PRANK, ClustalW2, trimAl, and Java plus[ `macse_v2.07.jar`](ht
 conda create -n phyloprep python=3.11 biopython mafft
 conda activate phyloprep
 conda install -c bioconda muscle prank clustalw trimal
+```
+
+### Singularity / Apptainer
+
+`Singularity.def` obtains the Ubuntu 22.04 base image from Singularity Library,
+then installs Python 3.11, Biopython, MAFFT, MUSCLE 5, PRANK, ClustalW2,
+trimAl, Java and OrthoFinder 2.5.5. The image provides OrthoFinder's bundled
+DIAMOND, MCL and FastME binaries, plus FastTree and IQ-TREE from Bioconda for
+its tree-inference methods and NCBI BLAST+ for OrthoFinder DNA (`-d`) input.
+It downloads MACSE v2.07 from the
+[official MACSE release URL](https://www.agap-ge2pop.org/wp-content/uploads/macse/releases/macse_v2.07.jar)
+and verifies its SHA-256 digest. Network access is required for Singularity
+Library, Conda and MACSE.
+
+`build_singularity.sh` locates the repository automatically before invoking
+Singularity, so it can be called from any working directory. The output path
+is interpreted from the directory in which the command is run:
+
+```bash
+cd /path/to/MSAP/example
+sudo ../build_singularity.sh phyloprep.sif
+```
+
+The image entry point is `phyloprep.py`; the current directory is normally
+available inside the container, so input and result paths can remain relative:
+
+```bash
+singularity run phyloprep.sif -i genes.pathlist -st codon -j 8 -t 1 -o results
+
+# Run OrthoFinder in the same image when required.
+singularity exec phyloprep.sif orthofinder -f proteomes -t 16 -a 4
 ```
 
 Run from this directory or add it to `PATH`. Use `python SCRIPT.py --help` for the installed command definition.
@@ -44,6 +78,16 @@ python phyloprep.py -i proteins.fa -st prot --notrim -o protein-results
 python phyloprep.py -i pseudo.pathlist -st pseudogene \
   --macse-jar macse_v2.07.jar -j 2 -o pseudo-results
 ```
+
+## Containerized examples
+
+Two end-to-end, Singularity/Apptainer-based examples are available: a
+mitochondrial CDS workflow and a nuclear single-copy ortholog workflow that
+includes reference-genome download, longest-transcript selection, OrthoFinder,
+and PhyloPrep. See the Chinese step-by-step tutorial at
+[`TUTORIAL.md`](TUTORIAL.md). The `phyloprep.sif` image and
+complete example data will be released through Zenodo; the DOI is currently a
+placeholder in that tutorial.
 
 ## Input modes and normalization
 
