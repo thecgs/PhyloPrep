@@ -1,4 +1,4 @@
-# PhyloPrep
+# PhyloPrep: an auditable codon-aware preprocessing framework for phylogenomics and molecular evolutionary analyses
 
 PhyloPrep prepares nucleotide, CDS, protein, and pseudogene alignments for phylogenetic analysis. It includes a complete workflow (`phyloprep.py`) and standalone utilities for alignment, QC, concatenation, format conversion, trimming, taxon renaming, four-fold-site extraction, and 4DTV.
 
@@ -27,31 +27,21 @@ Optional: MUSCLE, PRANK, ClustalW2, trimAl, and Java plus[ `macse_v2.07.jar`](ht
 conda create -n phyloprep python=3.11 biopython mafft
 conda activate phyloprep
 conda install -c bioconda muscle prank clustalw trimal
+git clone git@github.com:thecgs/PhyloPrep.git
 ```
 
 ### Singularity / Apptainer
 
-`Singularity.def` obtains the Ubuntu 22.04 base image from Singularity Library,
-then installs Python 3.11, Biopython, MAFFT, MUSCLE 5, PRANK, ClustalW2,
-trimAl, Java and OrthoFinder 2.5.5. The image provides OrthoFinder's bundled
-DIAMOND, MCL and FastME binaries, plus FastTree and IQ-TREE from Bioconda for
-its tree-inference methods and NCBI BLAST+ for OrthoFinder DNA (`-d`) input.
-It downloads MACSE v2.07 from the
-[official MACSE release URL](https://www.agap-ge2pop.org/wp-content/uploads/macse/releases/macse_v2.07.jar)
-and verifies its SHA-256 digest. Network access is required for Singularity
-Library, Conda and MACSE.
+`Singularity.def` obtains the Ubuntu 22.04 base image from Singularity Library, then installs Python 3.11, Biopython, MAFFT, MUSCLE 5, PRANK, ClustalW2, trimAl, Java and OrthoFinder 2.5.5. The image provides OrthoFinder's bundled DIAMOND, MCL and FastME binaries, plus FastTree and IQ-TREE from Bioconda for its tree-inference methods and NCBI BLAST+ for OrthoFinder DNA (`-d`) input. It downloads MACSE v2.07 from the [official MACSE release URL](https://www.agap-ge2pop.org/wp-content/uploads/macse/releases/macse_v2.07.jar) and verifies its SHA-256 digest. Network access is required for Singularity Library, Conda and MACSE.
 
-`build_singularity.sh` locates the repository automatically before invoking
-Singularity, so it can be called from any working directory. The output path
-is interpreted from the directory in which the command is run:
+`build_singularity.sh` locates the repository automatically before invoking Singularity, so it can be called from any working directory. The output path is interpreted from the directory in which the command is run:
 
 ```bash
-cd /path/to/MSAP/example
+cd /path/to/example
 sudo ../build_singularity.sh phyloprep.sif
 ```
 
-The image entry point is `phyloprep.py`; the current directory is normally
-available inside the container, so input and result paths can remain relative:
+The image entry point is `phyloprep.py`; the current directory is normally available inside the container, so input and result paths can remain relative:
 
 ```bash
 singularity run phyloprep.sif -i genes.pathlist -st codon -j 8 -t 1 -o results
@@ -68,7 +58,7 @@ Run from this directory or add it to `PATH`. Use `python SCRIPT.py --help` for t
 # Complete CDS workflow
 python phyloprep.py -i genes.pathlist -st codon -t 4 -j 2 -o results
 
-# Rename taxa before alignment
+# Rename taxa after alignment
 python phyloprep.py -i genes.pathlist -m taxa.tsv -st codon -o results
 
 # Protein workflow without trimming
@@ -81,13 +71,7 @@ python phyloprep.py -i pseudo.pathlist -st pseudogene \
 
 ## Containerized examples
 
-Two end-to-end, Singularity/Apptainer-based examples are available: a
-mitochondrial CDS workflow and a nuclear single-copy ortholog workflow that
-includes reference-genome download, longest-transcript selection, OrthoFinder,
-and PhyloPrep. See the Chinese step-by-step tutorial at
-[`TUTORIAL.md`](TUTORIAL.md). The `phyloprep.sif` image and
-complete example data will be released through Zenodo; the DOI is currently a
-placeholder in that tutorial.
+Two end-to-end, Singularity/Apptainer-based examples are available: a mitochondrial CDS workflow and a nuclear single-copy ortholog workflow that includes reference-genome download, longest-transcript selection, OrthoFinder, and PhyloPrep. See the step-by-step [tutorial](TUTORIAL.md). ` phyloprep.sif` image and complete example data will be released through Zenodo, DOI: https://doi.org/10.5281/zenodo.22949440.
 
 ## Input modes and normalization
 
@@ -350,9 +334,7 @@ python fasta2axt.py -i pairwise.fa -o pairwise.axt -st DNA
 
 ### `calulate_4dtv_and_correction.py` — raw and corrected 4DTV
 
-Calculates raw and HKY-corrected 4DTV for exactly two-sequence codon alignments.
-This is a maintained analysis tool, not a legacy-only utility. It accepts FASTAs,
-path lists, or a mixture of both, and writes one row per pairwise alignment.
+Calculates raw and HKY-corrected 4DTV for exactly two-sequence codon alignments. This is a maintained analysis tool, not a legacy-only utility. It accepts FASTAs, path lists, or a mixture of both, and writes one row per pairwise alignment.
 
 ```bash
 python calulate_4dtv_and_correction.py -i pairwise.pathlist -o 4dtv.tsv -g 1
@@ -366,17 +348,13 @@ These are imported by workflow scripts. They implement normalization, MACSE prov
 
 ## QC and tree building
 
-PIS counts only resolved states. `N`, `X`, gaps, stops, and other unknown states do not contribute. A zero-PIS matrix can be read by IQ-TREE but does not inform topology; use `--min-parsimony-informative-sites` to enforce a project-specific threshold.
+PIS (Parsimony-Informative-Sites) counts only resolved states. `N`, `X`, gaps, stops, and other unknown states do not contribute. A zero-PIS matrix can be read by IQ-TREE but does not inform topology; use `--min-parsimony-informative-sites` to enforce a project-specific threshold.
 
-There is no universal minimum PIS for 32 taxa. Evaluate PIS with alignment length, missing data, bootstrap support, gene concordance, and the biological divergence of the sample. Use the same NCBI genetic code in downstream codon analyses.
+There is no universal minimum PIS for taxa. Evaluate PIS with alignment length, missing data, bootstrap support, gene concordance, and the biological divergence of the sample. Use the same NCBI genetic code in downstream codon analyses.
 
 ## Divergence statistics: 4DTV and related values
 
-`calulate_4dtv_and_correction.py` estimates sequence divergence from four-fold
-degenerate codon positions. It expects **exactly two taxa per input alignment**;
-for a multi-taxon codon matrix, first create pairwise alignments or export each
-pair into its own FASTA. The same `-g/--genetic-code` used for codon preparation
-must be supplied here.
+`calulate_4dtv_and_correction.py` estimates sequence divergence from four-fold degenerate codon positions. It expects **exactly two taxa per input alignment**; for a multi-taxon codon matrix, first create pairwise alignments or export each pair into its own FASTA. The same `-g/--genetic-code` used for codon preparation must be supplied here.
 
 ```bash
 # One pairwise codon alignment
@@ -396,14 +374,7 @@ python calulate_4dtv_and_correction.py -i pairwise.pathlist -o all.4dtv.tsv -g 1
 | `fourfold_sites_total_number` | Eligible comparable four-fold sites | Effective sample size for both estimates. |
 | `fourfold_sites_transversion_number` | Observed transversions among eligible sites | Numerator of `raw_4dtv`. |
 
-The program writes `NA` for corrected or raw values when no eligible sites
-exist, or when the correction is mathematically undefined. Do not compare noisy
-4DTV estimates with very small `fourfold_sites_total_number`; report that count
-beside every estimate. Four-fold sites are useful for broad divergence summaries,
-but they are not guaranteed neutral in every lineage or genomic compartment.
-
-Other values already produced by this repository should be interpreted together
-with 4DTV rather than replaced by it:
+The program writes `NA` for corrected or raw values when no eligible sites exist, or when the correction is mathematically undefined. Do not compare noisy 4DTV estimates with very small `fourfold_sites_total_number`; report that count beside every estimate. Four-fold sites are useful for broad divergence summaries, but they are not guaranteed neutral in every lineage or genomic compartment. Other values already produced by this repository should be interpreted together with 4DTV rather than replaced by it:
 
 | Value | Produced by | Use |
 | --- | --- | --- |
@@ -417,10 +388,7 @@ with 4DTV rather than replaced by it:
 | Constant sites | `alignment_qc.py` | Conserved portion of the aligned matrix. |
 | Four-fold-site count | `extract_4-fold_degenerated_sites.py` and 4DTV TSV | Informative denominator for synonymous-site analyses. |
 
-For species comparisons, report at least matrix length, gap/N/X ratios, PIS,
-and four-fold-site count together with raw/corrected 4DTV. For phylogenetic
-inference, assess bootstrap or other branch-support values in the tree-building
-program as a separate measure of relationship confidence.
+For species comparisons, report at least matrix length, gap/N/X ratios, PIS, and four-fold-site count together with raw/corrected 4DTV. For phylogenetic inference, assess bootstrap or other branch-support values in the tree-building program as a separate measure of relationship confidence.
 
 ## Testing and troubleshooting
 
