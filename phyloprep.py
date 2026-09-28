@@ -17,9 +17,10 @@ import sys
 import tempfile
 
 from Bio.Data import CodonTable
-from sequence_audit import normalize_workflow, merge_reports, write_report
+from sequence_audit import normalize_workflow, merge_reports
 from MSAP_batch import build_parser as batch_parser
 from msap_io import atomic_output, expand_input_paths, read_fasta_alignment
+from rename_taxa import rename_fasta, read_mapping, normalized_taxon_id
 
 SCRIPTS = Path(__file__).resolve().parent
 QC_VALUES = {
@@ -29,7 +30,7 @@ QC_VALUES = {
     "max_gap_ratio": (float, 1.0),
     "min_parsimony_informative_sites": (int, 0),
 }
-RENAME_STATE_VERSION = 1
+RENAME_STATE_VERSION = 2
 
 
 def build_parser():
@@ -156,9 +157,9 @@ def rename_state_path(directory, source):
     return Path(directory) / f".phyloprep-rename-{key}.json"
 
 
-def valid_rename_state(state, source, mapping, target, map_report):
+def valid_rename_state(state, source, mapping, target):
     try:
-        if Path(target).is_symlink() or Path(map_report).is_symlink():
+        if Path(target).is_symlink():
             return False
         expected = {
             "version": RENAME_STATE_VERSION,
@@ -166,21 +167,21 @@ def valid_rename_state(state, source, mapping, target, map_report):
             "source": file_signature(source),
             "mapping": file_signature(mapping),
             "rename_taxa_sha256": file_digest(SCRIPTS / "rename_taxa.py"),
-            "outputs": {"alignment": file_signature(target), "map_report": file_signature(map_report)},
+            "outputs": {"alignment": file_signature(target)},
         }
     except OSError:
         return False
     return state == expected
 
 
-def write_rename_state(path, source_signature, mapping_signature, script_digest, target, map_report):
+def write_rename_state(path, source_signature, mapping_signature, script_digest, target):
     state = {
         "version": RENAME_STATE_VERSION,
         "status": "complete",
         "source": source_signature,
         "mapping": mapping_signature,
         "rename_taxa_sha256": script_digest,
-        "outputs": {"alignment": file_signature(target), "map_report": file_signature(map_report)},
+        "outputs": {"alignment": file_signature(target)},
     }
     with atomic_output(path) as handle:
         json.dump(state, handle, indent=2, sort_keys=True)
@@ -282,16 +283,13 @@ def publish_matrices(stage_root, root, variants):
 def rename_alignment_matrices(args, paths, root, seqtype, variant):
     """Rename all aligned matrices after MSA has used unique gene IDs."""
     renamed_dir = root / "renamed" / seqtype / variant
-    report_dir = root / "reports" / "renamed_ids" / seqtype / variant
     renamed_dir.mkdir(parents=True, exist_ok=True)
-    report_dir.mkdir(parents=True, exist_ok=True)
     renamed = []
     for source in paths:
         target = renamed_dir / source.name
-        map_report = report_dir / f"{source.name}.tsv"
         state_path = rename_state_path(renamed_dir, source)
         if not args.no_resume and valid_rename_state(
-                read_json(state_path), source, args.mapping, target, map_report):
+                read_json(state_path), source, args.mapping, target):
             print(f"[phyloprep] rename {source.name}: skipped (already complete)", flush=True)
             renamed.append(target)
             continue
@@ -299,9 +297,8 @@ def rename_alignment_matrices(args, paths, root, seqtype, variant):
         mapping_signature = file_signature(args.mapping)
         script_digest = file_digest(SCRIPTS / "rename_taxa.py")
         try:
-            run("rename_taxa.py", "-i", source, "-o", target, "-m", args.mapping,
-                "--map-output", map_report, "--allow-duplicate-ids")
-        except subprocess.CalledProcessError as error:
+            rename_fasta(source, target, allow_duplicate_ids=True, mapping=args.taxon_mapping)
+        except ValueError as error:
             raise ValueError(
                 f"ID mapping cannot rename {source} to unique taxon IDs. "
                 "Each QC-passing alignment must contain at most one sequence for each mapped taxon. "
@@ -313,7 +310,7 @@ def rename_alignment_matrices(args, paths, root, seqtype, variant):
             raise ValueError(
                 f"Rename inputs changed while processing {source}; outputs were not checkpointed. Rerun the pipeline."
             )
-        write_rename_state(state_path, source_signature, mapping_signature, script_digest, target, map_report)
+        write_rename_state(state_path, source_signature, mapping_signature, script_digest, target)
         renamed.append(target)
     return renamed
 
@@ -329,58 +326,22 @@ def preserve_concat_report(stage, root, seqtype, variant, label):
     return destination
 
 
-def prepare_report_inputs(args, inputs, root):
-    """Create mapped source copies used solely as audit-report provenance.
-
-    Alignment still receives original IDs, which must remain unique even when
-    several genes map to one taxon.  Sequence-change events, however, are
-    meaningful to users under the supplied taxon names, including when a
-    malformed input prevents an alignment from being produced.
-    """
-    if not args.mapping:
-        return {}
-    renamed_dir = root / "renamed"
-    report_dir = root / "reports" / "renamed_ids" / "inputs"
-    renamed_dir.mkdir(parents=True, exist_ok=True)
-    report_dir.mkdir(parents=True, exist_ok=True)
-    prepared = {}
-    for source in inputs:
-        target = renamed_dir / source.name
-        map_report = report_dir / f"{source.name}.tsv"
-        run("rename_taxa.py", "-i", source, "-o", target, "-m", args.mapping,
-            "--map-output", map_report, "--allow-duplicate-ids")
-        with map_report.open(newline="") as handle:
-            mapping = {row["original_id"]: row["renamed_id"]
-                       for row in csv.DictReader(handle, delimiter="\t")}
-        prepared[str(source.resolve())] = (target.resolve(), mapping)
-    return prepared
-
-
-def relabel_change_report(path, prepared_inputs):
-    """Apply taxon mapping to batch audit rows and point at mapped source copies."""
-    if not prepared_inputs or not path.is_file():
+def annotate_change_report(path, mapping):
+    """Append mapped taxon IDs without changing primary audit provenance."""
+    if not path.is_file():
         return
     with path.open(newline="") as handle:
         reader = csv.DictReader(handle, delimiter="\t")
         rows = list(reader)
-        protein = "source_aa_positions" in (reader.fieldnames or [])
-    changed = False
-    global_mapping = {}
-    for _target, mapping in prepared_inputs.values():
-        global_mapping.update(mapping)
+    fields = list(reader.fieldnames or [])
+    if "mapped_taxa_id" not in fields:
+        fields.append("mapped_taxa_id")
     for row in rows:
-        prepared = prepared_inputs.get(str(Path(row["input_file"]).resolve()))
-        normalized_id = row["taxa_id"].replace(":", "_").replace(",", "_").replace("(", "_").replace(")", "_")
-        renamed_id = global_mapping.get(normalized_id)
-        if renamed_id is not None:
-            row["taxa_id"] = renamed_id
-            changed = True
-        if prepared is not None:
-            target, _mapping = prepared
-            row["input_file"] = str(target)
-            changed = True
-    if changed:
-        write_report(path, rows, protein=protein)
+        row["mapped_taxa_id"] = mapping.get(normalized_taxon_id(row["taxa_id"]), row["taxa_id"])
+    with atomic_output(path) as handle:
+        writer = csv.DictWriter(handle, fieldnames=fields, delimiter="\t", restval="NA")
+        writer.writeheader()
+        writer.writerows(rows)
 
 
 def prepare(args, inputs, root):
@@ -391,7 +352,7 @@ def prepare(args, inputs, root):
               'they do not establish that sequences are functional proteins or that sites are neutral synonymous sites. '
               'Positions containing masked or ambiguous codons are excluded by the four-fold extractor. '
               'If no usable four-fold sites remain, that matrix is skipped while other outputs are retained.', flush=True)
-    prepared_inputs = prepare_report_inputs(args, inputs, root)
+    taxon_mapping = args.taxon_mapping if args.mapping else None
     input_list = root / "inputs.pathlist"
     write_paths(input_list, inputs)
     alignments = root / "alignments"
@@ -406,7 +367,8 @@ def prepare(args, inputs, root):
             # An early dependency/argument failure may leave an older batch report.
             updated = path.exists() and path.stat().st_mtime_ns != previous_stats[name]
             merge_reports([path] if updated else [], root / 'reports' / f'{name}.tsv')
-            relabel_change_report(root / 'reports' / f'{name}.tsv', prepared_inputs)
+            if taxon_mapping is not None:
+                annotate_change_report(root / 'reports' / f'{name}.tsv', taxon_mapping)
 
     seqtypes = ("codon", "prot") if args.seqtype in {"codon", "pseudogene"} else (args.seqtype,)
     variants = ("raw",) if args.notrim else ("raw", "trimmed")
@@ -530,6 +492,9 @@ def main(argv=None):
             args.mapping = Path(args.mapping).resolve()
             if not args.mapping.is_file():
                 raise ValueError(f"Mapping table does not exist: {args.mapping}")
+            args.taxon_mapping = read_mapping(args.mapping)
+        else:
+            args.taxon_mapping = None
         root = Path(args.output_dir).resolve()
         # Pipeline-owned subdirectories must not contain source inputs.
         for source in [*inputs, *([args.mapping] if args.mapping else [])]:

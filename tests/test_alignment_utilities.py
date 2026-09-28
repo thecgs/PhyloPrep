@@ -55,6 +55,18 @@ def test_conversion_roundtrip(tmp_path, script, fmt):
         ("long_taxon_name_1", "ACGT-"), ("long_taxon_name_2", "AC-TN")]
 
 
+def test_nexus_writer_uses_wrapped_interleaved_matrix(tmp_path):
+    source, output = tmp_path / 'in.fasta', tmp_path / 'result.nex'
+    sequence = 'ACGTN-' * 20_000
+    source.write_text(f'>a\n{sequence}\n>b\n{sequence}\n')
+    result = run('fasta2nex.py', '-i', source, '-o', output, cwd=tmp_path)
+    assert result.returncode == 0, result.stderr
+    text = output.read_text()
+    assert 'nchar=120000' in text
+    assert 'interleave' in text
+    assert {r.id: str(r.seq) for r in AlignIO.read(output, 'nexus')} == {'a': sequence, 'b': sequence}
+
+
 def test_axt_retains_kaks_dialect_and_requires_pair(tmp_path):
     source = tmp_path / "in.fasta"
     source.write_text(">a\nATG---\n>b\nATGAAA\n")

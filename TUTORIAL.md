@@ -1,112 +1,175 @@
-# PhyloPrep Containerized Example Tutorial
+# Reproducibility tutorial
 
-This directory contains two reproducible phylogenomics examples, both run with the [`phyloprep.sif`](https://zenodo.org/api/records/22949441/draft/files/phyloprep.sif/content) container image. After downloading and unpacking the example archive, keep the following directory layout:
+This directory contains two reproducible phylogenomics examples, both run with the `phyloprep.sif` container image. 
+
+| Example | Input | Purpose |
+| --- | --- | --- |
+| Mitochondrial CDS | `00.data/mitochondrial_data/` | Run the complete codon workflow from per-gene FASTA files. |
+| Nuclear single-copy orthologs | `00.data/nuclear_data/` | Infer orthogroups, extract one-to-one CDS orthologs, and construct species matrices. |
+
+Precomputed output directories are included as reference results. To avoid
+overwriting them, use the review-specific output names shown below.
+
+## Requirements
+
+Run all commands from this `example/` directory in a POSIX shell. Either of
+the following environments is sufficient:
+
+- A SingularityCE or Apptainer image named `phyloprep-v1.0.0.sif` in this
+  directory. Replace `singularity` with `apptainer` if needed.
+- A local installation with Python, Biopython, MAFFT, trimAl, and (for the
+  nuclear example) OrthoFinder available on `PATH`.
+
+Confirm the command-line interface before running an analysis:
+
+```bash
+singularity exec ./phyloprep-v1.0.0.sif phyloprep.py --help
+```
+
+For a local installation, replace the prefix above with `python phyloprep.py`.
+
+## 1. Mitochondrial CDS workflow
+
+The directory `00.data/mitochondrial_data/` contains one coding-sequence
+FASTA file per locus and `map.tsv`. The mapping table has two tab-separated
+columns:
 
 ```text
-my_path/
-├── phyloprep.sif
-├── benchmark_mitochondrial_genes/
-│   ├── data/
-│   └── run.sh
-└── benchmark_nuclear_genes/
-    ├── extract_sequence_from_gff3.py
-    ├── get_longest_transcript_gff3.py
-    └── run.sh
+input_sequence_id    species_id
 ```
 
-> **Zenodo:** The container image and both complete examples will be deposited on Zenodo. `[Zenodo DOI: https://doi.org/10.5281/zenodo.22949440]`
+The first column must exactly match FASTA IDs. Mapping occurs after alignment,
+so raw inputs and the audit trail retain the original IDs; final matrices use
+the mapped species IDs.
 
-## Prerequisites
-
-Use Linux or another POSIX environment that supports Singularity/Apptainer.
-You will need:
-
-- SingularityCE or Apptainer;
-- `bash`;
-- for the nuclear-gene example, host installations of `wget`, `bgzip`
-  (htslib), and `grep`;
-- access to the EBI Ensembl FTP server for the first nuclear-genome download.
-
-If using Apptainer, replace `singularity` with `apptainer` throughout this tutorial.
+Run the example into a new directory:
 
 ```bash
-singularity exec phyloprep.sif phyloprep.py --help
+singularity exec ./phyloprep-v1.0.0.sif phyloprep.py \
+  -i ./00.data/mitochondrial_data/*.fasta \
+  -m ./00.data/mitochondrial_data/map.tsv \
+  -st codon -g 2 -s mafft -ts trimAlnSeq \
+  -j 4 -t 1 \
+  -o review_mitochondrial_results
 ```
 
-If this command prints the help message, the image is ready to use. It includes
-PhyloPrep, MAFFT, trimAl, OrthoFinder 2.5.5, and their required dependencies.
+`-g 2` selects the vertebrate mitochondrial genetic code. `-j` is the number
+of loci processed concurrently, and `-t` is the number of alignment threads
+per locus; choose values appropriate for the review machine. The supplied
+`run_example_mitochondrial.sh` contains an equivalent command.
 
-## Example 1: mitochondrial protein-coding genes
+Expected primary outputs include:
 
-`benchmark_mitochondrial_genes/data/` contains CDS FASTA files for 13 vertebrate mitochondrial protein-coding genes, together with `map.tsv`. The first column of this mapping file is the original sequence ID and the second is the species name. PhyloPrep uses it to rename sequences by species after alignment and then construct species-level supermatrices.
+```text
+review_mitochondrial_results/
+├── matrices/codon/raw/supermatrix.{fasta,phy,nex}
+├── matrices/codon/trimmed/supermatrix.{fasta,phy,nex}
+├── matrices/codon/trimmed/codon{1st,2nd,3rd}.supermatrix.fasta
+├── matrices/codon/trimmed/fourfold.fasta
+├── matrices/prot/{raw,trimmed}/supermatrix.fasta
+├── qc/codon/{raw,trimmed}/alignment.{pass,fail,details}.tsv
+└── reports/sequence_changes.tsv
+```
 
-Run the complete workflow:
+Raw and trimmed matrices are evaluated independently. `sequence_changes.tsv`
+records sequence normalization and validation events with the original input
+file and original FASTA ID; when `-m` is supplied, it also includes
+`mapped_taxa_id`.
+
+## 2. Nuclear single-copy ortholog workflow
+
+This example starts from per-taxon CDS and protein FASTA files under
+`00.data/nuclear_data/`. It has three stages. Each stage may be inspected or
+run independently.
+
+### 2.1 Infer orthogroups from proteins
 
 ```bash
-cd benchmark_mitochondrial_genes
-bash run.sh
+singularity exec ./phyloprep-v1.0.0.sif orthofinder \
+  -f 00.data/nuclear_data/pep/ -M msa -S diamond -T fasttree \
+  -o review_nuclear_orthofinder
 ```
 
-The core command in `run.sh` is:
+Use the `Orthogroups.tsv` produced within the resulting `Results_*/`
+directory in the next step. The wildcard avoids assuming a tool-generated
+timestamped directory name.
+
+### 2.2 Extract one-to-one CDS orthologs
 
 ```bash
-singularity exec ../phyloprep.sif phyloprep.py \
-  -i data/*.fasta -m data/map.tsv \
-  -j 13 -t 1 -ts trimal -st codon -s mafft -g 2
+singularity exec ./phyloprep-v1.0.0.sif extract_orthofinder_orthogroups.py \
+  -i 00.data/nuclear_data/cds/ \
+  -og review_nuclear_orthofinder/Results_*/Orthogroups/Orthogroups.tsv \
+  -o review_nuclear_orthologs
 ```
 
-Here, `-st codon` selects codon-aware CDS processing; `-g 2` selects the vertebrate mitochondrial genetic code; `-s mafft` selects MAFFT; and `-ts trimal` enables trimAl. The workflow processes the 13 genes concurrently with `-j 13`, while allocating one thread per alignment with `-t 1`. Adjust these two settings for the available computational resources.
+This writes one FASTA file per retained orthogroup, plus:
 
-Key output files are written below `phyloprep-results/`:
+- `review_nuclear_orthologs/orthogroups.pathlist`: absolute paths to the
+  exported FASTA files;
+- `review_nuclear_orthologs/map.tsv`: FASTA ID to species ID mapping.
 
-- `matrices/codon/{raw,trimmed}/supermatrix.{fasta,phy,nex}`: concatenated CDS
-  supermatrices;
-- `matrices/codon/{raw,trimmed}/codon{1st,2nd,3rd}.supermatrix.*`: matrices
-  for the three codon positions;
-- `matrices/codon/{raw,trimmed}/fourfold.*`: four-fold degenerate sites;
-- `matrices/prot/{raw,trimmed}/supermatrix.*`: translated protein
-  supermatrices;
-- `qc/` and `reports/`: quality-control and sequence-standardization records.
+The paths in the generated list are valid while the directory remains in its
+current location. If it is moved, rerun this extraction step.
 
-## Example 2: nuclear single-copy orthologs
-
-This example uses zebrafish, western clawed frog, mouse, chicken, and human. Its workflow is: download reference genomes and GFF3 annotations → retain the longest transcript per gene → extract CDS and protein sequences → infer orthogroups with OrthoFinder → extract one-to-one ortholog CDS sequences → build alignments and supermatrices with PhyloPrep.
+### 2.3 Align, QC, concatenate, and export matrices
 
 ```bash
-cd benchmark_nuclear_genes
-bash run.sh
+singularity exec ./phyloprep-v1.0.0.sif phyloprep.py \
+  -i review_nuclear_orthologs/orthogroups.pathlist \
+  -m review_nuclear_orthologs/map.tsv \
+  -st codon -g 1 -s mafft -ts trimal \
+  -j 4 -t 1 \
+  -o review_nuclear_results
 ```
 
-The script checks for each downloaded genome and GFF3 file by name and skips the download when it is already present. The first run downloads large genome files, and OrthoFinder plus the subsequent alignments may require substantial time. The script uses `mkdir -p cds pep`, so existing directories do not stop the workflow; rerun behavior for later stages depends on their outputs and the corresponding tool's resume behavior.
+`-g 1` selects the standard genetic code. In codon mode with `-ts trimal`,
+PhyloPrep trims the paired protein alignment and transfers retained columns as
+complete codon triplets. It does not trim nucleotide positions independently.
 
-### Workflow stages and intermediate results
+## 3. Review checks
 
-1. **Longest transcripts and sequence extraction:**
-   `get_longest_transcript_gff3.py` selects the longest transcript from the non-mitochondrial annotations of each GFF3 file (records beginning with `MT` are excluded). `extract_sequence_from_gff3.py` uses the genome FASTA to extract CDS (`-t CDS`) and protein sequences (`-t prot`). Both scripts are provided with this example and originate from [QuickProt](https://github.com/thecgs/quickprot).
-
-2. **Ortholog inference:** 
-
-   OrthoFinder in the container analyses the five proteomes in `pep/` and writes its results to `OrthoFinder/`.
-
-3. **One-to-one orthologs:** 
-
-   `extract_orthofinder_orthogroups.py` combines the OrthoFinder `Orthogroups.tsv` file with `cds/` and writes `one-to-one_orthologs/`. Its `orthogroups.pathlist` is the PhyloPrep input list, while `map.tsv` maps transcript IDs to species names.
-
-4. **Codon alignment and concatenation:** 
-
-   The final `phyloprep.py` command uses the standard genetic code (`-g 1`) and writes raw and trimmed CDS, protein, codon-position, and four-fold-degenerate matrices, together with QC reports, under `phyloprep-results/`.
-
-The final command in this example is:
+After either workflow, the following checks give a compact assessment of the
+result and its audit trail:
 
 ```bash
-singularity exec ../phyloprep.sif phyloprep.py \
-  -i one-to-one_orthologs/orthogroups.pathlist \
-  -m one-to-one_orthologs/map.tsv \
-  -j 20 -t 1 -ts trimal -st codon -s mafft -g 1
+find review_mitochondrial_results/matrices -name '*.nex' -type f | sort
+head review_mitochondrial_results/qc/codon/trimmed/alignment.pass.tsv
+head review_mitochondrial_results/reports/sequence_changes.tsv
 ```
 
-To rerun one stage from scratch, use a separate working copy and remove only that stage's output directory before rerunning its command. Do not casually remove input data from the original example archive. PhyloPrep normally reuses completed results whose inputs have not changed.
+For codon matrices, sequence lengths in `supermatrix.fasta` are divisible by
+three. The position-specific matrices and four-fold matrix are derived only
+after a supermatrix is successfully produced. A normal codon workflow stops if
+no usable four-fold sites remain; pseudogene mode instead writes a
+`fourfold.skipped.txt` marker and retains its other matrices.
 
-## Using your own data
+## 4. Optional modes
+
+Protein inputs can be processed without trimming:
+
+```bash
+singularity exec ./phyloprep-v1.0.0.sif phyloprep.py \
+  -i proteins.pathlist -st prot --notrim -o review_protein_results
+```
+
+For frameshift- or stop-tolerant coding sequences, use the pseudogene mode
+with MACSE available in the image:
+
+```bash
+singularity exec ./phyloprep-v1.0.0.sif phyloprep.py \
+  -i pseudogene.pathlist -st pseudogene \
+  --macse-jar macse_v2.07.jar -j 2 -o review_pseudogene_results
+```
+
+## 5. Using your own data
 
 For mitochondrial or other preassembled CDS datasets, follow Example 1: use one FASTA file per gene and provide a two-column `map.tsv` (`sequence_ID<TAB>species_ID`). For nuclear data, follow Example 2: extract CDS and proteins from each species' genome and annotation, use OrthoFinder to select single-copy orthologs, and supply the resulting `orthogroups.pathlist` and `map.tsv` to PhyloPrep. See the repository-level `README.md` for complete details about input requirements, QC thresholds, and output files.
+
+## 6. Reproducibility notes
+
+- Inputs are never modified in place.
+- Output publication is atomic: incomplete conversions do not replace an
+  existing final matrix.
+- Completed per-locus work is reused when inputs and relevant settings are
+  unchanged. Add `--no-resume` to recompute all loci.

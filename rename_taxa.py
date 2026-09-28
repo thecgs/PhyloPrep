@@ -6,27 +6,39 @@ from pathlib import Path
 from Bio import SeqIO
 from msap_io import atomic_output, check_output_path
 
-def rename_fasta(infile, outfile, mapping_file=None, map_output=None, allow_duplicate_ids=False):
+def normalized_taxon_id(identifier):
+    return identifier.replace(":", "_").replace(",", "_").replace("(", "_").replace(")", "_")
+
+
+def read_mapping(mapping_file):
+    mapping = {}
+    with open(mapping_file, encoding="utf-8", newline="") as handle:
+        for row in csv.reader(handle, delimiter="\t"):
+            if not row or row[0].startswith("#"):
+                continue
+            if len(row) < 2:
+                raise ValueError("Mapping table requires two tab-separated columns: old_id and new_id")
+            old_id, new_id = normalized_taxon_id(row[0]), normalized_taxon_id(row[1])
+            if old_id in mapping and mapping[old_id] != new_id:
+                raise ValueError(f"Conflicting mapping after OrthoFinder normalization: {row[0]}")
+            mapping[old_id] = new_id
+    return mapping
+
+
+def rename_fasta(infile, outfile, mapping_file=None, map_output=None, allow_duplicate_ids=False,
+                 mapping=None):
+    if mapping_file is not None and mapping is not None:
+        raise ValueError("Provide either mapping_file or mapping, not both")
     inputs = [infile] + ([mapping_file] if mapping_file else [])
     check_output_path(outfile, inputs)
     check_output_path(map_output, inputs + [outfile])
     records = list(SeqIO.parse(infile, "fasta"))
     if not records:
         raise ValueError("No sequences found in input FASTA.")
-    mapping = {}
-    if mapping_file:
-        with open(mapping_file, encoding="utf-8", newline="") as handle:
-            for row in csv.reader(handle, delimiter="\t"):
-                if not row or row[0].startswith("#"): continue
-                if len(row) < 2: raise ValueError("Mapping table requires two tab-separated columns: old_id and new_id")
-                old_id = row[0].replace(":", "_").replace(",", "_").replace("(", "_").replace(")", "_")
-                new_id = row[1].replace(":", "_").replace(",", "_").replace("(", "_").replace(")", "_")
-                if old_id in mapping and mapping[old_id] != new_id:
-                    raise ValueError(f"Conflicting mapping after OrthoFinder normalization: {row[0]}")
-                mapping[old_id] = new_id
+    mapping = read_mapping(mapping_file) if mapping_file else (mapping or {})
     result, seen, map_rows = [], set(), []
     for record in records:
-        old = record.id.replace(":", "_").replace(",", "_").replace("(", "_").replace(")", "_")
+        old = normalized_taxon_id(record.id)
         new = mapping.get(old, old)
 
         if not new: raise ValueError(f"{old}: renamed ID is empty")
