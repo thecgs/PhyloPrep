@@ -13,6 +13,7 @@ import pytest
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
 from alignment_qc import alignment_stats
+from alignment_qc import alignment_qc
 from filter_sequences import filter_fasta
 from get_supergenes import get_supergenes
 from rename_taxa import rename_fasta
@@ -47,6 +48,21 @@ def test_qc_detail_columns_and_issue(tmp_path, seqtype):
     assert len(rows[0]) == len(rows[1])
     assert rows[0][-1] == 'Issues'
     assert 'short_alignment' in rows[1][-1].split(';')
+
+
+def test_codon_min_length_counts_complete_triplets(tmp_path):
+    source = tmp_path / 'input.fa'
+    source.write_text('>a\nGCTGGT\n>b\nGCCGGA\n')
+    assert 'short_sequence' not in alignment_qc(source, 'codon', min_length=2)['issues']
+    assert 'short_sequence' in alignment_qc(source, 'codon', min_length=3)['issues']
+
+
+def test_codon_n_ratio_counts_ambiguous_triplets(tmp_path):
+    source = tmp_path / 'input.fa'
+    source.write_text('>a\nNAAGCT\n>b\nAAAGCC\n')
+    # One of four codons is ambiguous. Counting bases would incorrectly
+    # report 1/12 rather than the protein-comparable 1/4.
+    assert alignment_stats(source, 'codon')[0]['N_ratio'] == 0.25
 
 
 @pytest.mark.parametrize('alias', ['same', 'symlink', 'hardlink'])

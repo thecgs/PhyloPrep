@@ -28,6 +28,7 @@ from sequence_audit import add_macse_options, add_protein_options, normalize_wor
 
 STOP = False
 STATE_VERSION = 2
+SKIPPED_LOCUS_EXIT = 3
 
 
 def _stop_handler(signum: int, _frame: Any) -> None:
@@ -327,11 +328,12 @@ def _run_one(args: argparse.Namespace, infile: Path, root: Path) -> tuple[str, s
     signature = _signature(infile)
     state = _read_json(state_file)
     expected = _expected_alignment_outputs(args, infile, root)
-    if (not args.no_resume and state.get("version") == STATE_VERSION and
-            state.get("status") == "complete" and state.get("input") == signature and
-            state.get("configuration") == args.run_configuration and
-            _manifest_valid(state.get("outputs"), root, expected)):
-        return key, "skipped (already complete)"
+    if not args.no_resume and state.get("version") == STATE_VERSION and state.get("input") == signature and \
+            state.get("configuration") == args.run_configuration:
+        if state.get("status") == "skipped":
+            return key, "skipped (no coding residues)"
+        if state.get("status") == "complete" and _manifest_valid(state.get("outputs"), root, expected):
+            return key, "skipped (already complete)"
     if STOP:
         return key, "cancelled before start"
 
@@ -356,6 +358,9 @@ def _run_one(args: argparse.Namespace, infile: Path, root: Path) -> tuple[str, s
             time.sleep(0.1)
         if STOP:
             raise KeyboardInterrupt
+        if process.returncode == SKIPPED_LOCUS_EXIT:
+            _atomic_json(state_file, {**running, "status": "skipped", "outputs": {}, "finished": time.time()})
+            return key, "skipped (no coding residues)"
         if process.returncode != 0:
             raise subprocess.CalledProcessError(process.returncode, command)
         for path in _expected_alignment_outputs(args, infile, stage):
@@ -418,7 +423,7 @@ Batch-only options:
     batch.add_argument("-o", "--output-dir", default="msap-results", metavar="DIR", help="Result directory (default: msap-results).")
     batch.add_argument("-j", "--jobs", type=int, default=1, help="Input files processed simultaneously (default: 1).")
     batch.add_argument("--no-resume", action="store_true", help="Ignore completed task records and rerun all inputs.")
-    parser.add_argument("-v", "--version", action="version", version="MSAP_batch 1.0")
+    parser.add_argument("-v", "--version", action="version", version="v1.0.0")
     add_macse_options(workflow)
     add_protein_options(workflow)
     return parser

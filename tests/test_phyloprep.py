@@ -222,14 +222,14 @@ def test_qc_is_independent_for_raw_and_trimmed(tmp_path, fake_aligner, seqtype, 
     assert "repaired.mafft" in (output / "qc" / seqtype / "trimmed/alignment.pass.tsv").read_text()
 
 
-def test_late_protein_qc_failure_does_not_publish_codon_matrices(tmp_path, fake_aligner):
+def test_codon_min_length_uses_codon_units_and_does_not_publish_matrices(tmp_path, fake_aligner):
     _, env = fake_aligner
     source = tmp_path / "gene.fa"
     source.write_text(">a\nGCTGGT\n>b\nGCCGGA\n")
     output = tmp_path / "results"
     result = invoke(tmp_path, env, "-i", source, "-o", output, "-t", "1",
-                    "--notrim", "--min-length", "6")
+                    "--notrim", "--min-length", "3")
     assert result.returncode != 0
-    assert "No alignments passed QC for prot/raw" in result.stderr
-    assert (output / "qc/codon/raw/alignment.pass.tsv").read_text().strip()
+    assert "No alignments passed QC for codon/raw" in result.stderr
+    assert not (output / "qc/codon/raw/alignment.pass.tsv").read_text().strip()
     assert not (output / "matrices").exists()

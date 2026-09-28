@@ -77,7 +77,7 @@ if __name__ == '__main__':
     optional.add_argument('-st', '--seqtype', '--seq-type', default='DNA', choices=["DNA", "RNA", "protein"], help='Alignment type: DNA normalizes U/IUPAC ambiguity to T/N; protein masks ambiguity as X (default: DNA).')
     optional.add_argument('--changes-report', metavar='TSV', help='Audit TSV for normalization edits; defaults to OUTPUT.sequence_changes.tsv when edits occur.')
     optional.add_argument('-h', '--help', action='help', help="Show program's help message and exit.")
-    optional.add_argument('-v', '--version', action='version', version='fasta2nex v2.00', help="Show program's version number and exit.")
+    optional.add_argument('-v', '--version', action='version', version='v1.0.0', help="Show program's version number and exit.")
     args = parser.parse_args()
 
     fasta2nex(args.input, args.output, args.seqtype, args.changes_report)

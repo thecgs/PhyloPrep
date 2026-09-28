@@ -26,10 +26,10 @@ if __name__ == '__main__':
     optional.add_argument('-o', '--out', '--output', metavar='CODON_FASTA', default=None,
                           help='Output codon alignment in FASTA format (default: stdout).')
     optional.add_argument('-g', '--genetic_code', '--genetic-code', metavar='TABLE', default=None,
-                          type=int, help='NCBI genetic-code table used for validation (default: disabled).')
+                          type=int, help='NCBI genetic-code table used for validation; recognized initial start codons validate as M (default: disabled).')
     optional.add_argument('-h', '--help', action='help',
                           help="Show program's help message and exit.")
-    optional.add_argument('-v', '--version', action='version', version='AA2Codon v2.00',
+    optional.add_argument('-v', '--version', action='version', version='v1.0.0',
                           help="Show program's version number and exit.")
     
     args = parser.parse_args()
@@ -55,6 +55,7 @@ if __name__ == '__main__':
     if not protein_records:
         raise ValueError("No protein-alignment sequences found.")
     protein_ids = set()
+    table = CodonTable.unambiguous_dna_by_id[genetic_code] if genetic_code is not None else None
     for record in protein_records:
         if not record.seq:
             raise ValueError(f"{record.id}: protein alignment sequence is empty")
@@ -92,15 +93,10 @@ if __name__ == '__main__':
                     continue
                 codon = codons[codon_index]
                 translated = str(Seq.Seq(codon).translate(table=genetic_code))
-                # MSAP treats an alternative in-frame start codon (for
-                # example GTG) as initiator methionine in the first position.
-                # Biopython's ordinary translate() returns V for GTG, so use
-                # the genetic-code start-codon list for this first-residue
-                # validation as well.
-                expected = translated
-                table = CodonTable.unambiguous_dna_by_id[genetic_code]
-                if codon_index == 0 and (codon in table.start_codons):
-                    expected = "M"
+                # Match MSAP.translate_seq(): a codon recognized as an
+                # initiator by the selected table is represented as M only
+                # at the first translated position.
+                expected = "M" if codon_index == 0 and codon in table.start_codons else translated
                 if expected != amino_acid:
                     raise ValueError(
                         f"{record.id}: codon index {codon_index} ({codon}) translates to "

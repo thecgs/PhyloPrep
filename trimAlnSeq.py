@@ -30,8 +30,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Trim fasta format alignment sequence. For codon mode, filtering is performed per codon triplet.",
         add_help=False,
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="Date:2026/06/21 Author:Guisen Chen Email:thecgs001@foxmail.com"
+        formatter_class=argparse.RawDescriptionHelpFormatter
     )
 
     required = parser.add_argument_group("required arguments")
@@ -98,7 +97,7 @@ if __name__ == "__main__":
     optional.add_argument(
         "-v", "--version",
         action="version",
-        version="v2.02"
+        version="v1.0.0"
     )
 
     args = parser.parse_args()

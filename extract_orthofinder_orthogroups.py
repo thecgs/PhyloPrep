@@ -285,7 +285,7 @@ absolute output FASTA paths and can be passed directly to phyloprep.py -i.
     parser.add_argument('-mo',"--map-output", metavar="TSV", help="Exported-FASTA-ID-to-taxon TSV; default is OUTDIR/map.tsv.")
     parser.add_argument("--pathlist-output", metavar="TXT",
                         help="Exported OG FASTA path list; default is OUTDIR/orthogroups.pathlist.")
-    parser.add_argument("-v", "--version", action="version", version="extract_orthofinder_orthogroups v1.24")
+    parser.add_argument("-v", "--version", action="version", version="v1.0.0")
     args = parser.parse_args(argv)
     try:
         count = extract_orthologs(Path(args.orthogroups), Path(args.sequence_dir), Path(args.outdir),

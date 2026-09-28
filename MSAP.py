@@ -14,7 +14,7 @@ from Bio.Data import CodonTable
 from msap_io import atomic_output, read_fasta_alignment, normalize_dna
 from sequence_audit import (preprocess_codon, preprocess_nucl, rejected_input, add_macse_options,
                             normalize_workflow, macse_align, preprocess_protein, add_protein_options,
-                            merge_reports)
+                            merge_reports, EmptyCodonLocusError)
 
 def remove_stop_codon(infile, outfile, genetic_code):
     preprocess_codon(infile, outfile, genetic_code, get_prefix(infile) + '.sequence_changes.tsv')
@@ -347,7 +347,7 @@ Notes:
                           type=int, help='NCBI genetic-code table for codon workflow (default: 1).')
     optional.add_argument('-h', '--help', action='help',
                           help="Show program's help message and exit.")
-    optional.add_argument('-v', '--version', action='version', version='MSAP v2.00',
+    optional.add_argument('-v', '--version', action='version', version='v1.0.0',
                           help="Show program's version number and exit.")
     
     add_macse_options(optional)
@@ -396,7 +396,11 @@ Notes:
         sys.exit(0)
     if seqtype == "codon":
         infile_tmp = prefix + '.CDS.fasta'
-        remove_stop_codon(infile, outfile=infile_tmp, genetic_code=genetic_code)      # remove stop codon, if there is stop codon, codeml can not work.
+        try:
+            remove_stop_codon(infile, outfile=infile_tmp, genetic_code=genetic_code)
+        except EmptyCodonLocusError:
+            # Exit code 3 is a deliberate locus skip, recognized by MSAP_batch.
+            sys.exit(3)
         infile = infile_tmp
         translate_seq(infile, outfile=prefix + '.pep.fasta', genetic_code=genetic_code)
         align_infile = os.path.realpath(f"{prefix}.pep.fasta")

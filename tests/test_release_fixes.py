@@ -82,7 +82,7 @@ def test_rna_stop_events_do_not_overlap_normalization(tmp_path):
 def test_rna_backtranslation_initiator_and_fourfold(tmp_path):
     cds, protein, output = [tmp_path / n for n in ('rna.fa', 'aa.fa', 'codon.fa')]
     cds.write_text('>a\nguggcu\n>b\nGUGGCC\n')
-    protein.write_text('>a\nMA\n>b\nMA\n')
+    protein.write_text('>a\nVA\n>b\nVA\n')
     result = cli('AA2Codon.py', '-c', cds, '-p', protein, '-g', 1, '-o', output, cwd=tmp_path)
     assert result.returncode == 0, result.stderr
     assert records(output) == {'a': 'GTGGCT', 'b': 'GTGGCC'}

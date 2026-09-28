@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import fcntl
 import hashlib
 import json
@@ -16,7 +17,7 @@ import sys
 import tempfile
 
 from Bio.Data import CodonTable
-from sequence_audit import normalize_workflow, merge_reports
+from sequence_audit import normalize_workflow, merge_reports, write_report
 from MSAP_batch import build_parser as batch_parser
 from msap_io import atomic_output, expand_input_paths, read_fasta_alignment
 
@@ -62,7 +63,7 @@ matrices are published only after all requested conversions succeed.
 """
     for action in parser._actions:
         if isinstance(action, argparse._VersionAction):
-            action.version = "phyloprep 1.0"
+            action.version = "v1.0.0"
         if action.dest == "output_dir":
             action.help = "Pipeline result directory (default: %(default)s)."
     pipeline = parser.add_argument_group("pipeline options")
@@ -72,8 +73,9 @@ matrices are published only after all requested conversions succeed.
                           default="skip-gene", help="Missing-taxon policy (default: skip-gene).")
     qc = parser.add_argument_group("alignment QC options (same defaults as alignment_qc.py)")
     for name, (kind, default) in QC_VALUES.items():
+        unit = " (nt for nucl, aa for prot, complete codons for codon)" if name == "min_length" else ""
         qc.add_argument("--" + name.replace("_", "-"), type=kind, default=default,
-                        help=f"{name.replace('_', ' ')} (default: %(default)s).")
+                        help=f"{name.replace('_', ' ')}{unit} (default: %(default)s).")
     for name in ("allow-terminal-stop", "allow-internal-stop"):
         qc.add_argument("--" + name, action="store_true", help=name.replace("-", " ") + ".")
     return parser
@@ -327,6 +329,60 @@ def preserve_concat_report(stage, root, seqtype, variant, label):
     return destination
 
 
+def prepare_report_inputs(args, inputs, root):
+    """Create mapped source copies used solely as audit-report provenance.
+
+    Alignment still receives original IDs, which must remain unique even when
+    several genes map to one taxon.  Sequence-change events, however, are
+    meaningful to users under the supplied taxon names, including when a
+    malformed input prevents an alignment from being produced.
+    """
+    if not args.mapping:
+        return {}
+    renamed_dir = root / "renamed"
+    report_dir = root / "reports" / "renamed_ids" / "inputs"
+    renamed_dir.mkdir(parents=True, exist_ok=True)
+    report_dir.mkdir(parents=True, exist_ok=True)
+    prepared = {}
+    for source in inputs:
+        target = renamed_dir / source.name
+        map_report = report_dir / f"{source.name}.tsv"
+        run("rename_taxa.py", "-i", source, "-o", target, "-m", args.mapping,
+            "--map-output", map_report, "--allow-duplicate-ids")
+        with map_report.open(newline="") as handle:
+            mapping = {row["original_id"]: row["renamed_id"]
+                       for row in csv.DictReader(handle, delimiter="\t")}
+        prepared[str(source.resolve())] = (target.resolve(), mapping)
+    return prepared
+
+
+def relabel_change_report(path, prepared_inputs):
+    """Apply taxon mapping to batch audit rows and point at mapped source copies."""
+    if not prepared_inputs or not path.is_file():
+        return
+    with path.open(newline="") as handle:
+        reader = csv.DictReader(handle, delimiter="\t")
+        rows = list(reader)
+        protein = "source_aa_positions" in (reader.fieldnames or [])
+    changed = False
+    global_mapping = {}
+    for _target, mapping in prepared_inputs.values():
+        global_mapping.update(mapping)
+    for row in rows:
+        prepared = prepared_inputs.get(str(Path(row["input_file"]).resolve()))
+        normalized_id = row["taxa_id"].replace(":", "_").replace(",", "_").replace("(", "_").replace(")", "_")
+        renamed_id = global_mapping.get(normalized_id)
+        if renamed_id is not None:
+            row["taxa_id"] = renamed_id
+            changed = True
+        if prepared is not None:
+            target, _mapping = prepared
+            row["input_file"] = str(target)
+            changed = True
+    if changed:
+        write_report(path, rows, protein=protein)
+
+
 def prepare(args, inputs, root):
     recover_matrix_publication(root)
     if args.seqtype == 'pseudogene':
@@ -335,6 +391,7 @@ def prepare(args, inputs, root):
               'they do not establish that sequences are functional proteins or that sites are neutral synonymous sites. '
               'Positions containing masked or ambiguous codons are excluded by the four-fold extractor. '
               'If no usable four-fold sites remain, that matrix is skipped while other outputs are retained.', flush=True)
+    prepared_inputs = prepare_report_inputs(args, inputs, root)
     input_list = root / "inputs.pathlist"
     write_paths(input_list, inputs)
     alignments = root / "alignments"
@@ -349,6 +406,7 @@ def prepare(args, inputs, root):
             # An early dependency/argument failure may leave an older batch report.
             updated = path.exists() and path.stat().st_mtime_ns != previous_stats[name]
             merge_reports([path] if updated else [], root / 'reports' / f'{name}.tsv')
+            relabel_change_report(root / 'reports' / f'{name}.tsv', prepared_inputs)
 
     seqtypes = ("codon", "prot") if args.seqtype in {"codon", "pseudogene"} else (args.seqtype,)
     variants = ("raw",) if args.notrim else ("raw", "trimmed")
@@ -372,6 +430,9 @@ def prepare_group(args, inputs, root, stage, seqtype, variant):
     suffix = f".{args.align_software}.{seqtype}"
     suffix += ".aln" if variant == "raw" else ".trimal.aln"
     selected = [root / "alignments" / (source.stem + suffix) for source in inputs]
+    selected = [path for path in selected if path.is_file()]
+    if not selected:
+        raise ValueError(f"No completed alignments are available for {seqtype}/{variant}")
     qc_dir = root / "qc" / ("pseudogene" if args.seqtype == "pseudogene" else "") / seqtype / variant
     qc_paths = selected
     if args.mapping:

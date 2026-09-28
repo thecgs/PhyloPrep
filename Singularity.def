@@ -4,7 +4,6 @@ From: ubuntu:22.04
 %labels
     org.opencontainers.image.title PhyloPrep
     org.opencontainers.image.description "Auditable phylogenomic matrix preparation"
-    org.opencontainers.image.source "https://github.com/thecgs/MSAP"
     org.opencontainers.image.licenses "MIT"
 
 %files

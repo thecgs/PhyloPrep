@@ -36,6 +36,6 @@ if __name__ == '__main__':
     optional.add_argument('-st', '--seqtype', default='DNA', choices=['DNA', 'protein'], help='DNA masks ambiguity as N; protein masks ambiguity as X.')
     optional.add_argument('--changes-report', metavar='TSV', help='Audit TSV; defaults to OUTPUT.sequence_changes.tsv when edits occur.')
     optional.add_argument('-h', '--help', action='help', help="Show program's help message and exit.")
-    optional.add_argument('-v', '--version', action='version', version='fasta2phy v1.00', help="Show program's version number and exit.")
+    optional.add_argument('-v', '--version', action='version', version='v1.0.0', help="Show program's version number and exit.")
     args = parser.parse_args()
     fasta2phy(args.input, args.output, args.seqtype, args.changes_report)

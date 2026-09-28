@@ -75,7 +75,7 @@ Important:
     optional.add_argument("--min-length",type=int,default=0,metavar="N",help="Remove sequences shorter than N."); optional.add_argument("--max-gap-ratio",type=float,default=1.0,metavar="RATIO",help="Maximum per-sequence gap ratio (default: 1)."); optional.add_argument("--max-n-ratio",type=float,default=1.0,metavar="RATIO",help="Maximum per-sequence N ratio (default: 1)."); optional.add_argument("--max-x-ratio",type=float,default=1.0,metavar="RATIO",help="Maximum per-sequence X ratio in protein mode (default: 1).")
     optional.add_argument("--keep-taxa", metavar="TXT", help="Taxon ID list file; retain only listed IDs.")
     optional.add_argument("--remove-taxa", metavar="TXT", help="Taxon ID list file; remove listed IDs.")
-    optional.add_argument("-h","--help",action="help",help="Show this help message and exit."); optional.add_argument("-v","--version",action="version",version="filter_sequences v1.00",help="Show program's version number and exit.")
+    optional.add_argument("-h","--help",action="help",help="Show this help message and exit."); optional.add_argument("-v","--version",action="version",version="v1.0.0",help="Show program's version number and exit.")
     args=parser.parse_args(argv)
     if args.min_length<0 or not 0<=args.max_gap_ratio<=1 or not 0<=args.max_n_ratio<=1 or not 0<=args.max_x_ratio<=1: parser.error("length must be non-negative and ratios must be between 0 and 1")
     try:

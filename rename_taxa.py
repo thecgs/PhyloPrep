@@ -58,7 +58,7 @@ Special characters are replaced with underscores by default.""")
                         help="Write duplicate renamed IDs for a downstream validator; normally duplicates are an error.")
     optional.add_argument("--keep-special", action="store_true", help="Deprecated compatibility option; OrthoFinder substitutions still apply.")
     optional.add_argument("-h","--help",action="help",help="Show this help message and exit.")
-    optional.add_argument("-v","--version",action="version",version="rename_taxa v1.00",help="Show program's version number and exit.")
+    optional.add_argument("-v","--version",action="version",version="v1.0.0",help="Show program's version number and exit.")
     args=parser.parse_args(argv)
     try: rename_fasta(args.input,args.output,args.mapping,args.map_output,args.allow_duplicate_ids)
     except (OSError,ValueError) as error: print(f"rename_taxa: {error}",file=sys.stderr); return 2

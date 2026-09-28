@@ -42,12 +42,24 @@ def test_converts_a_gapped_protein_alignment_after_validation(tmp_path):
     assert output_file.read_text() == ">sp1\nATG---AAA\n"
 
 
-def test_accepts_alternative_start_codon_as_initiator_methionine(tmp_path):
+def test_standard_code_does_not_treat_gtg_as_an_initiator(tmp_path):
+    result, output_file = run_aa2codon(
+        tmp_path,
+        ">sp1\nGTGAAA\n",
+        ">sp1\nV-K\n",
+        extra_args=("-g", "1"),
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert output_file.read_text() == ">sp1\nGTG---AAA\n"
+
+
+def test_alternative_start_codon_matches_msap_initiator_methionine(tmp_path):
     result, output_file = run_aa2codon(
         tmp_path,
         ">sp1\nGTGAAA\n",
         ">sp1\nM-K\n",
-        extra_args=("-g", "1"),
+        extra_args=("-g", "11"),
     )
 
     assert result.returncode == 0, result.stderr

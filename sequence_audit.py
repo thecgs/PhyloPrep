@@ -18,6 +18,10 @@ FIELDS = ['input_file', 'taxa_id', 'event', 'source_nt_positions',
           'original', 'replacement', 'action', 'genetic_code']
 
 
+class EmptyCodonLocusError(ValueError):
+    """A locus has no coding residues after terminal-stop removal."""
+
+
 def write_report(path, rows, protein=False):
     rows = list(rows)
     fields = FIELDS + (['source_aa_positions'] if protein or any('source_aa_positions' in r for r in rows) else [])
@@ -48,6 +52,7 @@ def rejected_input(infile, prefix, mode, code, reason):
 def preprocess_codon(infile, outfile, code, report):
     records = list(SeqIO.parse(infile, 'fasta'))
     rows, outputs = [], []
+    empty_ids = []
     for record in records:
         original_sequence = str(record.seq)
         remainder = len(original_sequence) % 3
@@ -87,7 +92,19 @@ def preprocess_codon(infile, outfile, code, report):
             else:
                 rows.extend(nucleotide_changes(infile, record.id, original_sequence[i:i+3], code, offset=i))
             fragments.append(replacement)
-        outputs.append((record.id, ''.join(fragments)))
+        cleaned = ''.join(fragments)
+        if not cleaned:
+            empty_ids.append(record.id)
+            rows.append(event(infile, record.id, 'validation_error', code, action='skip'))
+        outputs.append((record.id, cleaned))
+    if empty_ids:
+        write_report(report, rows)
+        names = ', '.join(empty_ids)
+        print(f'WARNING: {names}: no coding codons remain after terminal-stop removal; '
+              f'skipping locus. See {report}.', file=sys.stderr)
+        raise EmptyCodonLocusError(
+            f'{names}: no coding codons remain after terminal-stop removal; skipping locus'
+        )
     with atomic_output(outfile, inputs=[infile]) as handle:
         for identifier, seq in outputs:
             handle.write(f'>{identifier}\n{seq}\n')

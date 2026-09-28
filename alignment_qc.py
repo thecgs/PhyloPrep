@@ -15,6 +15,11 @@ from Bio.Data import CodonTable
 from msap_io import atomic_output, check_output_path, is_stop_codon
 from msap_io import expand_input_paths
 
+
+def length_units(length, seqtype):
+    """Return the length in the units used by the --min-length threshold."""
+    return length // 3 if seqtype == "codon" else length
+
 def alignment_stats(path, seqtype="nucl"):
     records = list(SeqIO.parse(path, "fasta"))
     if not records:
@@ -24,11 +29,24 @@ def alignment_stats(path, seqtype="nucl"):
     aligned = len(set(lengths)) == 1
     nchar = lengths[0] if aligned else 0
     ambiguity = "X" if seqtype == "prot" else "N"
+    if seqtype == "codon":
+        # A codon containing N translates to one ambiguous protein residue.
+        # Count it once, rather than counting its individual N bases, so the
+        # codon --max-n-ratio threshold corresponds to the protein X ratio.
+        ambiguity_count = sum(
+            "N" in sequence[start:start + 3]
+            for sequence in seqs
+            for start in range(0, len(sequence) - 2, 3)
+        )
+        ambiguity_total = sum(len(sequence) // 3 for sequence in seqs)
+    else:
+        ambiguity_count = sum(s.count(ambiguity) for s in seqs)
+        ambiguity_total = sum(lengths)
     result = {"file": str(path), "seqtype": seqtype, "sequence_count": len(seqs),
               "alignment_length": nchar, "gap_ratio": sum(s.count("-") for s in seqs) / (sum(lengths) or 1),
               "variable_sites": 0, "parsimony_informative_sites": 0,
               "distinct_patterns": 0, "singleton_sites": 0, "constant_sites": 0,
-              ("X_ratio" if seqtype == "prot" else "N_ratio"): sum(s.count(ambiguity) for s in seqs) / (sum(lengths) or 1)}
+              ("X_ratio" if seqtype == "prot" else "N_ratio"): ambiguity_count / (ambiguity_total or 1)}
     if aligned:
         patterns = [tuple(s[i] for s in seqs) for i in range(nchar)]
         # Count only resolved states; ambiguity is not an additional allele.
@@ -87,7 +105,9 @@ def alignment_qc(path: str, seqtype: str, genetic_code: int = 1,
             "x_count": sequence.count("X"),
             "x_ratio": sequence.count("X") / len(sequence) if sequence else 0.0,
             "invalid": "".join(invalid),
-            "short": len(sequence) < min_length,
+            # In codon mode a threshold of N means N complete codons, so it
+            # has the same biological unit as the translated protein matrix.
+            "short": length_units(len(sequence), actual_type) < min_length,
         }
         if actual_type == "codon":
             codons = [sequence[i:i + 3] for i in range(0, len(sequence), 3)]
@@ -249,9 +269,16 @@ reading frame and terminal/internal stop codons.""",
 Notes:
   * -st/--seqtype is required and must be codon, prot, or nucl.
   * --min-length is applied to every sequence and to the aligned matrix length.
+    Its unit is nucleotides for nucl, amino acids for prot, and complete codons
+    for codon. Thus --min-length 100 applies the same 100-residue threshold to
+    paired codon and protein matrices in phyloprep.
   * --max-n-ratio applies to nucl/codon matrices; --max-x-ratio applies to prot.
-    Ratios are calculated over the complete matrix (ambiguity count / total
-    characters), while --max-gap-ratio is the corresponding gap ratio.
+    In nucl mode it is the fraction of N bases. In codon mode it is the
+    fraction of complete codons containing at least one N, matching the
+    fraction of X residues in the translated protein matrix.
+    Ratios are calculated over the complete matrix: characters for nucl/prot,
+    and complete codons for codon ambiguity; --max-gap-ratio is always the
+    corresponding character-level gap ratio.
   * --min-parsimony-informative-sites requires the whole matrix to contain at
     least N parsimony-informative sites; use 0 to disable this requirement.
     Site statistics count resolved states only (DNA A/C/G/T, U treated as T;
@@ -281,9 +308,9 @@ Notes:
     optional.add_argument("-g", "--genetic-code", type=int, default=1, metavar="TABLE",
                           help="NCBI genetic-code table for codon mode (default: 1).")
     optional.add_argument("--min-length", type=int, default=1, metavar="N",
-                          help="Minimum length for every sequence and the matrix (default: 1).")
+                          help="Minimum nt (nucl), aa (prot), or complete codons (codon) for every sequence and matrix (default: 1).")
     optional.add_argument("--max-n-ratio", type=float, default=1.0, metavar="RATIO",
-                          help="Maximum N ratio for nucleotide/codon matrices (default: 1).")
+                          help="Maximum N-base ratio (nucl) or N-containing codon ratio (codon) (default: 1).")
     optional.add_argument("--max-x-ratio", type=float, default=1.0, metavar="RATIO",
                           help="Maximum X ratio for protein matrices (default: 1).")
     optional.add_argument("--max-gap-ratio", type=float, default=1.0, metavar="RATIO",
@@ -295,7 +322,7 @@ Notes:
     optional.add_argument("--allow-internal-stop", action="store_true",
                           help="Allow internal stop codons in codon mode.")
     optional.add_argument("-h", "--help", action="help", help="Show this help message and exit.")
-    optional.add_argument("-v", "--version", action="version", version="alignment_qc v1.00",
+    optional.add_argument("-v", "--version", action="version", version="v1.0.0",
                           help="Show program's version number and exit.")
     args = parser.parse_args(argv)
     if args.min_length < 0 or args.min_parsimony_informative_sites < 0 or any(
@@ -316,7 +343,8 @@ Notes:
                 if (has_terminal and not args.allow_terminal_stop) or (has_internal and not args.allow_internal_stop):
                     reasons.append("stop_codon")
             if not aligned: reasons.append("length_mismatch")
-            if stat["alignment_length"] < args.min_length: reasons.append("short_alignment")
+            if length_units(stat["alignment_length"], args.seqtype) < args.min_length:
+                reasons.append("short_alignment")
             if stat["gap_ratio"] > args.max_gap_ratio: reasons.append("gap_ratio")
             amb_key = "X_ratio" if args.seqtype == "prot" else "N_ratio"
             if stat[amb_key] > (args.max_x_ratio if args.seqtype == "prot" else args.max_n_ratio): reasons.append(amb_key)

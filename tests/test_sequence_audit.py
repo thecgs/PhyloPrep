@@ -12,7 +12,9 @@ from Bio import AlignIO, SeqIO
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
 from sequence_audit import FIELDS, preprocess_codon, macse_align
+from sequence_audit import event, write_report
 from alignment_qc import alignment_qc
+from phyloprep import relabel_change_report
 
 
 def rows(path):
@@ -85,6 +87,41 @@ def test_pipeline_records_only_prepared_file_and_taxa_in_failure_report(tmp_path
     assert {r['taxa_id'] for r in report} == {'Species_A', 'Species_B'}
     assert all(r['input_file'] == str(tmp_path/'out/renamed/broken.fa') for r in report)
     assert all(list(r) == FIELDS for r in report)
+
+
+def test_pipeline_maps_special_ids_and_skips_terminal_stop_only_locus(tmp_path, fake_aligner):
+    _, env = fake_aligner
+    skipped, retained = tmp_path / 'skipped.fa', tmp_path / 'retained.fa'
+    skipped.write_text('>original:a\nTAA\n>original,b\nTAA\n')
+    retained.write_text('>original:a\nGCT\n>original,b\nGCC\n')
+    mapping = tmp_path / 'taxa.tsv'
+    mapping.write_text('original:a\tSpecies_A\noriginal,b\tSpecies_B\n')
+    output = tmp_path / 'out'
+    result = cli('phyloprep.py', '-i', skipped, retained, '-m', mapping, '-o', output,
+                 '-t', '1', '--notrim', cwd=tmp_path, env=env)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert 'WARNING: original:a, original,b: no coding codons remain' in result.stderr
+    report = [r for r in rows(output/'reports/sequence_changes.tsv') if r['event'] == 'terminal_stop']
+    assert {r['taxa_id'] for r in report} == {'Species_A', 'Species_B'}
+    assert all(r['input_file'] == str(output/'renamed/skipped.fa') for r in report)
+    assert not (output/'alignments/skipped.mafft.codon.aln').exists()
+    assert {r.id for r in SeqIO.parse(output/'matrices/codon/raw/supermatrix.fasta', 'fasta')} == {'Species_A', 'Species_B'}
+
+
+def test_relabel_change_report_maps_macse_native_audit_rows(tmp_path):
+    source, target = tmp_path/'source.fa', tmp_path/'renamed.fa'
+    native, report = tmp_path/'gene.macse_original.NT.fasta', tmp_path/'changes.tsv'
+    source.write_text('>original:a\nATG\n')
+    target.write_text('>Species_A\nATG\n')
+    native.write_text('>original:a\nATG\n')
+    write_report(report, [event(native, 'original:a', 'internal_frameshift', 1, action='replace')])
+    relabel_change_report(report, {
+        str(source.resolve()): (target.resolve(), {'original_a': 'Species_A'}),
+    })
+    finding = rows(report)[0]
+    assert finding['taxa_id'] == 'Species_A'
+    # Native MACSE alignment columns remain the provenance coordinate system.
+    assert finding['input_file'] == str(native.resolve())
 
 
 @pytest.mark.skipif(not shutil.which('java') or not (REPO/'macse_v2.07.jar').exists(), reason='local MACSE/Java unavailable')

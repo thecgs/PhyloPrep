@@ -33,7 +33,7 @@ if __name__ == '__main__':
                           help='Input codon alignment in FASTA format.', required=True)
     optional.add_argument('-h', '--help', action='help', 
                           help="Show program's help message and exit.")
-    optional.add_argument('-v', '--version', action='version', version='split_codon_seqence_alignment v1.00',
+    optional.add_argument('-v', '--version', action='version', version='v1.0.0',
                           help="Show program's version number and exit.")
     args = parser.parse_args()
     split(infile=args.input)

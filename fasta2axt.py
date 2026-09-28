@@ -40,7 +40,7 @@ if __name__ == '__main__':
                           help='Audit TSV; defaults to OUTPUT.sequence_changes.tsv when edits occur.')
     optional.add_argument('-h', '--help', action='help', 
                           help="Show program's help message and exit.")
-    optional.add_argument('-v', '--version', action='version', version='fasta2axt v1.00',
+    optional.add_argument('-v', '--version', action='version', version='v1.0.0',
                           help="Show program's version number and exit.")
     
     args = parser.parse_args()
