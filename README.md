@@ -1,8 +1,8 @@
-# PhyloPrep: an auditable codon-aware preprocessing framework for phylogenomics and molecular evolutionary analyses
+# **PhyloPrep: an auditable command-line application for phylogenomic matrix preparation**
 
 PhyloPrep prepares nucleotide, CDS, protein, and pseudogene alignments for phylogenetic analysis. It includes a complete workflow (`phyloprep.py`) and standalone utilities for alignment, QC, concatenation, format conversion, trimming, taxon renaming, four-fold-site extraction, and 4DTV.
 
-![PhyloPrep executable-script workflow](docs/phyloprep.png)
+![PhyloPrep executable-script workflow](docs/phyloprep.svg)
 
 ## Contents
 

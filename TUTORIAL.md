@@ -1,6 +1,6 @@
 # Reproducibility tutorial
 
-This directory contains two reproducible phylogenomics examples, both run with the `phyloprep.sif` container image. 
+This directory contains two reproducible phylogenomics examples, both run with the `phyloprep-v1.0.0.sif` container image. 
 
 | Example | Input | Purpose |
 | --- | --- | --- |
