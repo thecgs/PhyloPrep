@@ -1,0 +1,18 @@
+{
+  "name": "PhyloPrep Web",
+  "short_name": "PhyloPrep",
+  "description": "Browser-local sequence preparation workflows.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f1f7ff",
+  "theme_color": "#045cc0",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

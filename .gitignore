@@ -9,6 +9,7 @@ trimAl-1.5.0/
 __pycache__/
 *.py[cod]
 .pytest_cache/
+site/engine/
 
 # Generated example and temporary office files
 example/run-results/

@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="A browser workspace for the PhyloPrep command-line toolkit.">
+    <meta name="theme-color" content="#045cc0">
+    <title>PhyloPrep Web</title>
+    <link rel="icon" href="icon.svg" type="image/svg+xml">
+    <link rel="apple-touch-icon" href="icon.svg">
+    <link rel="manifest" href="manifest.webmanifest">
+    <link rel="stylesheet" href="styles.css">
+    <script defer src="app.js"></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="https://github.com/thecgs/PhyloPrep" target="_blank" rel="noreferrer"><img class="brand-mark" src="icon.svg" alt="" width="30" height="30">PhyloPrep Web</a>
+      <p>Browser workspace for sequence-preparation workflows</p>
+      <span class="topbar-spacer"></span>
+      <a class="repository" href="https://github.com/thecgs/PhyloPrep" target="_blank" rel="noreferrer">Repository ↗</a>
+      <span id="runtime-status" class="runtime-status">Original scripts load on first run</span>
+    </header>
+
+    <main class="app-layout">
+      <aside class="script-panel" aria-label="Script catalog">
+        <div class="panel-heading">
+          <p class="eyebrow">Script catalog</p>
+          <p class="panel-help">Choose a PhyloPrep script.</p>
+        </div>
+        <nav id="script-list" class="script-list" aria-label="PhyloPrep scripts"></nav>
+      </aside>
+
+      <section class="parameters-panel" aria-labelledby="parameters-title">
+        <div class="panel-heading parameter-heading">
+          <p class="eyebrow" id="parameters-title">Parameter selection</p>
+          <h1 id="selected-name">Protein-alignment back-translation</h1>
+          <p id="selected-summary" class="selected-summary"></p>
+        </div>
+        <section class="io-panel" aria-labelledby="io-title">
+          <p class="eyebrow" id="io-title">Input and output</p>
+          <section class="workspace-section" aria-labelledby="output-location-title">
+            <div class="field-heading">
+              <label id="output-location-title" for="choose-output-folder">Output folder</label>
+            </div>
+            <button id="choose-output-folder" class="folder-picker" type="button"><span id="output-folder-display">Browser download folder (default)</span></button>
+            <p class="field-help">Select a folder to show it here and write output there. Browsers do not reveal absolute local paths.</p>
+          </section>
+
+          <div id="input-file-fields" aria-live="polite"></div>
+          <div id="input-files-list" class="input-files-list" aria-live="polite">No files selected.</div>
+          <p id="input-files-help" class="field-help"></p>
+
+          <section id="output-name-section" class="workspace-section" aria-labelledby="output-name-label">
+            <label id="output-name-label" for="output-name">Report prefix</label>
+            <input id="output-name" type="text" spellcheck="false" autocomplete="off">
+            <p id="output-name-help" class="field-help"></p>
+          </section>
+        </section>
+
+        <div id="parameter-list" class="parameter-list" aria-live="polite"></div>
+      </section>
+
+      <section class="workspace-panel" aria-labelledby="execution-title">
+        <div class="workspace-heading execution-heading">
+          <div class="run-actions">
+            <button id="run-browser-module" class="run-button" type="button">Run</button>
+            <button id="cancel-run" class="cancel-button" type="button" hidden>Cancel</button>
+          </div>
+          <div>
+            <p class="eyebrow" id="execution-title">Execution</p>
+            <h2 id="workspace-script">alignment_qc.py</h2>
+          </div>
+          <span id="workspace-mode" class="mode-badge">Runs in browser</span>
+        </div>
+        <p id="implementation-note" class="implementation-note"></p>
+
+        <section class="run-progress" aria-labelledby="workflow-status-title">
+          <div class="result-heading">
+            <h3 id="workflow-status-title">Workflow status</h3>
+            <span id="run-stage-label" aria-live="polite">Ready to run</span>
+          </div>
+          <ol id="run-stages" class="run-stages">
+            <li class="run-stage" data-stage="1"><span class="stage-marker">1</span><span>Check input</span></li>
+            <li class="run-stage" data-stage="2"><span class="stage-marker">2</span><span>Process locally</span></li>
+            <li class="run-stage" data-stage="3"><span class="stage-marker">3</span><span>Save output</span></li>
+          </ol>
+        </section>
+
+        <section class="command-section command-first" aria-labelledby="command-title">
+          <div class="result-heading">
+            <h3 id="command-title">Equivalent CLI command</h3>
+            <div class="command-actions"><span>Updates live</span><button id="copy-command" class="copy-button" type="button">Copy</button></div>
+          </div>
+          <pre id="command-example" class="command-example" tabindex="0"></pre>
+        </section>
+
+        <p id="workspace-log" class="workspace-log" aria-live="polite">Select an input file to begin.</p>
+
+        <section class="result-section" aria-labelledby="output-files-title">
+          <div class="result-heading">
+            <h3 id="output-files-title">Output files</h3>
+            <div class="output-actions"><span id="result-count">No output yet</span><button id="download-selected" class="copy-button" type="button" hidden>Download selected</button><button id="download-all" class="download-all-button" type="button" hidden>Download all (.zip)</button></div>
+          </div>
+          <div id="output-files-list" class="output-files-list" tabindex="0">No output files yet.</div>
+          <div class="result-heading preview-heading">
+            <h3>Output preview</h3>
+            <span>Scrollable</span>
+          </div>
+          <pre id="output-preview" class="output-preview" tabindex="0">Run the selected module to inspect generated output here.</pre>
+        </section>
+      </section>
+    </main>
+
+    <footer>
+      PhyloPrep browser interface · Processing stays local to your browser for supported modules.
+    </footer>
+  </body>
+</html>
