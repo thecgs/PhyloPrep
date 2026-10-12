@@ -15,7 +15,7 @@ PhyloPrep prepares nucleotide, CDS, protein, and pseudogene alignments for phylo
 7. [Script reference](#script-reference)
 8. [QC and tree building](#qc-and-tree-building)
 9. [Divergence statistics: 4DTV and related values](#divergence-statistics-4dtv-and-related-values)
-10. [PhyloPrep Web](#PhyloPrep Web)
+10. [PhyloPrep Web](#PhyloPrep-Web)
 11. [Testing and troubleshooting](#testing-and-troubleshooting)
 
 ## Install
