@@ -6,16 +6,17 @@ PhyloPrep prepares nucleotide, CDS, protein, and pseudogene alignments for phylo
 
 ## Contents
 
-1. [Install](#install)
-2. [Quick start](#quick-start)
-3. [Input modes and normalization](#input-modes-and-normalization)
-4. [Complete workflow](#complete-workflow)
-5. [Outputs and audit reports](#outputs-and-audit-reports)
-6. [Script reference](#script-reference)
-7. [QC and tree building](#qc-and-tree-building)
-8. [Divergence statistics: 4DTV and related values](#divergence-statistics-4dtv-and-related-values)
-9. [Testing and troubleshooting](#testing-and-troubleshooting)
-10. [Containerized examples](#containerized-examples)
+1. [PhyloPrep Web](#phyloprep-web)
+2. [Install](#install)
+3. [Quick start](#quick-start)
+4. [Input modes and normalization](#input-modes-and-normalization)
+5. [Complete workflow](#complete-workflow)
+6. [Outputs and audit reports](#outputs-and-audit-reports)
+7. [Script reference](#script-reference)
+8. [QC and tree building](#qc-and-tree-building)
+9. [Divergence statistics: 4DTV and related values](#divergence-statistics-4dtv-and-related-values)
+10. [PhyloPrep Web](# PhyloPrep Web)
+11. [Testing and troubleshooting](#testing-and-troubleshooting)
 
 ## Install
 
@@ -389,6 +390,14 @@ The program writes `NA` for corrected or raw values when no eligible sites exist
 | Four-fold-site count | `extract_4-fold_degenerated_sites.py` and 4DTV TSV | Informative denominator for synonymous-site analyses. |
 
 For species comparisons, report at least matrix length, gap/N/X ratios, PIS, and four-fold-site count together with raw/corrected 4DTV. For phylogenetic inference, assess bootstrap or other branch-support values in the tree-building program as a separate measure of relationship confidence.
+
+## PhyloPrep Web
+
+![PhyloPrep Web workspace](docs/PhyloPrep_Web.png)
+
+[PhyloPrep Web](https://thecgs.github.io/PhyloPrep/) is a browser-based companion to PhyloPrep, not a replacement for the complete local command-line application. It currently implements 11 standalone scripts: `AA2Codon.py`, `alignment_qc.py`, `calulate_4dtv_and_correction.py`, `extract_4-fold_degenerated_sites.py`, `get_supergenes.py`, `filter_sequences.py`, `rename_taxa.py`, `trimAlnSeq.py`, `fasta2axt.py`, `fasta2nex.py`, and `fasta2phy.py`.
+
+All other PhyloPrep workflows remain available only in the local application because they require external programs or local-system capabilities that cannot run in a browser. Use the full local installation for alignment engines and workflows that depend on tools such as MAFFT, MUSCLE, PRANK, trimAl, MACSE, Java, or OrthoFinder.
 
 ## Testing and troubleshooting
 
