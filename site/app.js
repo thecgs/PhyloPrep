@@ -14,6 +14,7 @@ const elements = {
   outputNameLabel: document.querySelector("#output-name-label"),
   outputName: document.querySelector("#output-name"),
   outputNameHelp: document.querySelector("#output-name-help"),
+  outputNameSection: document.querySelector("#output-name-section"),
   run: document.querySelector("#run-browser-module"),
   cancelRun: document.querySelector("#cancel-run"),
   log: document.querySelector("#workspace-log"),
@@ -73,6 +74,23 @@ function geneticCodeParameter() {
 }
 
 const modules = [
+  {
+    script: "MSAP.py", title: "Complete alignment workflow", category: "Workflow", browser: true, fullWorkflow: true,
+    summary: "Runs the untouched single-locus MSAP.py workflow locally with MUSCLE 5.1.0 supplied by Biowasm/WebAssembly.",
+    inputs: ["Input FASTA (-i, --input)"],
+    inputFields: [{ key: "input", label: "Input FASTA", flag: "-i, --input" }],
+    outputs: ["Preprocessed FASTA and audit report", "MUSCLE alignment", "Codon back-translation for CDS input", "Optional PhyloPrep trimming outputs"],
+    outputLabel: "Output naming", outputHelp: "MSAP.py derives output names from the input FASTA stem.", defaultOutput: "", hideOutputName: true,
+    parameters: [
+      { flag: "-st", label: "Sequence type", description: "Browser workflow supports codon, protein, and nucleotide modes. Pseudogene/MACSE remains CLI-only.", type: "select", value: "codon", options: [["codon", "Codon / CDS"], ["prot", "Protein"], ["nucl", "Nucleotide"]], token: "seqtype" },
+      geneticCodeParameter(),
+      { flag: "-n", label: "Skip trimming", description: "Keep the raw MUSCLE alignment(s) without running trimAlnSeq.py.", type: "checkbox", value: false, token: "notrim" },
+      { flag: "-G", label: "Maximum gap proportion", description: "Maximum gap ratio per site for PhyloPrep's bundled trimming. Range: 0–1.", type: "number", value: "0.2", step: "0.01", token: "gap_ratio" },
+      { flag: "-N", label: "Maximum N proportion", description: "Maximum N ratio per site for nucleotide/codon trimming. Range: 0–1.", type: "number", value: "0.2", step: "0.01", token: "n_ratio" },
+      { flag: "-X", label: "Maximum X proportion", description: "Maximum X ratio per site for protein trimming. Range: 0–1.", type: "number", value: "0.2", step: "0.01", token: "x_ratio" },
+    ],
+    command: "python MSAP.py -i {input} -st {seqtype} -s muscle -t 1 -g {genetic_code} -ts trimAlnSeq -G {gap_ratio} -N {n_ratio} -X {x_ratio}{notrim_option}",
+  },
   {
     script: "AA2Codon.py", title: "Protein-alignment back-translation", category: "Back-translation", browser: true,
     summary: "Maps protein-alignment positions back to matching CDS codons. Sequence IDs must match exactly.",
@@ -209,10 +227,19 @@ let pyodideWorker;
 let activeWorkerRun;
 let nextRunId = 0;
 let selectedInputFiles = new Map();
+let muscleCliPromise;
+let muscleRunCounter = 0;
 
 function activeModule() { return modules[activeModuleIndex]; }
 
 function implementationProfile(module) {
+  if (module.fullWorkflow) {
+    return {
+      key: "compatible",
+      label: "Original MSAP.py + Biowasm MUSCLE",
+      note: "Runs the repository's untouched MSAP.py in Pyodide. Its MUSCLE subprocess call is fulfilled locally by Biowasm MUSCLE 5.1.0; bundled AA2Codon.py and trimAlnSeq.py continue inside the same browser Python runtime. No sequence file is uploaded to PhyloPrep.",
+    };
+  }
   return {
     key: "original",
     label: "Original script in Pyodide",
@@ -486,6 +513,7 @@ function valuesForCommand() {
     map_output_option: parameterValues.map_output ? ` --map-output ${cliQuote(mapOutputPath)}` : "",
     allow_duplicate_ids_option: parameterValues.allow_duplicate_ids ? " --allow-duplicate-ids" : "",
     keep_special_option: parameterValues.keep_special ? " --keep-special" : "",
+    notrim_option: parameterValues.notrim ? " -n" : "",
   };
 }
 
@@ -538,6 +566,7 @@ function selectModule(index) {
   elements.workspaceMode.textContent = profile.label;
   elements.workspaceMode.className = `mode-badge ${profile.key}`;
   elements.implementationNote.textContent = profile.note;
+  elements.outputNameSection.hidden = Boolean(module.hideOutputName);
   elements.outputNameLabel.textContent = module.outputLabel;
   elements.outputName.value = module.defaultOutput;
   elements.outputNameHelp.textContent = module.outputHelp;
@@ -713,7 +742,7 @@ function runInWorker(payload) {
   const runId = ++nextRunId;
   return new Promise((resolve, reject) => {
     activeWorkerRun = { id: runId, resolve, reject };
-    worker.postMessage({ type: "run", runId, ...payload });
+    worker.postMessage({ type: payload.type || "run", runId, ...payload });
   });
 }
 
@@ -881,6 +910,83 @@ function downloadAllOutputs() {
   setLog(`Downloaded ${generatedFiles.length} output files as a ZIP archive.`, "success");
 }
 
+
+function loadExternalScript(src) {
+  return new Promise((resolve, reject) => {
+    const existing = [...document.scripts].find((script) => script.src === src);
+    if (existing?.dataset.loaded === "true") {
+      resolve();
+      return;
+    }
+    const script = existing || document.createElement("script");
+    const onLoad = () => {
+      script.dataset.loaded = "true";
+      resolve();
+    };
+    const onError = () => reject(new Error(`Could not load ${src}.`));
+    script.addEventListener("load", onLoad, { once: true });
+    script.addEventListener("error", onError, { once: true });
+    if (!existing) {
+      script.src = src;
+      script.async = true;
+      document.head.append(script);
+    }
+  });
+}
+
+async function ensureMuscleCli() {
+  if (!muscleCliPromise) {
+    muscleCliPromise = (async () => {
+      await loadExternalScript("https://biowasm.com/cdn/v3/aioli.js");
+      if (typeof globalThis.Aioli !== "function") throw new Error("Biowasm Aioli did not initialize.");
+      return await new globalThis.Aioli(["muscle/5.1.0"], { printInterleaved: false });
+    })();
+  }
+  return muscleCliPromise;
+}
+
+async function runMuscleAlignment(sequenceText) {
+  const cli = await ensureMuscleCli();
+  const token = `phyloprep-${Date.now()}-${++muscleRunCounter}`;
+  const mounted = await cli.mount([{ name: `${token}.fasta`, data: sequenceText }]);
+  const inputPath = mounted?.[0];
+  if (!inputPath) throw new Error("Biowasm could not mount the MUSCLE input.");
+  const outputPath = `/shared/data/${token}.aligned.fasta`;
+  let execution;
+  let url;
+  try {
+    execution = await cli.exec("muscle", ["-align", inputPath, "-output", outputPath, "-threads", "1"]);
+    url = await cli.download(outputPath);
+    const alignment = await fetch(url).then((response) => response.text());
+    if (!alignment.trimStart().startsWith(">")) {
+      const detail = execution?.stderr || execution?.stdout || "MUSCLE did not produce a FASTA alignment.";
+      throw new Error(String(detail).trim());
+    }
+    return alignment;
+  } finally {
+    if (url) URL.revokeObjectURL(url);
+    try { await cli.fs.unlink(outputPath); } catch {}
+    try { await cli.fs.unlink(inputPath); } catch {}
+  }
+}
+
+async function runMsapBrowserWorkflow(request) {
+  setRunStage(2, "Preparing input with original MSAP.py");
+  elements.runtimeStatus.textContent = "Preparing MSAP.py workflow";
+  const probe = await runInWorker({ type: "msap-probe", ...request });
+  if (!probe.alignmentInput) throw new Error("MSAP.py did not provide an alignment input for MUSCLE.");
+
+  elements.cancelRun.hidden = true;
+  setRunStage(2, "Running Biowasm MUSCLE 5.1.0");
+  elements.runtimeStatus.textContent = "Biowasm MUSCLE running";
+  const alignmentContent = await runMuscleAlignment(probe.alignmentInput);
+
+  setRunStage(2, "Finishing original MSAP.py workflow");
+  elements.runtimeStatus.textContent = "Finishing MSAP.py workflow";
+  elements.cancelRun.hidden = false;
+  return runInWorker({ type: "msap-complete", ...request, alignmentContent });
+}
+
 async function runBrowserModule() {
   const module = activeModule();
   const files = browserInputFiles();
@@ -901,13 +1007,16 @@ async function runBrowserModule() {
     const optionValues = valuesForCommand();
     setRunStage(stage, "Loading local workflow");
     elements.cancelRun.hidden = false;
-    const result = await runInWorker({
+    const request = {
       script: module.script,
       files: filePayload,
       options: optionValues,
       outputName: elements.outputName.value.trim() || module.defaultOutput,
       usesPathList: module.inputFields.some((field) => field.pathList),
-    });
+    };
+    const result = module.fullWorkflow
+      ? await runMsapBrowserWorkflow(request)
+      : await runInWorker(request);
     stage = 3;
     setRunStage(stage, "Saving output");
     generatedFiles = [];

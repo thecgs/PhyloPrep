@@ -96,6 +96,7 @@ function stageBrowserInputs(runtime, request) {
     pathList,
     keepTaxa: writeTaxaList("keep_taxa"),
     removeTaxa: writeTaxaList("remove_taxa"),
+    optionsRoot,
     outputRoot,
   };
 }
@@ -151,14 +152,61 @@ function originalArguments(request, stage) {
   }
 }
 
+
+function msapArguments(request, stage) {
+  const values = request.options;
+  return [
+    "-i", inputFile(stage),
+    "-st", option(values.seqtype, "codon"),
+    "-s", "muscle",
+    "-t", "1",
+    "-g", option(values.genetic_code, "1"),
+    "-ts", "trimAlnSeq",
+    "-G", option(values.gap_ratio, "0.2"),
+    "-N", option(values.n_ratio, "0.2"),
+    "-X", option(values.x_ratio, "0.2"),
+    ...(values.notrim ? ["-n"] : []),
+  ];
+}
+
 self.addEventListener("message", async (event) => {
   const request = event.data;
-  if (request.type !== "run") return;
+  if (!["run", "msap-probe", "msap-complete"].includes(request.type)) return;
   const { runId } = request;
   try {
     const runtime = await ensureRuntime(runId);
-    self.postMessage({ type: "stage", runId, stage: "process", label: "Running original script locally" });
     const stage = stageBrowserInputs(runtime, request);
+
+    if (request.type === "msap-probe") {
+      self.postMessage({ type: "stage", runId, stage: "process", label: "Preparing MSAP.py MUSCLE input" });
+      const args = msapArguments(request, stage);
+      const raw = await runtime.runPythonAsync(`run_msap_probe(${JSON.stringify(args)}, ${JSON.stringify(stage.outputRoot)})`);
+      const result = JSON.parse(raw);
+      if (!result.ok) throw new Error(result.error || "MSAP.py could not prepare the MUSCLE input.");
+      self.postMessage({ type: "result", runId, result });
+      return;
+    }
+
+    if (request.type === "msap-complete") {
+      self.postMessage({ type: "stage", runId, stage: "process", label: "Finishing original MSAP.py workflow" });
+      const alignmentPath = `${stage.optionsRoot}/biowasm-muscle.aln.fasta`;
+      runtime.FS.writeFile(alignmentPath, request.alignmentContent || "");
+      const args = msapArguments(request, stage);
+      const raw = await runtime.runPythonAsync(`run_msap_complete(${JSON.stringify(args)}, ${JSON.stringify(stage.outputRoot)}, ${JSON.stringify(alignmentPath)})`);
+      const result = JSON.parse(raw);
+      if (!result.ok) throw new Error(result.error || "The original MSAP.py workflow could not complete.");
+      self.postMessage({
+        type: "result",
+        runId,
+        result: {
+          ...result,
+          provenance: `Untouched MSAP.py + Biowasm MUSCLE 5.1.0 · source bundle ${engineManifest.bundleSha256.slice(0, 12)}`,
+        },
+      });
+      return;
+    }
+
+    self.postMessage({ type: "stage", runId, stage: "process", label: "Running original script locally" });
     const args = originalArguments(request, stage);
     const raw = await runtime.runPythonAsync(`run_original_module(${JSON.stringify(request.script)}, ${JSON.stringify(args)}, ${JSON.stringify(stage.outputRoot)})`);
     const result = JSON.parse(raw);
