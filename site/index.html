@@ -25,7 +25,9 @@
       <aside class="script-panel" aria-label="Script catalog">
         <div class="panel-heading">
           <p class="eyebrow">Script catalog</p>
-          <p class="panel-help">Choose a PhyloPrep script.</p>
+          <p class="panel-help">Choose a workflow or script.</p>
+          <label class="catalog-search-label" for="script-search">Find a tool</label>
+          <input id="script-search" class="catalog-search" type="search" placeholder="Search scripts or categories" autocomplete="off" spellcheck="false">
         </div>
         <nav id="script-list" class="script-list" aria-label="PhyloPrep scripts"></nav>
       </aside>
@@ -49,6 +51,14 @@
           <div id="input-file-fields" aria-live="polite"></div>
           <div id="input-files-list" class="input-files-list" aria-live="polite">No files selected.</div>
           <p id="input-files-help" class="field-help"></p>
+
+          <section class="preflight-panel" aria-labelledby="preflight-title">
+            <div class="result-heading">
+              <h3 id="preflight-title">Input preflight</h3>
+              <span id="preflight-status">Waiting for input</span>
+            </div>
+            <div id="preflight-summary" class="preflight-summary">Select input files to estimate browser load and validate basic FASTA structure.</div>
+          </section>
 
           <section id="output-name-section" class="workspace-section" aria-labelledby="output-name-label">
             <label id="output-name-label" for="output-name">Report prefix</label>
@@ -99,7 +109,7 @@
         <section class="result-section" aria-labelledby="output-files-title">
           <div class="result-heading">
             <h3 id="output-files-title">Output files</h3>
-            <div class="output-actions"><span id="result-count">No output yet</span><button id="download-selected" class="copy-button" type="button" hidden>Download selected</button><button id="download-all" class="download-all-button" type="button" hidden>Download all (.zip)</button></div>
+            <div class="output-actions"><span id="result-count">No output yet</span><button id="use-next-step" class="copy-button" type="button" hidden>Use in next step</button><button id="download-selected" class="copy-button" type="button" hidden>Download selected</button><button id="download-all" class="download-all-button" type="button" hidden>Download all (.zip)</button></div>
           </div>
           <div id="output-files-list" class="output-files-list" tabindex="0">No output files yet.</div>
           <div class="result-heading preview-heading">

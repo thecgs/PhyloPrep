@@ -90,6 +90,7 @@ function stageBrowserInputs(runtime, request) {
     return path;
   };
   return {
+    runRoot,
     files,
     fastaFiles,
     plainFiles: files.filter((file) => !file.fasta),
@@ -99,6 +100,21 @@ function stageBrowserInputs(runtime, request) {
     optionsRoot,
     outputRoot,
   };
+}
+
+function removeTree(runtime, path) {
+  try {
+    const entries = runtime.FS.readdir(path).filter((name) => name !== "." && name !== "..");
+    entries.forEach((name) => {
+      const child = `${path}/${name}`;
+      const stat = runtime.FS.stat(child);
+      if (runtime.FS.isDir(stat.mode)) removeTree(runtime, child);
+      else runtime.FS.unlink(child);
+    });
+    runtime.FS.rmdir(path);
+  } catch {
+    // A cancelled/failed run may already have a partially removed workspace.
+  }
 }
 
 function outputPath(stage, outputName, fallback) {
@@ -221,9 +237,11 @@ self.addEventListener("message", async (event) => {
   const request = event.data;
   if (!["run", "msap-probe", "msap-complete", "phyloprep-finalize", "orthofinder-extract"].includes(request.type)) return;
   const { runId } = request;
+  let runtime;
+  let stage;
   try {
-    const runtime = await ensureRuntime(runId);
-    const stage = stageBrowserInputs(runtime, request);
+    runtime = await ensureRuntime(runId);
+    stage = stageBrowserInputs(runtime, request);
 
     if (request.type === "msap-probe") {
       self.postMessage({ type: "stage", runId, stage: "process", label: "Preparing MSAP.py MUSCLE input" });
@@ -303,5 +321,7 @@ self.addEventListener("message", async (event) => {
     });
   } catch (error) {
     self.postMessage({ type: "error", runId, message: error.message || String(error) });
+  } finally {
+    if (runtime && stage?.runRoot) removeTree(runtime, stage.runRoot);
   }
 });

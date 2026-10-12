@@ -28,6 +28,10 @@ const elements = {
   copyCommand: document.querySelector("#copy-command"),
   runStages: document.querySelector("#run-stages"),
   runStageLabel: document.querySelector("#run-stage-label"),
+  scriptSearch: document.querySelector("#script-search"),
+  preflightStatus: document.querySelector("#preflight-status"),
+  preflightSummary: document.querySelector("#preflight-summary"),
+  useNextStep: document.querySelector("#use-next-step"),
 };
 
 const geneticCodeOptions = [
@@ -354,8 +358,11 @@ let pyodideWorker;
 let activeWorkerRun;
 let nextRunId = 0;
 let selectedInputFiles = new Map();
-let muscleCliPromise;
+let muscleWorker;
+let activeMuscleRun;
 let muscleRunCounter = 0;
+let catalogQuery = "";
+let pendingTransfer;
 
 function activeModule() { return modules[activeModuleIndex]; }
 
@@ -390,21 +397,47 @@ function implementationProfile(module) {
 
 function renderCatalog() {
   elements.scriptList.replaceChildren();
-  modules.forEach((module, index) => {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = `script-button${index === activeModuleIndex ? " active" : ""}`;
-    button.setAttribute("role", "tab");
-    button.setAttribute("aria-selected", String(index === activeModuleIndex));
-    const name = document.createElement("span");
-    name.className = "script-name";
-    name.textContent = module.script;
-    const category = document.createElement("span");
-    category.className = "script-category";
-    category.textContent = module.category;
-    button.append(name, category);
-    button.addEventListener("click", () => selectModule(index));
-    elements.scriptList.append(button);
+  const query = catalogQuery.trim().toLowerCase();
+  const matched = modules
+    .map((module, index) => ({ module, index }))
+    .filter(({ module }) => !query || [module.script, module.title, module.category, module.summary].some((value) => String(value || "").toLowerCase().includes(query)));
+  if (!matched.length) {
+    const empty = document.createElement("p");
+    empty.className = "catalog-empty";
+    empty.textContent = "No matching tools.";
+    elements.scriptList.append(empty);
+    return;
+  }
+  const groups = new Map();
+  matched.forEach((entry) => {
+    const category = entry.module.category || "Other";
+    if (!groups.has(category)) groups.set(category, []);
+    groups.get(category).push(entry);
+  });
+  groups.forEach((entries, category) => {
+    const group = document.createElement("details");
+    group.className = "catalog-group";
+    group.open = true;
+    const summary = document.createElement("summary");
+    summary.textContent = `${category} · ${entries.length}`;
+    group.append(summary);
+    entries.forEach(({ module, index }) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = `script-button${index === activeModuleIndex ? " active" : ""}`;
+      button.setAttribute("role", "tab");
+      button.setAttribute("aria-selected", String(index === activeModuleIndex));
+      const name = document.createElement("span");
+      name.className = "script-name";
+      name.textContent = module.script;
+      const title = document.createElement("span");
+      title.className = "script-category";
+      title.textContent = module.title;
+      button.append(name, title);
+      button.addEventListener("click", () => selectModule(index));
+      group.append(button);
+    });
+    elements.scriptList.append(group);
   });
 }
 
@@ -415,6 +448,7 @@ function parameterToken(parameter) {
 function renderParameterControl(parameter) {
   const card = document.createElement("section");
   card.className = "parameter-card";
+  card.dataset.parameterToken = parameterToken(parameter);
   const id = `parameter-${parameterToken(parameter)}`;
   if (parameter.type === "checkbox") {
     const label = document.createElement("label");
@@ -521,10 +555,30 @@ function renderParameters(module) {
       elements.parameterList.append(group);
     }
     elements.parameterList.querySelectorAll("input, select").forEach((control) => {
-      control.addEventListener("input", updateCommand);
-      control.addEventListener("change", updateCommand);
+      const refresh = () => { updateContextualParameters(); updateCommand(); void updatePreflight(); };
+      control.addEventListener("input", refresh);
+      control.addEventListener("change", refresh);
     });
+    updateContextualParameters();
   }
+}
+
+function updateContextualParameters() {
+  const seqtype = elements.parameterList.querySelector('[data-parameter="seqtype"]')?.value;
+  const notrim = elements.parameterList.querySelector('[data-parameter="notrim"]')?.checked;
+  const hide = (token, hidden) => {
+    const card = elements.parameterList.querySelector(`[data-parameter-token="${token}"]`);
+    if (card) card.dataset.contextHidden = String(Boolean(hidden));
+  };
+  hide("genetic_code", seqtype === "prot" || seqtype === "nucl");
+  hide("protein_stop_symbol", seqtype !== "prot");
+  hide("n_ratio", seqtype === "prot" || Boolean(notrim));
+  hide("x_ratio", seqtype !== "prot" || Boolean(notrim));
+  hide("gap_ratio", Boolean(notrim));
+  hide("max_n_ratio", seqtype === "prot");
+  hide("max_x_ratio", seqtype !== "prot");
+  hide("allow_terminal_stop", seqtype !== "codon");
+  hide("allow_internal_stop", seqtype !== "codon");
 }
 
 function inputControls() {
@@ -710,6 +764,7 @@ function resetGeneratedOutput() {
   renderEmptyOutputFiles();
   elements.resultCount.textContent = "No output yet";
   elements.preview.textContent = "Run the selected module to inspect generated output here.";
+  elements.useNextStep.hidden = true;
   setRunStage();
 }
 
@@ -737,6 +792,11 @@ function selectModule(index) {
     : "Select the files required by this module.";
   renderInputFileFields(module);
   elements.inputFilesList.textContent = "No files selected.";
+  if (pendingTransfer?.script === module.script) {
+    selectedInputFiles = pendingTransfer.inputs;
+    pendingTransfer = undefined;
+    void renderInputFiles();
+  }
   renderCatalog();
   renderParameters(module);
   resetGeneratedOutput();
@@ -832,8 +892,57 @@ async function renderInputFiles() {
     elements.inputFilesHelp.textContent = "Select the files required by this module."
   }
   await refreshTaxonSelectors();
+  await updatePreflight();
   resetGeneratedOutput();
   updateCommand();
+}
+
+function formatBytes(bytes) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 ** 2) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 ** 2).toFixed(1)} MB`;
+}
+
+async function updatePreflight() {
+  const files = browserInputFiles();
+  if (!files.length) {
+    elements.preflightStatus.textContent = "Waiting for input";
+    elements.preflightSummary.textContent = "Select input files to estimate browser load and validate basic FASTA structure.";
+    return;
+  }
+  const totalBytes = files.reduce((sum, file) => sum + (file.size || 0), 0);
+  let fastaFiles = 0;
+  let sequences = 0;
+  let duplicateIds = 0;
+  let malformedCodon = 0;
+  for (const file of files) {
+    if (!/\.(fa|faa|fas|fasta|aln|pep)$/i.test(file.name)) continue;
+    const text = await file.text();
+    if (!text.trimStart().startsWith(">")) continue;
+    fastaFiles += 1;
+    const ids = text.split(/\r?\n/).filter((line) => line.startsWith(">")).map((line) => line.slice(1).trim().split(/\s+/, 1)[0]).filter(Boolean);
+    sequences += ids.length;
+    duplicateIds += ids.length - new Set(ids).size;
+    if (valuesForCommand().seqtype === "codon") {
+      const chunks = text.split(/^>/m).slice(1);
+      malformedCodon += chunks.filter((chunk) => {
+        const lines = chunk.split(/\r?\n/);
+        const seq = lines.slice(1).join("").replace(/\s+/g, "").replace(/-/g, "");
+        return seq && seq.length % 3 !== 0;
+      }).length;
+    }
+  }
+  const problems = [];
+  if (duplicateIds) problems.push(`<span class="preflight-error">${duplicateIds} duplicate FASTA ID(s)</span>`);
+  if (malformedCodon) problems.push(`<span class="preflight-warning">${malformedCodon} sequence(s) are not complete codon multiples</span>`);
+  const level = totalBytes > 100 * 1024 ** 2 ? "Large — CLI recommended" : totalBytes > 25 * 1024 ** 2 ? "Moderate browser workload" : "Browser-friendly";
+  elements.preflightStatus.textContent = level;
+  elements.preflightSummary.innerHTML = [
+    `<strong>${files.length}</strong> file(s)`,
+    `<strong>${formatBytes(totalBytes)}</strong>`,
+    fastaFiles ? `<strong>${fastaFiles}</strong> FASTA file(s) · <strong>${sequences}</strong> sequence(s)` : "",
+    problems.length ? problems.join(" · ") : '<span class="preflight-ok">Basic structure checks passed</span>',
+  ].filter(Boolean).join(" · ");
 }
 
 async function chooseOutputFolder() {
@@ -909,6 +1018,11 @@ function runInWorker(payload) {
 }
 
 function cancelActiveRun() {
+  if (cancelMuscleRun()) {
+    elements.cancelRun.hidden = true;
+    elements.runtimeStatus.textContent = "MUSCLE stopped";
+    return;
+  }
   if (!activeWorkerRun) return;
   const run = activeWorkerRun;
   activeWorkerRun = undefined;
@@ -1078,64 +1192,44 @@ function downloadAllOutputs() {
 }
 
 
-function loadExternalScript(src) {
+function createMuscleWorker() {
+  const worker = new Worker("muscle-worker.js");
+  worker.addEventListener("message", (event) => {
+    if (!activeMuscleRun || event.data.runId !== activeMuscleRun.id) return;
+    const run = activeMuscleRun;
+    activeMuscleRun = undefined;
+    if (event.data.type === "result") run.resolve(event.data.alignment);
+    else run.reject(new Error(event.data.message || "MUSCLE failed."));
+  });
+  worker.addEventListener("error", (event) => {
+    if (!activeMuscleRun) return;
+    const run = activeMuscleRun;
+    activeMuscleRun = undefined;
+    run.reject(new Error(event.message || "MUSCLE worker stopped unexpectedly."));
+  });
+  muscleWorker = worker;
+  return worker;
+}
+
+function runMuscleAlignment(sequenceText) {
+  const worker = muscleWorker || createMuscleWorker();
+  const runId = ++muscleRunCounter;
   return new Promise((resolve, reject) => {
-    const existing = [...document.scripts].find((script) => script.src === src);
-    if (existing?.dataset.loaded === "true") {
-      resolve();
-      return;
-    }
-    const script = existing || document.createElement("script");
-    const onLoad = () => {
-      script.dataset.loaded = "true";
-      resolve();
-    };
-    const onError = () => reject(new Error(`Could not load ${src}.`));
-    script.addEventListener("load", onLoad, { once: true });
-    script.addEventListener("error", onError, { once: true });
-    if (!existing) {
-      script.src = src;
-      script.async = true;
-      document.head.append(script);
-    }
+    activeMuscleRun = { id: runId, resolve, reject };
+    worker.postMessage({ type: "align", runId, sequenceText });
   });
 }
 
-async function ensureMuscleCli() {
-  if (!muscleCliPromise) {
-    muscleCliPromise = (async () => {
-      await loadExternalScript("https://biowasm.com/cdn/v3/aioli.js");
-      if (typeof globalThis.Aioli !== "function") throw new Error("Biowasm Aioli did not initialize.");
-      return await new globalThis.Aioli(["muscle/5.1.0"], { printInterleaved: false });
-    })();
-  }
-  return muscleCliPromise;
+function cancelMuscleRun() {
+  if (!activeMuscleRun) return false;
+  const run = activeMuscleRun;
+  activeMuscleRun = undefined;
+  muscleWorker?.terminate();
+  muscleWorker = undefined;
+  run.reject(cancellationError());
+  return true;
 }
 
-async function runMuscleAlignment(sequenceText) {
-  const cli = await ensureMuscleCli();
-  const token = `phyloprep-${Date.now()}-${++muscleRunCounter}`;
-  const mounted = await cli.mount([{ name: `${token}.fasta`, data: sequenceText }]);
-  const inputPath = mounted?.[0];
-  if (!inputPath) throw new Error("Biowasm could not mount the MUSCLE input.");
-  const outputPath = `/shared/data/${token}.aligned.fasta`;
-  let execution;
-  let url;
-  try {
-    execution = await cli.exec("muscle", ["-align", inputPath, "-output", outputPath, "-threads", "1"]);
-    url = await cli.download(outputPath);
-    const alignment = await fetch(url).then((response) => response.text());
-    if (!alignment.trimStart().startsWith(">")) {
-      const detail = execution?.stderr || execution?.stdout || "MUSCLE did not produce a FASTA alignment.";
-      throw new Error(String(detail).trim());
-    }
-    return alignment;
-  } finally {
-    if (url) URL.revokeObjectURL(url);
-    try { await cli.fs.unlink(outputPath); } catch {}
-    try { await cli.fs.unlink(inputPath); } catch {}
-  }
-}
 
 async function runMsapBrowserWorkflow(request) {
   setRunStage(2, "Preparing input with original MSAP.py");
@@ -1143,7 +1237,7 @@ async function runMsapBrowserWorkflow(request) {
   const probe = await runInWorker({ type: "msap-probe", ...request });
   if (!probe.alignmentInput) throw new Error("MSAP.py did not provide an alignment input for MUSCLE.");
 
-  elements.cancelRun.hidden = true;
+  elements.cancelRun.hidden = false;
   setRunStage(2, "Running Biowasm MUSCLE 5.1.0");
   elements.runtimeStatus.textContent = "Biowasm MUSCLE running";
   const alignmentContent = await runMuscleAlignment(probe.alignmentInput);
@@ -1244,6 +1338,76 @@ async function runPhyloPrepBrowserWorkflow(request) {
   });
 }
 
+async function sha256Text(text) {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function buildRunManifest(module, request, result, outputs) {
+  const inputManifest = [];
+  for (const file of request.files) {
+    inputManifest.push({
+      name: file.name,
+      input_key: file.inputKey,
+      bytes: new TextEncoder().encode(file.content).length,
+      sha256: await sha256Text(file.content),
+    });
+  }
+  const outputManifest = [];
+  for (const file of outputs) {
+    outputManifest.push({
+      name: file.name,
+      bytes: new TextEncoder().encode(file.content).length,
+      sha256: await sha256Text(file.content),
+    });
+  }
+  return JSON.stringify({
+    schema: "phyloprep-web-run-v1",
+    created_at: new Date().toISOString(),
+    module: module.script,
+    implementation: implementationProfile(module),
+    equivalent_cli: elements.command.textContent,
+    parameters: request.options,
+    inputs: inputManifest,
+    outputs: outputManifest,
+    provenance: result.provenance || null,
+    runtime: {
+      pyodide: "0.27.2",
+      muscle: ["phyloprep.py", "MSAP_batch.py"].includes(module.script) ? "Biowasm MUSCLE 5.1.0" : null,
+      user_agent: navigator.userAgent,
+    },
+  }, null, 2) + "\n";
+}
+
+function transferTarget(module) {
+  if (["oma_to_orthogroups.py", "orthomcl_to_orthogroups.py", "proteinortho_to_orthogroups.py", "sonicparanoid_to_orthogroups.py"].includes(module.script)) {
+    return "extract_orthofinder_orthogroups.py";
+  }
+  if (module.script === "extract_orthofinder_orthogroups.py") return "phyloprep.py";
+  return null;
+}
+
+function prepareNextStep() {
+  const target = transferTarget(activeModule());
+  if (!target || !generatedFiles.length) return;
+  const inputs = new Map();
+  if (target === "extract_orthofinder_orthogroups.py") {
+    const table = generatedFiles.find((file) => /\.tsv$/i.test(file.name) && file.name !== "phyloprep-run.json");
+    if (!table) return;
+    inputs.set("orthogroups", [new File([table.content], table.name, { type: "text/tab-separated-values" })]);
+  } else if (target === "phyloprep.py") {
+    const fastas = generatedFiles.filter((file) => /\.(fa|fas|fasta)$/i.test(file.name));
+    const mapping = generatedFiles.find((file) => /(^|\/)map\.tsv$/i.test(file.name));
+    if (!fastas.length) return;
+    inputs.set("inputs", fastas.map((file) => new File([file.content], file.name.split("/").at(-1), { type: "text/plain" })));
+    if (mapping) inputs.set("mapping", [new File([mapping.content], "map.tsv", { type: "text/tab-separated-values" })]);
+  }
+  const index = modules.findIndex((module) => module.script === target);
+  if (index < 0) return;
+  pendingTransfer = { script: target, inputs };
+  selectModule(index);
+}
+
 async function runBrowserModule() {
   const module = activeModule();
   const files = browserInputFiles();
@@ -1287,12 +1451,16 @@ async function runBrowserModule() {
     stage = 3;
     setRunStage(stage, "Saving output");
     generatedFiles = [];
-    for (const output of result.files) {
+    const resultOutputs = result.files.map((output) => ({ name: output.name, content: output.content }));
+    const manifest = await buildRunManifest(module, request, result, resultOutputs);
+    resultOutputs.push({ name: "phyloprep-run.json", content: manifest });
+    for (const output of resultOutputs) {
       const generated = { name: output.name, content: output.content };
       generated.destination = await saveGeneratedFile(generated);
       generatedFiles.push(generated);
     }
     renderGeneratedFiles();
+    elements.useNextStep.hidden = !transferTarget(module);
     setRunStage(4, "Completed");
     setLog([result.summary || `Created ${generatedFiles.length} output file(s).`, result.provenance].filter(Boolean).join(" "), "success");
   } catch (error) {
@@ -1304,6 +1472,11 @@ async function runBrowserModule() {
   }
 }
 
+elements.scriptSearch.addEventListener("input", () => {
+  catalogQuery = elements.scriptSearch.value;
+  renderCatalog();
+});
+elements.useNextStep.addEventListener("click", prepareNextStep);
 elements.chooseFolder.addEventListener("click", chooseOutputFolder);
 elements.outputName.addEventListener("input", updateCommand);
 elements.run.addEventListener("click", runBrowserModule);

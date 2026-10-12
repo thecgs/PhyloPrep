@@ -69,3 +69,24 @@ second- and third-codon-position FASTA matrices. The single-locus `MSAP.py`
 entry is intentionally hidden from the web catalog because `MSAP_batch.py`
 covers the same browser-facing workflow, while `MSAP.py` remains bundled
 internally as the implementation used by the batch adapter.
+
+
+## Workspace safeguards and reproducibility
+
+The browser workspace now performs lightweight input preflight checks before a
+run, groups and searches the tool catalog, hides parameters that do not apply to
+the selected sequence type, and supports direct handoff between common
+orthology-preparation steps.
+
+Each successful run adds a `phyloprep-run.json` manifest containing the
+selected module, parameters, equivalent CLI command, runtime provenance, and
+SHA256 hashes for input and output content. Pyodide run directories are removed
+after each worker request so repeated batch runs do not accumulate virtual
+filesystem workspaces.
+
+MUSCLE is executed in a dedicated Web Worker. Cancelling a run terminates that
+worker and therefore interrupts an active WebAssembly alignment rather than
+only cancelling the surrounding Pyodide step.
+
+The Pages workflow runs syntax and browser-bundle smoke checks before building
+and deploying the static site.

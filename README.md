@@ -395,9 +395,15 @@ For species comparisons, report at least matrix length, gap/N/X ratios, PIS, and
 
 ![PhyloPrep Web workspace](docs/PhyloPrep_Web.png)
 
-[PhyloPrep Web](https://thecgs.github.io/PhyloPrep/) is a browser-based companion to PhyloPrep, not a replacement for the complete local command-line application. It currently implements 11 standalone scripts: `AA2Codon.py`, `alignment_qc.py`, `calulate_4dtv_and_correction.py`, `extract_4-fold_degenerated_sites.py`, `get_supergenes.py`, `filter_sequences.py`, `rename_taxa.py`, `trimAlnSeq.py`, `fasta2axt.py`, `fasta2nex.py`, and `fasta2phy.py`.
+[PhyloPrep Web](https://thecgs.github.io/PhyloPrep/) is a client-side browser workspace for the most commonly used PhyloPrep preparation steps. Sequence files stay in the browser for supported workflows; the site downloads Pyodide and Biowasm runtime assets but does not upload the user's sequence data to a PhyloPrep server.
 
-All other PhyloPrep workflows remain available only in the local application because they require external programs or local-system capabilities that cannot run in a browser. Use the full local installation for alignment engines and workflows that depend on tools such as MAFFT, MUSCLE, PRANK, trimAl, MACSE, Java, or OrthoFinder.
+The current browser catalog exposes 19 tools/workflows, including the complete browser-adapted `phyloprep.py` pipeline, `MSAP_batch.py`, OrthoFinder extraction and orthology-result adapters, QC/filtering, matrix construction, codon-position/four-fold utilities, and format conversion. The single-locus `MSAP.py` entry is intentionally hidden because `MSAP_batch.py` supersedes it for browser-facing use; `MSAP.py` remains bundled internally as the batch implementation. Likewise, `orthogroup_table.py` remains an internal shared dependency and is not shown as a standalone web tool.
+
+Browser alignment uses Biowasm MUSCLE 5.1.0 with one thread and processes loci sequentially. MAFFT, PRANK, ClustalW2, trimAl, MACSE and pseudogene mode remain CLI-only because they rely on external executables, Java, or process-management facilities that are not reproduced by the static GitHub Pages application.
+
+The browser interface includes tool search/category grouping, context-aware parameter display, basic input preflight checks, local output-folder support where the browser allows it, cancellable MUSCLE execution, and direct workflow handoff for common upstream chains such as Proteinortho/OMA/OrthoMCL/SonicParanoid → orthogroup extraction → PhyloPrep. Every successful browser run also writes `phyloprep-run.json`, containing the selected module, parameters, equivalent CLI command, runtime provenance, and SHA256 hashes for browser inputs and outputs.
+
+The browser implementation distinguishes original-script execution from browser-adapted orchestration. Standalone Python utilities run their repository source directly in Pyodide. Higher-level workflows use a compatibility layer to replace Linux child-process/concurrency behavior while keeping the underlying PhyloPrep sequence-processing modules unchanged.
 
 ## Testing and troubleshooting
 
