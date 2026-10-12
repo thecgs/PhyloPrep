@@ -7,6 +7,7 @@ const siteDirectory = dirname(fileURLToPath(import.meta.url));
 const sourceDirectory = dirname(siteDirectory);
 const engineDirectory = join(siteDirectory, "engine");
 const sourceFiles = [
+  "MSAP.py",
   "AA2Codon.py",
   "alignment_qc.py",
   "calulate_4dtv_and_correction.py",
