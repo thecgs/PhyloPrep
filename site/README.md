@@ -31,3 +31,23 @@ pseudogene mode.
 FASTA content remains local to the browser. Pyodide and Biowasm assets are
 downloaded from their public CDNs on first use, but sequence data are not sent
 to PhyloPrep or a PhyloPrep server.
+
+
+## Upstream browser workflows
+
+The browser catalog also exposes `MSAP_batch.py` and `phyloprep.py`.
+Because browsers do not provide the Linux process-management primitives used by
+the CLI orchestrators (process groups, `fcntl` locks, and normal child
+processes), the web edition uses a browser-safe compatibility layer rather than
+modifying those core scripts.
+
+`MSAP_batch.py` browser mode processes loci sequentially with the existing
+MSAP/Pyodide + Biowasm MUSCLE workflow, then creates batch-style path lists and
+a merged sequence-change report. `phyloprep.py` browser mode reuses those
+alignments and invokes the repository's original QC, taxon-renaming,
+supermatrix, codon-position, four-fold and FASTA/PHYLIP/NEXUS modules inside
+Pyodide.
+
+Current browser constraints are explicit in the parameter UI: MUSCLE 5.1.0,
+one MUSCLE thread, one locus at a time, and `trimAlnSeq.py` trimming.
+Pseudogene/MACSE, MAFFT, PRANK, ClustalW2 and trimAl remain CLI-only.
