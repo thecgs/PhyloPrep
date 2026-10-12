@@ -4,13 +4,16 @@ from __future__ import annotations
 
 import contextlib
 import io
+import importlib
 import json
 import os
 from pathlib import Path
 import runpy
+import shutil
 import subprocess
 import sys
 import traceback
+import types
 
 
 def _exit_code(value):
@@ -252,3 +255,159 @@ def run_msap_complete(argv, output_root, alignment_file, engine_root="/engine"):
         "stdout": stdout,
         "stderr": stderr,
     })
+
+
+
+def _browser_install_fcntl_stub():
+    """Allow importing CLI orchestrators when Pyodide lacks POSIX fcntl."""
+    try:
+        import fcntl  # noqa: F401
+        return
+    except ImportError:
+        module = types.ModuleType("fcntl")
+        module.LOCK_EX = 2
+        module.LOCK_NB = 4
+        module.LOCK_UN = 8
+        module.flock = lambda *_args, **_kwargs: None
+        sys.modules["fcntl"] = module
+
+
+def _browser_run_engine_script(engine, script, arguments, cwd=None):
+    """Run one bundled Python CLI module in the current Pyodide interpreter."""
+    path = Path(engine) / script
+    if not path.is_file():
+        raise FileNotFoundError(f"Bundled script not found: {script}")
+    old_argv, old_cwd = sys.argv, Path.cwd()
+    code = 0
+    try:
+        sys.argv = [str(path), *[str(value) for value in arguments]]
+        if cwd is not None:
+            os.chdir(cwd)
+        try:
+            runpy.run_path(str(path), run_name="__main__")
+        except SystemExit as error:
+            code = _exit_code(error.code)
+    finally:
+        sys.argv = old_argv
+        os.chdir(old_cwd)
+    if code:
+        raise subprocess.CalledProcessError(code, [sys.executable, str(path), *map(str, arguments)])
+
+
+def _visible_output_files(root):
+    return [
+        file for file in _output_files(Path(root))
+        if not any(part.startswith(".") for part in Path(file["name"]).parts)
+    ]
+
+
+def run_phyloprep_finalize(file_manifest, options, output_root, engine_root="/engine"):
+    """Finish the browser pipeline with the repository's original downstream modules."""
+    engine = Path(engine_root).resolve()
+    root = Path(output_root).resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    stdout, stderr = io.StringIO(), io.StringIO()
+    try:
+        if str(engine) not in sys.path:
+            sys.path.insert(0, str(engine))
+        _browser_install_fcntl_stub()
+        phyloprep = importlib.import_module("phyloprep")
+        sequence_audit = importlib.import_module("sequence_audit")
+        rename_taxa = importlib.import_module("rename_taxa")
+
+        sources = [Path(item["path"]) for item in file_manifest if item.get("role") == "source"]
+        batch_outputs = [item for item in file_manifest if item.get("role") == "batch-output"]
+        mapping_items = [item for item in file_manifest if item.get("role") == "mapping"]
+        if not sources:
+            raise ValueError("No source FASTA files were supplied to the PhyloPrep browser finalizer.")
+        stems = [path.stem for path in sources]
+        if len(set(stems)) != len(stems):
+            raise ValueError("Input FASTA files must have unique basenames.")
+
+        alignments = root / "alignments"
+        alignments.mkdir(parents=True, exist_ok=True)
+        change_reports = []
+        for item in batch_outputs:
+            source = Path(item["path"])
+            target = alignments / Path(item["name"]).name
+            shutil.copyfile(source, target)
+            if target.name.endswith(".sequence_changes.tsv"):
+                change_reports.append(target)
+
+        reports = root / "reports"
+        reports.mkdir(parents=True, exist_ok=True)
+        merged_changes = reports / "sequence_changes.tsv"
+        sequence_audit.merge_reports(change_reports, merged_changes)
+
+        mapping = Path(mapping_items[0]["path"]) if mapping_items else None
+        taxon_mapping = rename_taxa.read_mapping(mapping) if mapping else None
+        if mapping:
+            phyloprep.annotate_change_report(merged_changes, taxon_mapping)
+
+        def number(name, default, kind=float):
+            value = options.get(name, default)
+            return kind(value)
+
+        args = types.SimpleNamespace(
+            seqtype=str(options.get("seqtype", "codon")),
+            align_software="muscle",
+            notrim=bool(options.get("notrim", False)),
+            genetic_code=int(options.get("genetic_code", 1)),
+            G=number("gap_ratio", 0.2),
+            N=number("n_ratio", 0.2),
+            X=number("x_ratio", 0.2),
+            mapping=mapping,
+            taxon_mapping=taxon_mapping,
+            no_resume=True,
+            missing_taxa=str(options.get("missing_taxa", "skip-gene")),
+            min_length=number("min_length", 1, int),
+            max_n_ratio=number("max_n_ratio", 1.0),
+            max_x_ratio=number("max_x_ratio", 1.0),
+            max_gap_ratio=number("max_gap_ratio", 1.0),
+            min_parsimony_informative_sites=number("min_parsimony_informative_sites", 0, int),
+            allow_terminal_stop=bool(options.get("allow_terminal_stop", False)),
+            allow_internal_stop=bool(options.get("allow_internal_stop", False)),
+        )
+        ratios = [args.G, args.N, args.X, args.max_n_ratio, args.max_x_ratio, args.max_gap_ratio]
+        if any(value < 0 or value > 1 for value in ratios):
+            raise ValueError("Trimming and QC ratios must be between 0 and 1.")
+        if args.min_length < 0 or args.min_parsimony_informative_sites < 0:
+            raise ValueError("QC length/site thresholds must be non-negative.")
+
+        original_run = phyloprep.run
+
+        def browser_run(script, *arguments, cwd=None):
+            print("[phyloprep-web] " + " ".join([script, *map(str, arguments)]), flush=True)
+            return _browser_run_engine_script(engine, script, arguments, cwd=cwd)
+
+        phyloprep.run = browser_run
+        try:
+            seqtypes = ("codon", "prot") if args.seqtype == "codon" else (args.seqtype,)
+            variants = ("raw",) if args.notrim else ("raw", "trimmed")
+            with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                for seqtype in seqtypes:
+                    for variant in variants:
+                        stage = root / "matrices" / seqtype / variant
+                        stage.mkdir(parents=True, exist_ok=True)
+                        phyloprep.prepare_group(args, sources, root, stage, seqtype, variant)
+        finally:
+            phyloprep.run = original_run
+
+        files = _visible_output_files(root)
+        if not files:
+            raise ValueError("PhyloPrep produced no downloadable output files.")
+        return json.dumps({
+            "ok": True,
+            "files": files,
+            "summary": f"Created {len(files)} files with the browser PhyloPrep pipeline.",
+            "stdout": stdout.getvalue(),
+            "stderr": stderr.getvalue(),
+        })
+    except Exception:
+        traceback.print_exc(file=stderr)
+        return json.dumps({
+            "ok": False,
+            "error": stderr.getvalue().strip() or "The browser PhyloPrep pipeline failed.",
+            "stdout": stdout.getvalue(),
+            "stderr": stderr.getvalue(),
+        })

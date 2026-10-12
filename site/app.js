@@ -73,7 +73,73 @@ function geneticCodeParameter() {
   };
 }
 
+function proteinStopParameter() {
+  return {
+    flag: "--protein-stop-symbol",
+    label: "Protein stop symbol",
+    description: "Protein mode only. Trailing occurrences are removed and internal occurrences become X. Default: *.",
+    type: "text",
+    value: "*",
+    token: "protein_stop_symbol",
+  };
+}
+
 const modules = [
+  {
+    script: "phyloprep.py", title: "Complete phylogenomic preparation pipeline", category: "Pipeline", browser: true, browserWorkflow: "phyloprep", inputListKey: "inputs", cliOutputDir: "phyloprep-results",
+    summary: "Aligns multiple loci with browser MUSCLE, applies PhyloPrep QC and optional taxon renaming, builds supermatrices, and exports downstream matrices.",
+    inputs: ["One or more input FASTA files", "Optional two-column taxon mapping table"],
+    inputFields: [
+      { key: "inputs", label: "Input FASTA files", flag: "-i, --input", multiple: true },
+      { key: "mapping", label: "Taxon mapping table", flag: "-m, --mapping", accept: ".tsv,.txt,.csv", required: false },
+    ],
+    outputs: ["Per-locus alignments and audit reports", "QC reports", "Optional renamed alignments", "Raw/trimmed supermatrices", "Codon-position and four-fold matrices", "FASTA/PHYLIP/NEXUS exports"],
+    outputLabel: "Pipeline output", outputHelp: "Browser output is collected as downloadable files or written into the selected local folder.", defaultOutput: "", hideOutputName: true,
+    parameters: [
+      { flag: "-st", label: "Sequence type", description: "Browser pipeline supports codon, protein, and nucleotide modes. Pseudogene/MACSE remains CLI-only.", type: "select", value: "codon", options: [["codon", "Codon / CDS"], ["prot", "Protein"], ["nucl", "Nucleotide"]], token: "seqtype" },
+      geneticCodeParameter(),
+      { flag: "--missing-taxa", label: "Missing taxa policy", description: "Skip genes missing taxa, or pad missing taxa with gaps during concatenation.", type: "select", value: "skip-gene", options: [["skip-gene", "Skip gene"], ["pad-gaps", "Pad gaps"]], token: "missing_taxa" },
+      { flag: "-s", label: "Alignment software", description: "Browser fixed: MUSCLE 5.1.0 through Biowasm.", type: "select", value: "muscle", options: [["muscle", "MUSCLE 5.1.0 (browser fixed)"]], token: "align_software" },
+      { flag: "-t", label: "Threads per locus", description: "Browser fixed to one thread for GitHub Pages/WebAssembly compatibility.", type: "select", value: "1", options: [["1", "1 (browser fixed)"]], token: "thread" },
+      { flag: "-j", label: "Concurrent loci", description: "Browser edition processes loci sequentially to keep memory predictable.", type: "select", value: "1", options: [["1", "1 (browser sequential)"]], token: "jobs" },
+      { flag: "-ts", label: "Trimming software", description: "Browser fixed to PhyloPrep's bundled trimAlnSeq.py.", type: "select", value: "trimAlnSeq", options: [["trimAlnSeq", "trimAlnSeq.py (browser fixed)"]], token: "trim_software" },
+      { flag: "-n", label: "Skip trimming", description: "Process raw alignments only.", type: "checkbox", value: false, token: "notrim" },
+      proteinStopParameter(),
+      { flag: "-G", label: "Maximum gap proportion", description: "Maximum gap ratio per site during trimming. Range: 0–1.", type: "number", value: "0.2", step: "0.01", token: "gap_ratio" },
+      { flag: "-N", label: "Maximum N proportion", description: "Maximum N ratio per site during nucleotide/codon trimming. Range: 0–1.", type: "number", value: "0.2", step: "0.01", token: "n_ratio" },
+      { flag: "-X", label: "Maximum X proportion", description: "Maximum X ratio per site during protein trimming. Range: 0–1.", type: "number", value: "0.2", step: "0.01", token: "x_ratio" },
+      { flag: "--min-length", label: "Minimum QC length", description: "Minimum sequence/alignment length; codon mode uses complete codons.", type: "number", value: "1", token: "min_length" },
+      { flag: "--max-n-ratio", label: "Maximum QC N ratio", description: "Maximum N ratio allowed by alignment QC. Range: 0–1.", type: "number", value: "1", step: "0.01", token: "max_n_ratio" },
+      { flag: "--max-x-ratio", label: "Maximum QC X ratio", description: "Maximum X ratio allowed by protein alignment QC. Range: 0–1.", type: "number", value: "1", step: "0.01", token: "max_x_ratio" },
+      { flag: "--max-gap-ratio", label: "Maximum QC gap ratio", description: "Maximum gap ratio allowed by alignment QC. Range: 0–1.", type: "number", value: "1", step: "0.01", token: "max_gap_ratio" },
+      { flag: "--min-parsimony-informative-sites", label: "Minimum parsimony-informative sites", description: "Minimum number of parsimony-informative sites required for QC.", type: "number", value: "0", token: "min_parsimony_informative_sites" },
+      { flag: "--allow-terminal-stop", label: "Allow terminal stop codons", description: "Permit terminal stop codons in codon-mode QC.", type: "checkbox", value: false, token: "allow_terminal_stop" },
+      { flag: "--allow-internal-stop", label: "Allow internal stop codons", description: "Permit internal stop codons in codon-mode QC.", type: "checkbox", value: false, token: "allow_internal_stop" },
+    ],
+    command: "python phyloprep.py -i {inputs} -o phyloprep-results{mapping_option} -st {seqtype} -s muscle -t 1 -j 1 -g {genetic_code} -ts trimAlnSeq -G {gap_ratio} -N {n_ratio} -X {x_ratio} --missing-taxa {missing_taxa} --min-length {min_length} --max-n-ratio {max_n_ratio} --max-x-ratio {max_x_ratio} --max-gap-ratio {max_gap_ratio} --min-parsimony-informative-sites {min_parsimony_informative_sites} --protein-stop-symbol {protein_stop_symbol}{allow_terminal_stop}{allow_internal_stop}{notrim_option}",
+  },
+  {
+    script: "MSAP_batch.py", title: "Batch alignment workflow", category: "Batch", browser: true, browserWorkflow: "batch", inputListKey: "inputs", cliOutputDir: "msap-results",
+    summary: "Runs the MSAP workflow over multiple FASTA loci in the browser using Biowasm MUSCLE and aggregates path lists and sequence-change reports.",
+    inputs: ["One or more input FASTA files"],
+    inputFields: [{ key: "inputs", label: "Input FASTA files", flag: "-i, --input", multiple: true }],
+    outputs: ["Per-locus preprocessing and audit files", "MUSCLE alignments", "Optional trimmed alignments", "Batch path lists", "Merged sequence-change report"],
+    outputLabel: "Batch output", outputHelp: "Browser output is collected as downloadable files or written into the selected local folder.", defaultOutput: "", hideOutputName: true,
+    parameters: [
+      { flag: "-st", label: "Sequence type", description: "Browser batch supports codon, protein, and nucleotide modes. Pseudogene/MACSE remains CLI-only.", type: "select", value: "codon", options: [["codon", "Codon / CDS"], ["prot", "Protein"], ["nucl", "Nucleotide"]], token: "seqtype" },
+      geneticCodeParameter(),
+      { flag: "-s", label: "Alignment software", description: "Browser fixed: MUSCLE 5.1.0 through Biowasm.", type: "select", value: "muscle", options: [["muscle", "MUSCLE 5.1.0 (browser fixed)"]], token: "align_software" },
+      { flag: "-t", label: "Threads per locus", description: "Browser fixed to one thread.", type: "select", value: "1", options: [["1", "1 (browser fixed)"]], token: "thread" },
+      { flag: "-j", label: "Concurrent loci", description: "Browser edition processes loci sequentially.", type: "select", value: "1", options: [["1", "1 (browser sequential)"]], token: "jobs" },
+      { flag: "-ts", label: "Trimming software", description: "Browser fixed to PhyloPrep's bundled trimAlnSeq.py.", type: "select", value: "trimAlnSeq", options: [["trimAlnSeq", "trimAlnSeq.py (browser fixed)"]], token: "trim_software" },
+      { flag: "-n", label: "Skip trimming", description: "Keep raw alignments only.", type: "checkbox", value: false, token: "notrim" },
+      proteinStopParameter(),
+      { flag: "-G", label: "Maximum gap proportion", description: "Maximum gap ratio per site during trimming. Range: 0–1.", type: "number", value: "0.2", step: "0.01", token: "gap_ratio" },
+      { flag: "-N", label: "Maximum N proportion", description: "Maximum N ratio per site during nucleotide/codon trimming. Range: 0–1.", type: "number", value: "0.2", step: "0.01", token: "n_ratio" },
+      { flag: "-X", label: "Maximum X proportion", description: "Maximum X ratio per site during protein trimming. Range: 0–1.", type: "number", value: "0.2", step: "0.01", token: "x_ratio" },
+    ],
+    command: "python MSAP_batch.py -i {inputs} -o msap-results -st {seqtype} -s muscle -t 1 -j 1 -g {genetic_code} -ts trimAlnSeq -G {gap_ratio} -N {n_ratio} -X {x_ratio} --protein-stop-symbol {protein_stop_symbol}{notrim_option}",
+  },
   {
     script: "MSAP.py", title: "Complete alignment workflow", category: "Workflow", browser: true, fullWorkflow: true,
     summary: "Runs the untouched single-locus MSAP.py workflow locally with MUSCLE 5.1.0 supplied by Biowasm/WebAssembly.",
@@ -84,12 +150,13 @@ const modules = [
     parameters: [
       { flag: "-st", label: "Sequence type", description: "Browser workflow supports codon, protein, and nucleotide modes. Pseudogene/MACSE remains CLI-only.", type: "select", value: "codon", options: [["codon", "Codon / CDS"], ["prot", "Protein"], ["nucl", "Nucleotide"]], token: "seqtype" },
       geneticCodeParameter(),
+      proteinStopParameter(),
       { flag: "-n", label: "Skip trimming", description: "Keep the raw MUSCLE alignment(s) without running trimAlnSeq.py.", type: "checkbox", value: false, token: "notrim" },
       { flag: "-G", label: "Maximum gap proportion", description: "Maximum gap ratio per site for PhyloPrep's bundled trimming. Range: 0–1.", type: "number", value: "0.2", step: "0.01", token: "gap_ratio" },
       { flag: "-N", label: "Maximum N proportion", description: "Maximum N ratio per site for nucleotide/codon trimming. Range: 0–1.", type: "number", value: "0.2", step: "0.01", token: "n_ratio" },
       { flag: "-X", label: "Maximum X proportion", description: "Maximum X ratio per site for protein trimming. Range: 0–1.", type: "number", value: "0.2", step: "0.01", token: "x_ratio" },
     ],
-    command: "python MSAP.py -i {input} -st {seqtype} -s muscle -t 1 -g {genetic_code} -ts trimAlnSeq -G {gap_ratio} -N {n_ratio} -X {x_ratio}{notrim_option}",
+    command: "python MSAP.py -i {input} -st {seqtype} -s muscle -t 1 -g {genetic_code} -ts trimAlnSeq -G {gap_ratio} -N {n_ratio} -X {x_ratio} --protein-stop-symbol {protein_stop_symbol}{notrim_option}",
   },
   {
     script: "AA2Codon.py", title: "Protein-alignment back-translation", category: "Back-translation", browser: true,
@@ -233,6 +300,20 @@ let muscleRunCounter = 0;
 function activeModule() { return modules[activeModuleIndex]; }
 
 function implementationProfile(module) {
+  if (module.browserWorkflow === "phyloprep") {
+    return {
+      key: "compatible",
+      label: "Browser PhyloPrep pipeline",
+      note: "The browser orchestrates the repository's original preparation modules locally: MSAP preprocessing/back-translation/trimming in Pyodide, MUSCLE 5.1.0 in Biowasm, then the original QC, renaming, concatenation, codon splitting, four-fold extraction and format-conversion code. Linux process-management features are replaced by a browser-safe sequential adapter.",
+    };
+  }
+  if (module.browserWorkflow === "batch") {
+    return {
+      key: "compatible",
+      label: "Browser batch adapter",
+      note: "Processes loci sequentially in the browser with the same MSAP sequence workflow and Biowasm MUSCLE 5.1.0, then generates batch-style path lists and a merged sequence-change report. Linux process groups, file locks and concurrent jobs are intentionally not used in the browser.",
+    };
+  }
   if (module.fullWorkflow) {
     return {
       key: "compatible",
@@ -447,6 +528,7 @@ function renderInputFileFields(module) {
     const flag = document.createElement("span");
     flag.className = "required-label";
     flag.textContent = field.flag;
+    if (field.required === false) flag.textContent += " · optional";
     heading.append(label, flag);
     const picker = document.createElement("label");
     picker.className = "folder-picker input-file-picker";
@@ -456,6 +538,7 @@ function renderInputFileFields(module) {
     control.id = id;
     control.dataset.inputKey = field.key;
     control.dataset.inputLabel = field.label;
+    control.dataset.inputRequired = String(field.required !== false);
     control.type = "file";
     control.multiple = Boolean(field.multiple);
     const acceptedFiles = field.accept || ".fa,.fas,.fasta,.aln,.phy,.phylip,.nex,.nexus,.txt";
@@ -472,12 +555,18 @@ function renderInputFileFields(module) {
 
 function cliQuote(value) {
   const text = String(value);
-  return /[\s"']/u.test(text) ? `"${text.replaceAll("\\", "\\\\").replaceAll("\"", "\\\"")}"` : text;
+  return /^[A-Za-z0-9_./:=+,-]+$/u.test(text) ? text : JSON.stringify(text);
 }
 
 function valuesForCommand() {
   const module = activeModule();
-  const inputNames = selectedInputNames();
+  const allInputNames = selectedInputNames();
+  const listControl = module.inputListKey
+    ? inputControls().find((control) => control.dataset.inputKey === module.inputListKey)
+    : undefined;
+  const commandInputNames = listControl
+    ? filesForInput(listControl).map((file) => file.name)
+    : allInputNames;
   const parameterValues = {};
   module.parameters.forEach((parameter) => {
     const control = elements.parameterList.querySelector(`[data-parameter="${parameterToken(parameter)}"]`);
@@ -489,9 +578,10 @@ function valuesForCommand() {
   });
   const rawOutput = elements.outputName.value.trim() || module.defaultOutput;
   const outputPath = outputDirectoryHandle ? `${outputDirectoryHandle.name}/${rawOutput}` : rawOutput;
-  const usePathList = module.inputFields.some((field) => field.pathList) && inputNames.length > 1;
-  const inputPaths = inputNames.map((name) => cliQuote(virtualInputPath(name)));
-  const mappingName = inputNames.find((name, index) => index > 0 && /\.(tsv|txt|csv)$/i.test(name)) || inputNames[1] || "taxa-map.tsv";
+  const usePathList = module.inputFields.some((field) => field.pathList) && commandInputNames.length > 1;
+  const inputPaths = commandInputNames.map((name) => cliQuote(virtualInputPath(name)));
+  const mappingFile = selectedInputFiles.get("mapping")?.[0];
+  const mappingName = mappingFile?.name || "taxa-map.tsv";
   const mapStem = rawOutput.replace(/\.[^.]+$/, "") || "renamed";
   const mapOutputPath = outputDirectoryHandle ? `${outputDirectoryHandle.name}/${mapStem}.map.tsv` : `${mapStem}.map.tsv`;
   return {
@@ -501,15 +591,17 @@ function valuesForCommand() {
     cds: inputPaths[0] || "/work/input/cds.fasta",
     protaln: inputPaths[1] || "/work/input/protein.aln.fasta",
     output: cliQuote(outputPath),
+    output_dir: module.cliOutputDir || "results",
     prefix: cliQuote(outputPath),
     seqtype: parameterValues.seqtype || "nucl",
     genetic_code: parameterValues.genetic_code || "1",
+    protein_stop_symbol: cliQuote(parameterValues.protein_stop_symbol || "*"),
     allow_terminal_stop: parameterValues.allow_terminal_stop ? " --allow-terminal-stop" : "",
     allow_internal_stop: parameterValues.allow_internal_stop ? " --allow-internal-stop" : "",
     removeall: parameterValues.removeall ? " -ra" : "",
     keep_taxa_option: parameterValues.keep_taxa?.length ? " --keep-taxa /work/path-lists/filter_sequences.keep-taxa.txt" : "",
     remove_taxa_option: parameterValues.remove_taxa?.length ? " --remove-taxa /work/path-lists/filter_sequences.remove-taxa.txt" : "",
-    mapping_option: inputNames.length > 1 ? ` -m ${cliQuote(virtualInputPath(mappingName))}` : "",
+    mapping_option: mappingFile ? ` -m ${cliQuote(virtualInputPath(mappingName))}` : "",
     map_output_option: parameterValues.map_output ? ` --map-output ${cliQuote(mapOutputPath)}` : "",
     allow_duplicate_ids_option: parameterValues.allow_duplicate_ids ? " --allow-duplicate-ids" : "",
     keep_special_option: parameterValues.keep_special ? " --keep-special" : "",
@@ -759,7 +851,12 @@ function cancelActiveRun() {
 
 async function saveGeneratedFile(file) {
   if (outputDirectoryHandle) {
-    const fileHandle = await outputDirectoryHandle.getFileHandle(file.name, { create: true });
+    const parts = file.name.replaceAll("\\", "/").split("/").filter(Boolean);
+    let directory = outputDirectoryHandle;
+    for (const part of parts.slice(0, -1)) {
+      directory = await directory.getDirectoryHandle(part, { create: true });
+    }
+    const fileHandle = await directory.getFileHandle(parts.at(-1) || "output.txt", { create: true });
     const writable = await fileHandle.createWritable();
     await writable.write(file.content);
     await writable.close();
@@ -987,10 +1084,100 @@ async function runMsapBrowserWorkflow(request) {
   return runInWorker({ type: "msap-complete", ...request, alignmentContent });
 }
 
+
+function fileStem(name) {
+  const leaf = String(name).replaceAll("\\", "/").split("/").at(-1) || "";
+  const dot = leaf.lastIndexOf(".");
+  return dot > 0 ? leaf.slice(0, dot) : leaf;
+}
+
+function requireUniqueStems(files) {
+  const stems = files.map((file) => fileStem(file.name));
+  const duplicate = stems.find((stem, index) => stems.indexOf(stem) !== index);
+  if (duplicate) throw new Error(`Input FASTA basenames must be unique; duplicate stem: ${duplicate}`);
+}
+
+function mergeTsvContents(files) {
+  let header;
+  const rows = [];
+  files.forEach((file) => {
+    const lines = String(file.content || "").trim().split(/\r?\n/).filter(Boolean);
+    if (!lines.length) return;
+    if (!header) header = lines[0];
+    rows.push(...lines.slice(1));
+  });
+  return header ? `${header}\n${rows.join("\n")}${rows.length ? "\n" : ""}` : "";
+}
+
+function batchPathLists(files) {
+  const suffixes = ["nucl.aln", "prot.aln", "codon.aln", "nucl.trimal.aln", "prot.trimal.aln", "codon.trimal.aln"];
+  const outputs = [];
+  suffixes.forEach((suffix) => {
+    const names = files.filter((file) => file.name.endsWith(`.${suffix}`)).map((file) => file.name).sort();
+    if (names.length) outputs.push({ name: `path-lists/all.${suffix}.pathlist`, content: `${names.join("\n")}\n` });
+  });
+  return outputs;
+}
+
+async function runMsapBatchBrowserWorkflow(request) {
+  const inputs = request.files.filter((file) => file.inputKey === "inputs" && String(file.content || "").trimStart().startsWith(">"));
+  if (!inputs.length) throw new Error("Select at least one FASTA input.");
+  requireUniqueStems(inputs);
+  const outputs = [];
+  for (let index = 0; index < inputs.length; index += 1) {
+    const input = inputs[index];
+    setRunStage(2, `Aligning locus ${index + 1}/${inputs.length}: ${input.name}`);
+    elements.runtimeStatus.textContent = `MUSCLE locus ${index + 1}/${inputs.length}`;
+    const result = await runMsapBrowserWorkflow({
+      ...request,
+      script: "MSAP.py",
+      files: [input],
+      outputName: "",
+      usesPathList: false,
+    });
+    outputs.push(...result.files.map((file) => ({ name: file.name, content: file.content })));
+  }
+  outputs.push(...batchPathLists(outputs));
+  const changeReports = outputs.filter((file) => file.name.endsWith(".sequence_changes.tsv") && !file.name.includes("/"));
+  const mergedReport = mergeTsvContents(changeReports);
+  if (mergedReport) outputs.push({ name: "reports/sequence_changes.tsv", content: mergedReport });
+  return {
+    files: outputs,
+    summary: `Processed ${inputs.length} loci with the browser MSAP batch workflow.`,
+    provenance: "Browser MSAP_batch adapter · untouched MSAP.py + Biowasm MUSCLE 5.1.0",
+  };
+}
+
+async function runPhyloPrepBrowserWorkflow(request) {
+  const sources = request.files.filter((file) => file.inputKey === "inputs" && String(file.content || "").trimStart().startsWith(">"));
+  if (!sources.length) throw new Error("Select at least one FASTA input.");
+  requireUniqueStems(sources);
+  const mapping = request.files.find((file) => file.inputKey === "mapping");
+  const batch = await runMsapBatchBrowserWorkflow({ ...request, files: sources });
+  const batchProducts = batch.files
+    .filter((file) => !file.name.includes("/") && (file.name.endsWith(".aln") || file.name.endsWith(".sequence_changes.tsv")))
+    .map((file) => ({ ...file, role: "batch-output" }));
+  const finalFiles = [
+    ...sources.map((file) => ({ ...file, role: "source" })),
+    ...(mapping ? [{ ...mapping, role: "mapping" }] : []),
+    ...batchProducts,
+  ];
+  setRunStage(2, "Running PhyloPrep QC and matrix construction");
+  elements.runtimeStatus.textContent = "PhyloPrep matrix construction";
+  return runInWorker({
+    type: "phyloprep-finalize",
+    script: "phyloprep.py",
+    files: finalFiles,
+    options: request.options,
+    outputName: "",
+    usesPathList: false,
+  });
+}
+
 async function runBrowserModule() {
   const module = activeModule();
   const files = browserInputFiles();
-  const missingInput = inputControls().find((control) => !filesForInput(control).length);
+  const missingInput = inputControls().find((control) => control.dataset.inputRequired !== "false" && !filesForInput(control).length);
   if (missingInput) {
     setLog(`Select ${missingInput.dataset.inputLabel} before running.`, "error");
     setRunStage(1, "Input required", true);
@@ -1003,7 +1190,13 @@ async function runBrowserModule() {
   setRunStage(1, "Reading input files");
   setLog("Preparing input for the local worker…");
   try {
-    const filePayload = await Promise.all(files.map(async (file) => ({ name: file.name, content: await file.text() })));
+    const filePayload = await Promise.all(inputControls().flatMap((control) =>
+      filesForInput(control).map(async (file) => ({
+        name: file.name,
+        content: await file.text(),
+        inputKey: control.dataset.inputKey,
+      }))
+    ));
     const optionValues = valuesForCommand();
     setRunStage(stage, "Loading local workflow");
     elements.cancelRun.hidden = false;
@@ -1014,9 +1207,13 @@ async function runBrowserModule() {
       outputName: elements.outputName.value.trim() || module.defaultOutput,
       usesPathList: module.inputFields.some((field) => field.pathList),
     };
-    const result = module.fullWorkflow
-      ? await runMsapBrowserWorkflow(request)
-      : await runInWorker(request);
+    const result = module.browserWorkflow === "phyloprep"
+      ? await runPhyloPrepBrowserWorkflow(request)
+      : module.browserWorkflow === "batch"
+        ? await runMsapBatchBrowserWorkflow(request)
+        : module.fullWorkflow
+          ? await runMsapBrowserWorkflow(request)
+          : await runInWorker(request);
     stage = 3;
     setRunStage(stage, "Saving output");
     generatedFiles = [];

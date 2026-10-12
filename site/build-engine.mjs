@@ -8,6 +8,8 @@ const sourceDirectory = dirname(siteDirectory);
 const engineDirectory = join(siteDirectory, "engine");
 const sourceFiles = [
   "MSAP.py",
+  "MSAP_batch.py",
+  "phyloprep.py",
   "AA2Codon.py",
   "alignment_qc.py",
   "calulate_4dtv_and_correction.py",
@@ -21,6 +23,7 @@ const sourceFiles = [
   "fasta2phy.py",
   "msap_io.py",
   "sequence_audit.py",
+  "split_codon_seqence_alignment.py",
 ];
 
 await mkdir(engineDirectory, { recursive: true });

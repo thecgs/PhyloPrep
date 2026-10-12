@@ -165,13 +165,14 @@ function msapArguments(request, stage) {
     "-G", option(values.gap_ratio, "0.2"),
     "-N", option(values.n_ratio, "0.2"),
     "-X", option(values.x_ratio, "0.2"),
+    ...(values.seqtype === "prot" ? ["--protein-stop-symbol", option(values.protein_stop_symbol, "*")] : []),
     ...(values.notrim ? ["-n"] : []),
   ];
 }
 
 self.addEventListener("message", async (event) => {
   const request = event.data;
-  if (!["run", "msap-probe", "msap-complete"].includes(request.type)) return;
+  if (!["run", "msap-probe", "msap-complete", "phyloprep-finalize"].includes(request.type)) return;
   const { runId } = request;
   try {
     const runtime = await ensureRuntime(runId);
@@ -201,6 +202,23 @@ self.addEventListener("message", async (event) => {
         result: {
           ...result,
           provenance: `Untouched MSAP.py + Biowasm MUSCLE 5.1.0 · source bundle ${engineManifest.bundleSha256.slice(0, 12)}`,
+        },
+      });
+      return;
+    }
+
+    if (request.type === "phyloprep-finalize") {
+      self.postMessage({ type: "stage", runId, stage: "process", label: "Running PhyloPrep QC and matrix construction" });
+      const manifest = stage.files.map(({ name, path, role, inputKey, fasta }) => ({ name, path, role, inputKey, fasta }));
+      const raw = await runtime.runPythonAsync(`run_phyloprep_finalize(${JSON.stringify(manifest)}, ${JSON.stringify(request.options)}, ${JSON.stringify(stage.outputRoot)})`);
+      const result = JSON.parse(raw);
+      if (!result.ok) throw new Error(result.error || "The browser PhyloPrep pipeline could not complete.");
+      self.postMessage({
+        type: "result",
+        runId,
+        result: {
+          ...result,
+          provenance: `Browser phyloprep.py adapter · original downstream modules · source bundle ${engineManifest.bundleSha256.slice(0, 12)}`,
         },
       });
       return;
