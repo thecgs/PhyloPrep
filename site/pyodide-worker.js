@@ -111,6 +111,44 @@ function inputFile(stage, index = 0) {
   return file.path;
 }
 
+function fileByKey(stage, key, index = 0) {
+  const matches = stage.files.filter((file) => file.inputKey === key);
+  const file = matches[index];
+  if (!file) throw new Error(`Missing staged input: ${key}`);
+  return file;
+}
+
+function orthofinderArguments(runtime, request, stage) {
+  const values = request.options;
+  const orthogroups = fileByKey(stage, "orthogroups").path;
+  const sequences = stage.files.filter((file) => file.inputKey === "sequences" && file.fasta);
+  if (!sequences.length) throw new Error("No per-taxon FASTA files were staged.");
+  const sequenceDir = `${stage.optionsRoot}/orthofinder-sequences`;
+  runtime.FS.mkdirTree(sequenceDir);
+  sequences.forEach((file) => {
+    runtime.FS.writeFile(`${sequenceDir}/${file.name}`, file.content);
+  });
+  const outdir = outputPath(stage, request.outputName, "one-to-one_orthologs");
+  const args = [
+    "-og", orthogroups,
+    "-i", sequenceDir,
+    "-o", outdir,
+    "-m", option(values.copy_mode, "single-copy"),
+    "--orthofinder-id-style", option(values.orthofinder_id_style, "auto"),
+  ];
+  const keep = String(values.keep_taxa_text || "").split(/[\s,]+/).filter(Boolean);
+  const drop = String(values.drop_taxa_text || "").split(/[\s,]+/).filter(Boolean);
+  if (keep.length) args.push("-k", ...keep);
+  if (drop.length) args.push("-d", ...drop);
+  if (values.min_taxa) args.push("--min-taxa", String(values.min_taxa));
+  if (values.no_species_prefix) args.push("-X");
+  const mapName = safeRelativePath(values.map_output_name || "map.tsv", "map.tsv").split("/").at(-1);
+  const pathlistName = safeRelativePath(values.pathlist_output_name || "orthogroups.pathlist", "orthogroups.pathlist").split("/").at(-1);
+  args.push("-mo", `${outdir}/${mapName}`);
+  args.push("--pathlist-output", `${outdir}/${pathlistName}`);
+  return args;
+}
+
 function listInputs(stage) {
   if (!stage.fastaFiles.length) throw new Error("No FASTA input file was staged.");
   return stage.pathList ? [stage.pathList] : stage.fastaFiles.map((file) => file.path);
@@ -143,6 +181,15 @@ function originalArguments(request, stage) {
     }
     case "trimAlnSeq.py":
       return ["-i", inputFile(stage), "-o", output, "-st", option(values.seqtype, "codon"), "-G", option(values.gap_ratio, "0.2"), "-N", option(values.n_ratio, "0.2"), "-X", option(values.x_ratio, "0.2"), ...(values.removeall ? ["-ra"] : [])];
+    case "oma_to_orthogroups.py":
+      return ["-i", fileByKey(stage, "input").path, "-o", output, "--taxon-separator", option(values.taxon_separator, "|"), ...(values.strip_taxon_prefix ? ["--strip-taxon-prefix"] : [])];
+    case "orthomcl_to_orthogroups.py":
+      return ["-i", fileByKey(stage, "input").path, "-o", output, "--taxon-separator", option(values.taxon_separator, "|"), ...(values.strip_taxon_prefix ? ["--strip-taxon-prefix"] : [])];
+    case "proteinortho_to_orthogroups.py":
+    case "sonicparanoid_to_orthogroups.py":
+      return ["-i", fileByKey(stage, "input").path, "-o", output];
+    case "split_codon_seqence_alignment.py":
+      return ["-i", fileByKey(stage, "input").path];
     case "fasta2axt.py":
     case "fasta2nex.py":
     case "fasta2phy.py":
@@ -172,7 +219,7 @@ function msapArguments(request, stage) {
 
 self.addEventListener("message", async (event) => {
   const request = event.data;
-  if (!["run", "msap-probe", "msap-complete", "phyloprep-finalize"].includes(request.type)) return;
+  if (!["run", "msap-probe", "msap-complete", "phyloprep-finalize", "orthofinder-extract"].includes(request.type)) return;
   const { runId } = request;
   try {
     const runtime = await ensureRuntime(runId);
@@ -219,6 +266,23 @@ self.addEventListener("message", async (event) => {
         result: {
           ...result,
           provenance: `Browser phyloprep.py adapter · original downstream modules · source bundle ${engineManifest.bundleSha256.slice(0, 12)}`,
+        },
+      });
+      return;
+    }
+
+    if (request.type === "orthofinder-extract") {
+      self.postMessage({ type: "stage", runId, stage: "process", label: "Extracting OrthoFinder orthogroups" });
+      const args = orthofinderArguments(runtime, request, stage);
+      const raw = await runtime.runPythonAsync(`run_original_module("extract_orthofinder_orthogroups.py", ${JSON.stringify(args)}, ${JSON.stringify(stage.outputRoot)})`);
+      const result = JSON.parse(raw);
+      if (!result.ok) throw new Error(result.error || "OrthoFinder orthogroup extraction failed.");
+      self.postMessage({
+        type: "result",
+        runId,
+        result: {
+          ...result,
+          provenance: `Original extract_orthofinder_orthogroups.py · source bundle ${engineManifest.bundleSha256.slice(0, 12)}`,
         },
       });
       return;

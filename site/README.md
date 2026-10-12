@@ -51,3 +51,21 @@ Pyodide.
 Current browser constraints are explicit in the parameter UI: MUSCLE 5.1.0,
 one MUSCLE thread, one locus at a time, and `trimAlnSeq.py` trimming.
 Pseudogene/MACSE, MAFFT, PRANK, ClustalW2 and trimAl remain CLI-only.
+
+
+## Orthology tools in the browser
+
+The web catalog includes the OrthoFinder orthogroup extractor plus adapters for
+OMA, OrthoMCL, Proteinortho and SonicParanoid. The OrthoFinder extractor accepts
+multiple per-taxon FASTA files in the browser and reconstructs the CLI's
+sequence-directory layout internally before running the original
+`extract_orthofinder_orthogroups.py`.
+
+`orthogroup_table.py` remains bundled only as an internal shared library for
+the orthology adapters and is not shown as a standalone web tool.
+
+The browser also exposes `split_codon_seqence_alignment.py` to write first-,
+second- and third-codon-position FASTA matrices. The single-locus `MSAP.py`
+entry is intentionally hidden from the web catalog because `MSAP_batch.py`
+covers the same browser-facing workflow, while `MSAP.py` remains bundled
+internally as the implementation used by the batch adapter.
