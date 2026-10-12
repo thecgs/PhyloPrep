@@ -141,22 +141,82 @@ const modules = [
     command: "python MSAP_batch.py -i {inputs} -o msap-results -st {seqtype} -s muscle -t 1 -j 1 -g {genetic_code} -ts trimAlnSeq -G {gap_ratio} -N {n_ratio} -X {x_ratio} --protein-stop-symbol {protein_stop_symbol}{notrim_option}",
   },
   {
-    script: "MSAP.py", title: "Complete alignment workflow", category: "Workflow", browser: true, fullWorkflow: true,
-    summary: "Runs the untouched single-locus MSAP.py workflow locally with MUSCLE 5.1.0 supplied by Biowasm/WebAssembly.",
-    inputs: ["Input FASTA (-i, --input)"],
-    inputFields: [{ key: "input", label: "Input FASTA", flag: "-i, --input" }],
-    outputs: ["Preprocessed FASTA and audit report", "MUSCLE alignment", "Codon back-translation for CDS input", "Optional PhyloPrep trimming outputs"],
-    outputLabel: "Output naming", outputHelp: "MSAP.py derives output names from the input FASTA stem.", defaultOutput: "", hideOutputName: true,
-    parameters: [
-      { flag: "-st", label: "Sequence type", description: "Browser workflow supports codon, protein, and nucleotide modes. Pseudogene/MACSE remains CLI-only.", type: "select", value: "codon", options: [["codon", "Codon / CDS"], ["prot", "Protein"], ["nucl", "Nucleotide"]], token: "seqtype" },
-      geneticCodeParameter(),
-      proteinStopParameter(),
-      { flag: "-n", label: "Skip trimming", description: "Keep the raw MUSCLE alignment(s) without running trimAlnSeq.py.", type: "checkbox", value: false, token: "notrim" },
-      { flag: "-G", label: "Maximum gap proportion", description: "Maximum gap ratio per site for PhyloPrep's bundled trimming. Range: 0–1.", type: "number", value: "0.2", step: "0.01", token: "gap_ratio" },
-      { flag: "-N", label: "Maximum N proportion", description: "Maximum N ratio per site for nucleotide/codon trimming. Range: 0–1.", type: "number", value: "0.2", step: "0.01", token: "n_ratio" },
-      { flag: "-X", label: "Maximum X proportion", description: "Maximum X ratio per site for protein trimming. Range: 0–1.", type: "number", value: "0.2", step: "0.01", token: "x_ratio" },
+    script: "extract_orthofinder_orthogroups.py", title: "Extract OrthoFinder orthogroups", category: "Orthology", browser: true, browserWorkflow: "orthofinder-extract",
+    summary: "Extracts selected single-copy or multi-copy orthogroups from Orthogroups.tsv using one FASTA file per taxon.",
+    inputs: ["OrthoFinder Orthogroups.tsv", "Sequence FASTA files, one per taxon"],
+    inputFields: [
+      { key: "orthogroups", label: "Orthogroups.tsv", flag: "-og, --orthogroups", accept: ".tsv,.txt" },
+      { key: "sequences", label: "Per-taxon FASTA files", flag: "-i, -f, --sequence-dir", multiple: true, accept: ".fa,.faa,.fasta,.fas,.pep" },
     ],
-    command: "python MSAP.py -i {input} -st {seqtype} -s muscle -t 1 -g {genetic_code} -ts trimAlnSeq -G {gap_ratio} -N {n_ratio} -X {x_ratio} --protein-stop-symbol {protein_stop_symbol}{notrim_option}",
+    outputs: ["One FASTA per retained orthogroup", "map.tsv", "orthogroups.pathlist"],
+    outputLabel: "Output directory name", outputHelp: "Equivalent to -o/--outdir. Browser-selected FASTA files are staged as a temporary sequence directory.", defaultOutput: "one-to-one_orthologs",
+    parameters: [
+      { flag: "-m, --copy-mode", label: "Copy mode", description: "single-copy requires exactly one gene in each counted taxon; all-copies retains every listed copy.", type: "select", value: "single-copy", options: [["single-copy", "Single-copy"], ["all-copies", "All copies"]], token: "copy_mode" },
+      { flag: "--min-taxa", label: "Minimum occupied taxa", description: "Leave blank to require all selected taxa.", type: "number", value: "", token: "min_taxa" },
+      { flag: "-k, --keep-taxa", label: "Keep taxa", description: "Optional taxon names separated by commas or whitespace.", type: "text", value: "", token: "keep_taxa_text" },
+      { flag: "-d, --drop-taxa", label: "Drop taxa", description: "Optional taxon names separated by commas or whitespace.", type: "text", value: "", token: "drop_taxa_text" },
+      { flag: "-X", label: "Write unprefixed gene IDs", description: "Match OrthoFinder -X-style exported IDs.", type: "checkbox", value: false, token: "no_species_prefix" },
+      { flag: "--orthofinder-id-style", label: "Orthogroup ID style", description: "Auto-detect normal taxon-prefixed or OrthoFinder -X unprefixed table IDs.", type: "select", value: "auto", options: [["auto", "Auto-detect"], ["prefixed", "Prefixed"], ["unprefixed", "Unprefixed"]], token: "orthofinder_id_style" },
+      { flag: "-mo, --map-output", label: "Map file name", description: "Written inside the selected output directory.", type: "text", value: "map.tsv", token: "map_output_name" },
+      { flag: "--pathlist-output", label: "Pathlist file name", description: "Written inside the selected output directory.", type: "text", value: "orthogroups.pathlist", token: "pathlist_output_name" },
+    ],
+    command: "python extract_orthofinder_orthogroups.py -og {orthogroups} -i SEQUENCE_DIR -o {output}{orthofinder_keep_taxa_option}{orthofinder_drop_taxa_option} -m {copy_mode}{min_taxa_option}{no_species_prefix_option} --orthofinder-id-style {orthofinder_id_style} -mo {map_output_name} --pathlist-output {pathlist_output_name}",
+  },
+  {
+    script: "oma_to_orthogroups.py", title: "Convert OMA orthogroups", category: "Orthology", browser: true,
+    summary: "Converts OMA Standalone OrthologousGroups.txt into the PhyloPrep orthogroup-by-taxon TSV standard.",
+    inputs: ["OMA OrthologousGroups.txt"],
+    inputFields: [{ key: "input", label: "OMA OrthologousGroups.txt", flag: "-i, --input", accept: ".txt,.tsv" }],
+    outputs: ["Standard Orthogroup TSV"],
+    outputLabel: "Output TSV", outputHelp: "Standard orthogroup-by-taxon table.", defaultOutput: "oma.orthogroups.tsv",
+    parameters: [
+      { flag: "--taxon-separator", label: "Taxon separator", description: "Genome/gene separator used by OMA members.", type: "text", value: "|", token: "taxon_separator" },
+      { flag: "--strip-taxon-prefix", label: "Strip taxon prefix", description: "Write gene IDs without the leading genome and separator.", type: "checkbox", value: false, token: "strip_taxon_prefix" },
+    ],
+    command: "python oma_to_orthogroups.py -i {input} -o {output} --taxon-separator {taxon_separator}{strip_taxon_prefix_option}",
+  },
+  {
+    script: "orthomcl_to_orthogroups.py", title: "Convert OrthoMCL orthogroups", category: "Orthology", browser: true,
+    summary: "Converts OrthoMCL groups.txt into the PhyloPrep orthogroup-by-taxon TSV standard.",
+    inputs: ["OrthoMCL groups.txt"],
+    inputFields: [{ key: "input", label: "OrthoMCL groups.txt", flag: "-i, --input", accept: ".txt,.tsv" }],
+    outputs: ["Standard Orthogroup TSV"],
+    outputLabel: "Output TSV", outputHelp: "Standard orthogroup-by-taxon table.", defaultOutput: "orthomcl.orthogroups.tsv",
+    parameters: [
+      { flag: "--taxon-separator", label: "Taxon separator", description: "Taxon/gene separator used by OrthoMCL members.", type: "text", value: "|", token: "taxon_separator" },
+      { flag: "--strip-taxon-prefix", label: "Strip taxon prefix", description: "Write gene IDs without the leading taxon and separator.", type: "checkbox", value: false, token: "strip_taxon_prefix" },
+    ],
+    command: "python orthomcl_to_orthogroups.py -i {input} -o {output} --taxon-separator {taxon_separator}{strip_taxon_prefix_option}",
+  },
+  {
+    script: "proteinortho_to_orthogroups.py", title: "Convert Proteinortho groups", category: "Orthology", browser: true,
+    summary: "Converts Proteinortho .proteinortho/.poff output into the PhyloPrep orthogroup-by-taxon TSV standard.",
+    inputs: ["Proteinortho result table"],
+    inputFields: [{ key: "input", label: "Proteinortho table", flag: "-i, --input", accept: ".proteinortho,.poff,.tsv,.txt" }],
+    outputs: ["Standard Orthogroup TSV"],
+    outputLabel: "Output TSV", outputHelp: "Standard orthogroup-by-taxon table.", defaultOutput: "proteinortho.orthogroups.tsv",
+    parameters: [],
+    command: "python proteinortho_to_orthogroups.py -i {input} -o {output}",
+  },
+  {
+    script: "sonicparanoid_to_orthogroups.py", title: "Convert SonicParanoid groups", category: "Orthology", browser: true,
+    summary: "Converts SonicParanoid flat.ortholog_groups.tsv into the PhyloPrep orthogroup-by-taxon TSV standard.",
+    inputs: ["SonicParanoid flat.ortholog_groups.tsv"],
+    inputFields: [{ key: "input", label: "SonicParanoid group table", flag: "-i, --input", accept: ".tsv,.txt" }],
+    outputs: ["Standard Orthogroup TSV"],
+    outputLabel: "Output TSV", outputHelp: "Standard orthogroup-by-taxon table.", defaultOutput: "sonicparanoid.orthogroups.tsv",
+    parameters: [],
+    command: "python sonicparanoid_to_orthogroups.py -i {input} -o {output}",
+  },
+  {
+    script: "split_codon_seqence_alignment.py", title: "Split codon positions", category: "Alignment", browser: true,
+    summary: "Splits a codon alignment into first-, second-, and third-position FASTA matrices.",
+    inputs: ["Codon alignment FASTA"],
+    inputFields: [{ key: "input", label: "Codon alignment FASTA", flag: "-i, --input", accept: ".fa,.fas,.fasta,.aln" }],
+    outputs: ["codon1st.*.fasta", "codon2nd.*.fasta", "codon3rd.*.fasta"],
+    outputLabel: "Output naming", outputHelp: "The original script derives all three output names from the input filename.", defaultOutput: "", hideOutputName: true,
+    parameters: [],
+    command: "python split_codon_seqence_alignment.py -i {input}",
   },
   {
     script: "AA2Codon.py", title: "Protein-alignment back-translation", category: "Back-translation", browser: true,
@@ -588,6 +648,7 @@ function valuesForCommand() {
     ...parameterValues,
     input: inputPaths[0] || "/work/input/input.fasta",
     inputs: usePathList ? pathListPath(module) : (inputPaths.length ? inputPaths.join(" ") : "/work/input/input.fasta"),
+    orthogroups: selectedInputFiles.get("orthogroups")?.[0] ? cliQuote(virtualInputPath(selectedInputFiles.get("orthogroups")[0].name)) : "/work/input/Orthogroups.tsv",
     cds: inputPaths[0] || "/work/input/cds.fasta",
     protaln: inputPaths[1] || "/work/input/protein.aln.fasta",
     output: cliQuote(outputPath),
@@ -606,6 +667,15 @@ function valuesForCommand() {
     allow_duplicate_ids_option: parameterValues.allow_duplicate_ids ? " --allow-duplicate-ids" : "",
     keep_special_option: parameterValues.keep_special ? " --keep-special" : "",
     notrim_option: parameterValues.notrim ? " -n" : "",
+    strip_taxon_prefix_option: parameterValues.strip_taxon_prefix ? " --strip-taxon-prefix" : "",
+    no_species_prefix_option: parameterValues.no_species_prefix ? " -X" : "",
+    min_taxa_option: parameterValues.min_taxa ? ` --min-taxa ${parameterValues.min_taxa}` : "",
+    orthofinder_keep_taxa_option: parameterValues.keep_taxa_text
+      ? ` -k ${parameterValues.keep_taxa_text.split(/[\s,]+/).filter(Boolean).map(cliQuote).join(" ")}`
+      : "",
+    orthofinder_drop_taxa_option: parameterValues.drop_taxa_text
+      ? ` -d ${parameterValues.drop_taxa_text.split(/[\s,]+/).filter(Boolean).map(cliQuote).join(" ")}`
+      : "",
   };
 }
 
@@ -1211,8 +1281,8 @@ async function runBrowserModule() {
       ? await runPhyloPrepBrowserWorkflow(request)
       : module.browserWorkflow === "batch"
         ? await runMsapBatchBrowserWorkflow(request)
-        : module.fullWorkflow
-          ? await runMsapBrowserWorkflow(request)
+        : module.browserWorkflow === "orthofinder-extract"
+          ? await runInWorker({ type: "orthofinder-extract", ...request })
           : await runInWorker(request);
     stage = 3;
     setRunStage(stage, "Saving output");
