@@ -43,11 +43,13 @@ def read_alignment(file):
     return sequences, None
 
 
-def get_supergenes(infiles, prefix, missing_taxa="skip-gene", input_lists=()):
+def get_supergenes(infiles, prefix, missing_taxa="skip-gene", input_lists=(), write_phylip=True):
     """Create a supermatrix while handling taxa missing from individual genes."""
     infiles = list(infiles)
     destinations = [prefix + suffix for suffix in
-                    (".report.tsv", "_partition_finder.cfg", "_part_iqtree.txt", ".fasta", ".phy")]
+                    (".report.tsv", "_partition_finder.cfg", "_part_iqtree.txt", ".fasta")]
+    if write_phylip:
+        destinations.append(prefix + ".phy")
     for i, destination in enumerate(destinations):
         check_output_path(destination, infiles + list(input_lists) + destinations[:i])
     alignments = []
@@ -174,10 +176,11 @@ search = greedy;
         for species in taxa_order:
             print(f'>{species}\n{supermatrix[species]}', file=out)
 
-    with atomic_output(prefix+".phy") as out:
-        print(f"{len(taxa_order)} {supermatrix_length}", file=out)
-        for species in taxa_order:
-            print(f"{species} {supermatrix[species]}", file=out)
+    if write_phylip:
+        with atomic_output(prefix+".phy") as out:
+            print(f"{len(taxa_order)} {supermatrix_length}", file=out)
+            for species in taxa_order:
+                print(f"{species} {supermatrix[species]}", file=out)
     return None
     
     
@@ -200,10 +203,12 @@ if __name__ == '__main__':
     optional.add_argument('--missing-taxa', choices=['skip-gene', 'pad-gaps'],
                           default='skip-gene',
                           help='How to handle a taxon missing from a gene (default: skip-gene).')
+    optional.add_argument('--no-phylip', action='store_true',
+                          help='Skip PHYLIP output when a downstream converter will generate it.')
     optional.add_argument('-h', '--help', action='help', 
                           help="Show program's help message and exit.")
     optional.add_argument('-v', '--version', action='version', version='v1.0.0',
                           help="Show program's version number and exit.")
     args = parser.parse_args()
-    get_supergenes(infiles=expand_input_paths(args.input), prefix=args.prefix, missing_taxa=args.missing_taxa, input_lists=args.input)
+    get_supergenes(infiles=expand_input_paths(args.input), prefix=args.prefix, missing_taxa=args.missing_taxa, input_lists=args.input, write_phylip=not args.no_phylip)
     

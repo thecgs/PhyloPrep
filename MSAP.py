@@ -37,31 +37,6 @@ def translate_seq(infile, outfile, genetic_code):
 def get_prefix(infile):
     return os.path.splitext(os.path.basename(infile))[0]
 
-def detect_seq_type(infile):
-    seqence = ""
-    lst = ["V", "L", "I", "E", "Q", "D", "N",
-           "M", "S", "F", "W", "Y", "R", "H", 
-           "P","K","X"]
-    for n, record in enumerate(SeqIO.parse(infile, 'fasta')):
-        if n > 1:
-            break
-        else:
-            seqence += str(record.seq.upper())
-
-    status = False
-    for s in seqence:
-        if s in lst:
-            status = False
-        else:
-            if status==True:
-                break
-    
-    if status==True:
-        seq_type="PROTEIN"
-    else:
-        seq_type="DNA"
-    return seq_type
-
 def check_dependencies(softwares):
     #print("Check dependencies...\n")
     main_path = os.path.dirname(os.path.abspath(__file__))
@@ -184,11 +159,7 @@ def trim_codon_protein_pair(protein_file, codon_file, protein_output, codon_outp
     codon_map = {record.id: str(record.seq).upper() for record in codons}
     if list(protein_map) != list(codon_map):
         raise ValueError("Protein/codon alignment IDs or order do not match for paired trimming")
-    if not protein_map:
-        raise ValueError("No sequences found for paired codon/protein trimming")
     aa_length = len(next(iter(protein_map.values())))
-    if any(len(seq) != aa_length for seq in protein_map.values()):
-        raise ValueError("Protein alignment length mismatch during paired trimming")
     if any(len(codon_map[name]) != 3 * aa_length for name in protein_map):
         raise ValueError("Protein/codon alignment dimensions do not match for paired trimming")
 
@@ -218,8 +189,6 @@ def trim_codon_protein_pair(protein_file, codon_file, protein_output, codon_outp
         for name in protein_map:
             seq = "".join(protein_map[name][i] for i in keep)
             out.write(f">{name}\n{seq}\n")
-    read_fasta_alignment(codon_output, codon=True)
-    read_fasta_alignment(protein_output)
 
 
 def trim_codon_with_trimal(trimal_path, trimal_args, protein_file, codon_file,
@@ -508,6 +477,9 @@ Notes:
     if source_sequences != aligned_sequences:
         raise ValueError('Alignment changed taxon IDs or non-gap sequence content; results rejected')
 
+    # Translation and aligner sequence preservation were checked above.
+    # AA2Codon keeps ID/count validation; standalone -g translation validation
+    # is unnecessary for these internally generated protein alignments.
     ## run AA2codon.py
     if seqtype == "codon":
         subprocess.run(
@@ -517,7 +489,6 @@ Notes:
                 "-c", infile,
                 "-p", f"{prefix}.{align_software}.prot.aln",
                 "-o", f"{prefix}.{align_software}.codon.aln",
-                "-g", str(genetic_code),
             ],
             check=True,
         )

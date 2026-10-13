@@ -18,7 +18,8 @@ import tempfile
 
 from sequence_audit import normalize_workflow, merge_reports
 from MSAP_batch import build_parser as batch_parser
-from msap_io import atomic_output, expand_input_paths, read_fasta_alignment
+from msap_io import (atomic_output, expand_input_paths, read_fasta_alignment,
+                     file_digest, file_signature, read_json)
 from rename_taxa import rename_fasta, read_mapping, normalized_taxon_id
 
 SCRIPTS = Path(__file__).resolve().parent
@@ -158,35 +159,12 @@ def write_paths(path, paths):
         handle.writelines(f"{p}\n" for p in paths)
 
 
-def file_digest(path):
-    digest = hashlib.sha256()
-    with Path(path).open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def file_signature(path):
-    path = Path(path)
-    stat = path.stat()
-    return {"path": str(path.resolve()), "size": stat.st_size,
-            "mtime_ns": stat.st_mtime_ns, "sha256": file_digest(path)}
-
-
-def read_json(path):
-    try:
-        value = json.loads(Path(path).read_text(encoding="utf-8"))
-        return value if isinstance(value, dict) else {}
-    except (OSError, json.JSONDecodeError):
-        return {}
-
-
 def rename_state_path(directory, source):
     key = hashlib.sha256(str(Path(source).resolve()).encode()).hexdigest()[:16]
     return Path(directory) / f".phyloprep-rename-{key}.json"
 
 
-def valid_rename_state(state, source, mapping, target):
+def valid_rename_state(state, source, mapping, target, mapping_signature=None, script_digest=None):
     try:
         if Path(target).is_symlink():
             return False
@@ -194,8 +172,8 @@ def valid_rename_state(state, source, mapping, target):
             "version": RENAME_STATE_VERSION,
             "status": "complete",
             "source": file_signature(source),
-            "mapping": file_signature(mapping),
-            "rename_taxa_sha256": file_digest(SCRIPTS / "rename_taxa.py"),
+            "mapping": mapping_signature if mapping_signature is not None else file_signature(mapping),
+            "rename_taxa_sha256": script_digest if script_digest is not None else file_digest(SCRIPTS / "rename_taxa.py"),
             "outputs": {"alignment": file_signature(target)},
         }
     except OSError:
@@ -314,17 +292,17 @@ def rename_alignment_matrices(args, paths, root, seqtype, variant):
     renamed_dir = root / "renamed" / seqtype / variant
     renamed_dir.mkdir(parents=True, exist_ok=True)
     renamed = []
+    mapping_signature = file_signature(args.mapping)
+    script_digest = file_digest(SCRIPTS / "rename_taxa.py")
     for source in paths:
         target = renamed_dir / source.name
         state_path = rename_state_path(renamed_dir, source)
         if not args.no_resume and valid_rename_state(
-                read_json(state_path), source, args.mapping, target):
+                read_json(state_path), source, args.mapping, target, mapping_signature, script_digest):
             print(f"[phyloprep] rename {source.name}: skipped (already complete)", flush=True)
             renamed.append(target)
             continue
         source_signature = file_signature(source)
-        mapping_signature = file_signature(args.mapping)
-        script_digest = file_digest(SCRIPTS / "rename_taxa.py")
         try:
             rename_fasta(source, target, allow_duplicate_ids=True, mapping=args.taxon_mapping)
         except ValueError as error:
@@ -333,14 +311,15 @@ def rename_alignment_matrices(args, paths, root, seqtype, variant):
                 "Each QC-passing alignment must contain at most one sequence for each mapped taxon. "
                 "Multi-copy orthogroups should retain gene IDs for gene-tree methods such as ASTRAL-Pro3."
             ) from error
-        if (file_signature(source) != source_signature or
-                file_signature(args.mapping) != mapping_signature or
-                file_digest(SCRIPTS / "rename_taxa.py") != script_digest):
+        if file_signature(source) != source_signature:
             raise ValueError(
                 f"Rename inputs changed while processing {source}; outputs were not checkpointed. Rerun the pipeline."
             )
         write_rename_state(state_path, source_signature, mapping_signature, script_digest, target)
         renamed.append(target)
+    if (file_signature(args.mapping) != mapping_signature or
+            file_digest(SCRIPTS / "rename_taxa.py") != script_digest):
+        raise ValueError("Rename mapping or implementation changed during processing; rerun the pipeline")
     return renamed
 
 
@@ -424,28 +403,22 @@ def _alignment_locus_key(path, args, seqtype, variant):
     return name[:-len(suffix)] if name.endswith(suffix) else Path(name).stem
 
 
-def run_group_qc(args, root, stage, seqtype, variant, selected=None):
+def run_group_qc(args, root, stage, seqtype, variant):
     """Run one representation-specific QC pass and return its pairing context."""
     print(f"[phyloprep] QC {seqtype}/{variant}", flush=True)
-    if selected is None:
-        list_suffix = f"{seqtype}.aln" if variant == "raw" else f"{seqtype}.trimmed.aln"
-        batch_list = root / "alignments" / "path-lists" / f"all.{list_suffix}.pathlist"
-        if not batch_list.is_file():
-            raise ValueError(
-                f"Validated MSAP batch path list is missing for {seqtype}/{variant}: {batch_list}"
-            )
-        selected = [
-            Path(line.strip()).resolve()
-            for line in batch_list.read_text(encoding="utf-8").splitlines()
-            if line.strip() and not line.lstrip().startswith(("#", ";"))
-        ]
-        if not selected:
-            raise ValueError(f"No validated completed alignments are available for {seqtype}/{variant}")
-    else:
-        selected = [Path(path).resolve() for path in selected]
-        missing = [str(path) for path in selected if not path.is_file()]
-        if missing:
-            raise ValueError("Compatibility QC input alignment(s) do not exist: " + ", ".join(missing))
+    list_suffix = f"{seqtype}.aln" if variant == "raw" else f"{seqtype}.trimmed.aln"
+    batch_list = root / "alignments" / "path-lists" / f"all.{list_suffix}.pathlist"
+    if not batch_list.is_file():
+        raise ValueError(
+            f"Validated MSAP batch path list is missing for {seqtype}/{variant}: {batch_list}"
+        )
+    selected = [
+        Path(line.strip()).resolve()
+        for line in batch_list.read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.lstrip().startswith(("#", ";"))
+    ]
+    if not selected:
+        raise ValueError(f"No validated completed alignments are available for {seqtype}/{variant}")
 
     qc_dir = root / "qc" / ("pseudogene" if args.seqtype == "pseudogene" else "") / seqtype / variant
     qc_paths = selected
@@ -465,7 +438,7 @@ def run_group_qc(args, root, stage, seqtype, variant, selected=None):
         qc_args.extend(["--" + name.replace("_", "-"), value])
 
     changes = root / "reports" / "sequence_changes.tsv"
-    if args.seqtype in {"codon", "pseudogene"} and changes.is_file():
+    if seqtype in {"codon", "prot"} and changes.is_file():
         qc_args.extend(["--sequence-changes", changes])
 
     allow_terminal = args.allow_terminal_stop or args.seqtype == "pseudogene"
@@ -669,7 +642,7 @@ def build_group_matrices(args, root, context):
     supermatrix = stage / "supermatrix.fasta"
     try:
         run("get_supergenes.py", "-i", passed, "-p", stage / "supermatrix",
-            "--missing-taxa", args.missing_taxa)
+            "--missing-taxa", args.missing_taxa, "--no-phylip")
     except subprocess.CalledProcessError as error:
         label = "renamed" if args.mapping else "original_ids"
         report = preserve_concat_report(stage, root, seqtype, variant, label)
@@ -728,16 +701,6 @@ def prepare_variant(args, root, stage_root, variant):
 
     stage = _group_stage(stage_root, args.seqtype, args.seqtype, variant)
     context = run_group_qc(args, root, stage, args.seqtype, variant)
-    _require_passing_group(args, context)
-    build_group_matrices(args, root, context)
-
-
-def prepare_group(args, inputs, root, stage, seqtype, variant):
-    """Backward-compatible single-representation helper used by external callers."""
-    suffix = f".{args.align_software}.{seqtype}"
-    suffix += ".aln" if variant == "raw" else ".trimmed.aln"
-    selected = [Path(root) / "alignments" / (Path(source).stem + suffix) for source in inputs]
-    context = run_group_qc(args, root, stage, seqtype, variant, selected=selected)
     _require_passing_group(args, context)
     build_group_matrices(args, root, context)
 

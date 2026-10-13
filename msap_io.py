@@ -1,6 +1,8 @@
 """Shared validation and safe output for alignment utilities."""
 
 import os
+import hashlib
+import json
 import sys
 import tempfile
 import gzip
@@ -113,3 +115,28 @@ def atomic_output(outfile, inputs=()):
     finally:
         if temporary and os.path.exists(temporary):
             os.unlink(temporary)
+
+
+def file_digest(path):
+    """Hash file bytes for workflow checkpoints."""
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def file_signature(path):
+    path = Path(path)
+    stat = path.stat()
+    return {"path": str(path.resolve()), "size": stat.st_size,
+            "mtime_ns": stat.st_mtime_ns, "sha256": file_digest(path)}
+
+
+def read_json(path):
+    """Read a checkpoint object; invalid or missing files force recomputation."""
+    try:
+        value = json.loads(Path(path).read_text(encoding="utf-8"))
+        return value if isinstance(value, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}

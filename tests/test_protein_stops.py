@@ -56,6 +56,8 @@ def test_custom_stop_through_all_entrypoints(tmp_path, fake_aligner, script):
             '--stop-symbol', '.', '--notrim', '-t', '1']
     if script != 'MSAP.py':
         args += ['-o', str(output)]
+    if script == 'phyloprep.py':
+        args += ['--allow-internal-stop']
     result = subprocess.run(args, cwd=tmp_path, env=env, capture_output=True, text=True)
     assert result.returncode == 0, result.stdout + result.stderr
     report = tmp_path/'protein.sequence_changes.tsv' if script == 'MSAP.py' else output/'reports/sequence_changes.tsv'
@@ -115,3 +117,28 @@ def test_invalid_stop_symbol_rejected(tmp_path, symbol):
                              '-st', 'prot', '--protein-stop-symbol', symbol],
                             cwd=tmp_path, capture_output=True, text=True)
     assert result.returncode != 0 and '--protein-stop-symbol' in result.stderr
+
+
+@pytest.mark.parametrize('notrim', [False, True])
+def test_protein_pipeline_internal_stop_requires_explicit_allow(tmp_path, fake_aligner, notrim):
+    _, env = fake_aligner
+    source = tmp_path / 'protein.fa'
+    source.write_text('>a\nMA*G\n>b\nMAAG\n')
+    output = tmp_path / 'results'
+    command = [sys.executable, str(ROOT/'phyloprep.py'), '-i', str(source),
+               '-o', str(output), '-st', 'prot', '-t', '1']
+    if notrim:
+        command.append('--notrim')
+    rejected = subprocess.run(command, cwd=tmp_path, env=env, capture_output=True, text=True)
+    assert rejected.returncode == 2
+    detail = rows(output/'qc/prot/raw/alignment.details.tsv')
+    assert detail[0]['Audited_internal_stop'] != 'NA'
+    assert 'internal_stop' in detail[0]['Issues']
+    assert not (output/'matrices').exists()
+    allowed = subprocess.run(command + ['--allow-internal-stop'], cwd=tmp_path,
+                             env=env, capture_output=True, text=True)
+    assert allowed.returncode == 0, allowed.stdout + allowed.stderr
+    assert (output/'matrices/prot/raw/supermatrix.fasta').is_file()
+    assert 'already complete' in allowed.stdout
+    if not notrim:
+        assert (output/'matrices/prot/trimmed/supermatrix.fasta').is_file()
