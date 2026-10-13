@@ -103,7 +103,7 @@ const modules = [
       { flag: "-st", label: "Sequence type", description: "Browser pipeline supports codon, protein, and nucleotide modes. Pseudogene/MACSE remains CLI-only.", type: "select", value: "codon", options: [["codon", "Codon / CDS"], ["prot", "Protein"], ["nucl", "Nucleotide"]], token: "seqtype" },
       geneticCodeParameter(),
       { flag: "--missing-taxa", label: "Missing taxa policy", description: "Skip genes missing taxa, or pad missing taxa with gaps during concatenation.", type: "select", value: "skip-gene", options: [["skip-gene", "Skip gene"], ["pad-gaps", "Pad gaps"]], token: "missing_taxa" },
-      { flag: "-s", label: "Alignment software", description: "Runs locally through Biowasm/WebAssembly. MAFFT matches the CLI default.", type: "select", value: "mafft", options: [["mafft", "MAFFT 7.520"], ["muscle", "MUSCLE 5.1.0"]], token: "align_software" },
+      { flag: "-s", label: "Alignment software", description: "Runs locally through Biowasm/WebAssembly. Browser MAFFT uses Biowasm's compiled tbfast + dvtditr pipeline; the CLI continues to use the upstream mafft wrapper.", type: "select", value: "mafft", options: [["mafft", "MAFFT 7.520 (Biowasm)"], ["muscle", "MUSCLE 5.1.0"]], token: "align_software" },
       { flag: "-t", label: "Threads per locus", description: "Browser fixed to one thread for GitHub Pages/WebAssembly compatibility.", type: "select", value: "1", options: [["1", "1 (browser fixed)"]], token: "thread" },
       { flag: "-j", label: "Concurrent loci", description: "Browser edition processes loci sequentially to keep memory predictable.", type: "select", value: "1", options: [["1", "1 (browser sequential)"]], token: "jobs" },
       { flag: "-ts", label: "Trimming software", description: "Browser fixed to PhyloPrep's bundled trimAlnSeq.py.", type: "select", value: "trimAlnSeq", options: [["trimAlnSeq", "trimAlnSeq.py (browser fixed)"]], token: "trim_software" },
@@ -132,7 +132,7 @@ const modules = [
     parameters: [
       { flag: "-st", label: "Sequence type", description: "Browser batch supports codon, protein, and nucleotide modes. Pseudogene/MACSE remains CLI-only.", type: "select", value: "codon", options: [["codon", "Codon / CDS"], ["prot", "Protein"], ["nucl", "Nucleotide"]], token: "seqtype" },
       geneticCodeParameter(),
-      { flag: "-s", label: "Alignment software", description: "Runs locally through Biowasm/WebAssembly. MAFFT matches the CLI default.", type: "select", value: "mafft", options: [["mafft", "MAFFT 7.520"], ["muscle", "MUSCLE 5.1.0"]], token: "align_software" },
+      { flag: "-s", label: "Alignment software", description: "Runs locally through Biowasm/WebAssembly. Browser MAFFT uses Biowasm's compiled tbfast + dvtditr pipeline; the CLI continues to use the upstream mafft wrapper.", type: "select", value: "mafft", options: [["mafft", "MAFFT 7.520 (Biowasm)"], ["muscle", "MUSCLE 5.1.0"]], token: "align_software" },
       { flag: "-t", label: "Threads per locus", description: "Browser fixed to one thread.", type: "select", value: "1", options: [["1", "1 (browser fixed)"]], token: "thread" },
       { flag: "-j", label: "Concurrent loci", description: "Browser edition processes loci sequentially.", type: "select", value: "1", options: [["1", "1 (browser sequential)"]], token: "jobs" },
       { flag: "-ts", label: "Trimming software", description: "Browser fixed to PhyloPrep's bundled trimAlnSeq.py.", type: "select", value: "trimAlnSeq", options: [["trimAlnSeq", "trimAlnSeq.py (browser fixed)"]], token: "trim_software" },
@@ -1245,7 +1245,7 @@ async function runMsapBrowserWorkflow(request) {
   const probe = await runInWorker({ type: "msap-probe", ...request });
   if (!probe.alignmentInput) throw new Error("MSAP.py did not provide an input for the selected browser aligner.");
 
-  const alignerLabel = probe.tool === "mafft" ? "MAFFT 7.520" : "MUSCLE 5.1.0";
+  const alignerLabel = probe.tool === "mafft" ? "MAFFT 7.520 (Biowasm)" : "MUSCLE 5.1.0";
   elements.cancelRun.hidden = false;
   setRunStage(2, `Running Biowasm ${alignerLabel}`);
   elements.runtimeStatus.textContent = `Biowasm ${alignerLabel} running`;
@@ -1327,7 +1327,7 @@ async function runMsapBatchBrowserWorkflow(request) {
   return {
     files: outputs,
     summary: `Processed ${inputs.length} loci with the browser MSAP batch workflow.`,
-    provenance: `Browser MSAP_batch adapter · untouched MSAP.py + Biowasm ${request.options.align_software === "mafft" ? "MAFFT 7.520" : "MUSCLE 5.1.0"}`,
+    provenance: `Browser MSAP_batch adapter · untouched MSAP.py + Biowasm ${request.options.align_software === "mafft" ? "MAFFT 7.520 (Biowasm)" : "MUSCLE 5.1.0"}`,
   };
 }
 

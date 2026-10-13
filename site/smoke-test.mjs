@@ -79,7 +79,7 @@ if (!app.includes('name: "inputs.pathlist"')) throw new Error("PhyloPrep browser
 if (!alignmentWorker.includes('cli.exec("muscle -align "')) throw new Error("MUSCLE must use Aioli single-string exec form.");
 if (alignmentWorker.includes('cli.exec("muscle", [')) throw new Error("Two-argument Aioli exec form must not be used for MUSCLE.");
 
-if (!app.includes('["mafft", "MAFFT 7.520"]')) throw new Error("MAFFT 7.520 must be exposed in the browser aligner selector.");
+if (!app.includes('["mafft", "MAFFT 7.520 (Biowasm)"]')) throw new Error("MAFFT 7.520 must be exposed in the browser aligner selector.");
 if (!worker.includes('option(values.align_software, "mafft")')) throw new Error("MSAP browser arguments must honor the selected aligner.");
-if (!alignmentWorker.includes('"mafft/7.520"')) throw new Error("Biowasm MAFFT 7.520 is missing from the alignment worker.");
-if (!alignmentWorker.includes('mafft ${mode} --thread 1 --quiet --auto')) throw new Error("MAFFT browser command must mirror MSAP.py alignment flags.");
+if (!alignmentWorker.includes('program: "tbfast"') || !alignmentWorker.includes('program: "dvtditr"')) throw new Error("Biowasm MAFFT core programs are missing from the alignment worker.");
+if (alignmentWorker.includes('"mafft/7.520"')) throw new Error("Biowasm MAFFT has no mafft.js wrapper; load tbfast/dvtditr explicitly.");

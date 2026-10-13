@@ -22,11 +22,12 @@ filtering, renaming, trimming, and conversion.
 The browser also exposes the original single-locus `MSAP.py` workflow for
 `codon`, `prot`, and `nucl` input. `MSAP.py` itself is not modified: the browser
 runs it in Pyodide until it requests MAFFT or MUSCLE, delegates that command to
-Biowasm MAFFT 7.520 or MUSCLE 5.1.0/WebAssembly, and then resumes the same
+Biowasm MAFFT 7.520 (`tbfast` + `dvtditr`) or MUSCLE 5.1.0/WebAssembly, and then resumes the same
 original workflow with the result. Back-translation and the default
 `trimAlnSeq.py` trimming remain the original bundled Python scripts. The
-browser implementation uses one alignment thread. MAFFT is the browser default,
-matching the CLI default. PRANK, ClustalW2, trimAl, MACSE, and pseudogene mode
+browser implementation uses one alignment worker. The Biowasm MAFFT package
+does not provide an upstream `mafft.js` wrapper; the browser runs the compiled
+`tbfast` + `dvtditr` programs directly instead. PRANK, ClustalW2, trimAl, MACSE, and pseudogene mode
 remain CLI-only.
 
 FASTA content remains local to the browser. Pyodide and Biowasm assets are
