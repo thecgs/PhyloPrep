@@ -6,7 +6,11 @@ async function ensureCli() {
     cliPromise = (async () => {
       importScripts(AIOLI_URL);
       if (typeof globalThis.Aioli !== "function") throw new Error("Biowasm Aioli did not initialize.");
-      return await new globalThis.Aioli(["mafft/7.520", "muscle/5.1.0"], { printInterleaved: false });
+      return await new globalThis.Aioli([
+        { tool: "mafft", version: "7.520", program: "tbfast", reinit: false },
+        { tool: "mafft", version: "7.520", program: "dvtditr", reinit: false },
+        "muscle/5.1.0",
+      ], { printInterleaved: false });
     })();
   }
   return cliPromise;
@@ -34,9 +38,27 @@ self.addEventListener("message", async (event) => {
     if (!inputPath) throw new Error("Biowasm could not mount the alignment input.");
 
     if (tool === "mafft") {
-      const mode = seqtype === "nucl" ? "--nuc" : "--amino";
-      const execution = await cli.exec(`mafft ${mode} --thread 1 --quiet --auto ${inputPath}`);
-      const alignment = validateAlignment(execution?.stdout, "MAFFT", execution);
+      // Biowasm exposes MAFFT's compiled core programs (tbfast + dvtditr),
+      // not the upstream shell wrapper named "mafft". Follow the supported
+      // two-stage Biowasm recipe and force the same sequence type selected in
+      // PhyloPrep (-P protein/codon, -D nucleotide).
+      const seqFlag = seqtype === "nucl" ? "-D" : "-P";
+      const prePath = "/shared/data/pre";
+      const tbfast = await cli.exec(
+        "tbfast _ -u 0.0 -l 2.7 -C 0 -b 62 -g 0.0 -f -2.00 -Q 100.0 -h 0.0 " +
+        "-O -6.00 -E -0.000 -N -Z _ -+ 16 -W 0.00001 -V -1.53 -s 0.0 -O -C 0 " +
+        "-b 62 -f -1.53 -Q 100.0 -h 0.000 -l 2.7 -X 0.1 " + seqFlag + " -i " + inputPath
+      );
+      const refine = await cli.exec(
+        "dvtditr -W 0.00001 -E 0.0 -s 0.0 -C 0 -t 0 -F -l 2.7 -z 50 -b 62 " +
+        "-f -1.53 -Q 100.0 -h 0.000 -I 16 -X 0.1 " + seqFlag +
+        " -p BAATARI2 -K 0 -i " + prePath
+      );
+      let alignment = await cli.cat(prePath);
+      alignment = validateAlignment(alignment, "MAFFT", {
+        stdout: refine?.stdout || tbfast?.stdout,
+        stderr: [tbfast?.stderr, refine?.stderr].filter(Boolean).join("\n"),
+      });
       self.postMessage({ type: "result", runId, alignment });
       return;
     }
@@ -60,6 +82,7 @@ self.addEventListener("message", async (event) => {
   } finally {
     if (cli) {
       try { if (outputPath) await cli.fs.unlink(outputPath); } catch {}
+      try { if (tool === "mafft") await cli.fs.unlink("/shared/data/pre"); } catch {}
       try { if (inputPath) await cli.fs.unlink(inputPath); } catch {}
     }
   }
