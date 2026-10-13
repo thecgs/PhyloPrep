@@ -28,7 +28,7 @@ jobs:
         run: |
           node --check site/app.js
           node --check site/pyodide-worker.js
-          node --check site/muscle-worker.js
+          node --check site/alignment-worker.js
       - name: Validate browser Python adapters
         run: python -m py_compile site/browser_runner.py
       - name: Run browser bundle smoke checks

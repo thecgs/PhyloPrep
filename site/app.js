@@ -91,7 +91,7 @@ function proteinStopParameter() {
 const modules = [
   {
     script: "phyloprep.py", title: "Complete phylogenomic preparation pipeline", category: "Pipeline", browser: true, browserWorkflow: "phyloprep", inputListKey: "inputs", cliOutputDir: "phyloprep-results",
-    summary: "Aligns multiple loci with browser MUSCLE, applies PhyloPrep QC and optional taxon renaming, builds supermatrices, and exports downstream matrices.",
+    summary: "Aligns multiple loci with browser MAFFT or MUSCLE, applies PhyloPrep QC and optional taxon renaming, builds supermatrices, and exports downstream matrices.",
     inputs: ["One or more input FASTA files", "Optional two-column taxon mapping table"],
     inputFields: [
       { key: "inputs", label: "Input FASTA files", flag: "-i, --input", multiple: true, pathList: true },
@@ -103,7 +103,7 @@ const modules = [
       { flag: "-st", label: "Sequence type", description: "Browser pipeline supports codon, protein, and nucleotide modes. Pseudogene/MACSE remains CLI-only.", type: "select", value: "codon", options: [["codon", "Codon / CDS"], ["prot", "Protein"], ["nucl", "Nucleotide"]], token: "seqtype" },
       geneticCodeParameter(),
       { flag: "--missing-taxa", label: "Missing taxa policy", description: "Skip genes missing taxa, or pad missing taxa with gaps during concatenation.", type: "select", value: "skip-gene", options: [["skip-gene", "Skip gene"], ["pad-gaps", "Pad gaps"]], token: "missing_taxa" },
-      { flag: "-s", label: "Alignment software", description: "Browser fixed: MUSCLE 5.1.0 through Biowasm.", type: "select", value: "muscle", options: [["muscle", "MUSCLE 5.1.0 (browser fixed)"]], token: "align_software" },
+      { flag: "-s", label: "Alignment software", description: "Runs locally through Biowasm/WebAssembly. MAFFT matches the CLI default.", type: "select", value: "mafft", options: [["mafft", "MAFFT 7.520"], ["muscle", "MUSCLE 5.1.0"]], token: "align_software" },
       { flag: "-t", label: "Threads per locus", description: "Browser fixed to one thread for GitHub Pages/WebAssembly compatibility.", type: "select", value: "1", options: [["1", "1 (browser fixed)"]], token: "thread" },
       { flag: "-j", label: "Concurrent loci", description: "Browser edition processes loci sequentially to keep memory predictable.", type: "select", value: "1", options: [["1", "1 (browser sequential)"]], token: "jobs" },
       { flag: "-ts", label: "Trimming software", description: "Browser fixed to PhyloPrep's bundled trimAlnSeq.py.", type: "select", value: "trimAlnSeq", options: [["trimAlnSeq", "trimAlnSeq.py (browser fixed)"]], token: "trim_software" },
@@ -120,19 +120,19 @@ const modules = [
       { flag: "--allow-terminal-stop", label: "Allow terminal stop codons", description: "Permit terminal stop codons in codon-mode QC.", type: "checkbox", value: false, token: "allow_terminal_stop" },
       { flag: "--allow-internal-stop", label: "Allow internal stop codons", description: "Permit internal stop codons in codon-mode QC.", type: "checkbox", value: false, token: "allow_internal_stop" },
     ],
-    command: "python phyloprep.py -i {inputs} -o phyloprep-results{mapping_option} -st {seqtype} -s muscle -t 1 -j 1 -g {genetic_code} -ts trimAlnSeq -G {gap_ratio} -N {n_ratio} -X {x_ratio} --missing-taxa {missing_taxa} --min-length {min_length} --max-n-ratio {max_n_ratio} --max-x-ratio {max_x_ratio} --max-gap-ratio {max_gap_ratio} --min-parsimony-informative-sites {min_parsimony_informative_sites} --protein-stop-symbol {protein_stop_symbol_cli}{allow_terminal_stop}{allow_internal_stop}{notrim_option}",
+    command: "python phyloprep.py -i {inputs} -o phyloprep-results{mapping_option} -st {seqtype} -s {align_software} -t 1 -j 1 -g {genetic_code} -ts trimAlnSeq -G {gap_ratio} -N {n_ratio} -X {x_ratio} --missing-taxa {missing_taxa} --min-length {min_length} --max-n-ratio {max_n_ratio} --max-x-ratio {max_x_ratio} --max-gap-ratio {max_gap_ratio} --min-parsimony-informative-sites {min_parsimony_informative_sites} --protein-stop-symbol {protein_stop_symbol_cli}{allow_terminal_stop}{allow_internal_stop}{notrim_option}",
   },
   {
     script: "MSAP_batch.py", title: "Batch alignment workflow", category: "Batch", browser: true, browserWorkflow: "batch", inputListKey: "inputs", cliOutputDir: "msap-results",
-    summary: "Runs the MSAP workflow over multiple FASTA loci in the browser using Biowasm MUSCLE and aggregates path lists and sequence-change reports.",
+    summary: "Runs the MSAP workflow over multiple FASTA loci in the browser using Biowasm MAFFT or MUSCLE and aggregates path lists and sequence-change reports.",
     inputs: ["One or more input FASTA files"],
     inputFields: [{ key: "inputs", label: "Input FASTA files", flag: "-i, --input", multiple: true, pathList: true }],
-    outputs: ["Per-locus preprocessing and audit files", "MUSCLE alignments", "Optional trimmed alignments", "Batch path lists", "Merged sequence-change report"],
+    outputs: ["Per-locus preprocessing and audit files", "MAFFT or MUSCLE alignments", "Optional trimmed alignments", "Batch path lists", "Merged sequence-change report"],
     outputLabel: "Batch output", outputHelp: "Browser output is collected as downloadable files or written into the selected local folder.", defaultOutput: "", hideOutputName: true,
     parameters: [
       { flag: "-st", label: "Sequence type", description: "Browser batch supports codon, protein, and nucleotide modes. Pseudogene/MACSE remains CLI-only.", type: "select", value: "codon", options: [["codon", "Codon / CDS"], ["prot", "Protein"], ["nucl", "Nucleotide"]], token: "seqtype" },
       geneticCodeParameter(),
-      { flag: "-s", label: "Alignment software", description: "Browser fixed: MUSCLE 5.1.0 through Biowasm.", type: "select", value: "muscle", options: [["muscle", "MUSCLE 5.1.0 (browser fixed)"]], token: "align_software" },
+      { flag: "-s", label: "Alignment software", description: "Runs locally through Biowasm/WebAssembly. MAFFT matches the CLI default.", type: "select", value: "mafft", options: [["mafft", "MAFFT 7.520"], ["muscle", "MUSCLE 5.1.0"]], token: "align_software" },
       { flag: "-t", label: "Threads per locus", description: "Browser fixed to one thread.", type: "select", value: "1", options: [["1", "1 (browser fixed)"]], token: "thread" },
       { flag: "-j", label: "Concurrent loci", description: "Browser edition processes loci sequentially.", type: "select", value: "1", options: [["1", "1 (browser sequential)"]], token: "jobs" },
       { flag: "-ts", label: "Trimming software", description: "Browser fixed to PhyloPrep's bundled trimAlnSeq.py.", type: "select", value: "trimAlnSeq", options: [["trimAlnSeq", "trimAlnSeq.py (browser fixed)"]], token: "trim_software" },
@@ -142,7 +142,7 @@ const modules = [
       { flag: "-N", label: "Maximum N proportion", description: "Maximum N ratio per site during nucleotide/codon trimming. Range: 0–1.", type: "number", value: "0.2", step: "0.01", token: "n_ratio" },
       { flag: "-X", label: "Maximum X proportion", description: "Maximum X ratio per site during protein trimming. Range: 0–1.", type: "number", value: "0.2", step: "0.01", token: "x_ratio" },
     ],
-    command: "python MSAP_batch.py -i {inputs} -o msap-results -st {seqtype} -s muscle -t 1 -j 1 -g {genetic_code} -ts trimAlnSeq -G {gap_ratio} -N {n_ratio} -X {x_ratio} --protein-stop-symbol {protein_stop_symbol_cli}{notrim_option}",
+    command: "python MSAP_batch.py -i {inputs} -o msap-results -st {seqtype} -s {align_software} -t 1 -j 1 -g {genetic_code} -ts trimAlnSeq -G {gap_ratio} -N {n_ratio} -X {x_ratio} --protein-stop-symbol {protein_stop_symbol_cli}{notrim_option}",
   },
   {
     script: "extract_orthofinder_orthogroups.py", title: "Extract OrthoFinder orthogroups", category: "Orthology", browser: true, browserWorkflow: "orthofinder-extract",
@@ -358,9 +358,9 @@ let pyodideWorker;
 let activeWorkerRun;
 let nextRunId = 0;
 let selectedInputFiles = new Map();
-let muscleWorker;
-let activeMuscleRun;
-let muscleRunCounter = 0;
+let alignmentWorker;
+let activeAlignmentRun;
+let alignmentRunCounter = 0;
 let catalogQuery = "";
 let pendingTransfer;
 
@@ -371,21 +371,21 @@ function implementationProfile(module) {
     return {
       key: "compatible",
       label: "Browser PhyloPrep pipeline",
-      note: "The browser orchestrates the repository's original preparation modules locally: MSAP preprocessing/back-translation/trimming in Pyodide, MUSCLE 5.1.0 in Biowasm, then the original QC, renaming, concatenation, codon splitting, four-fold extraction and format-conversion code. Linux process-management features are replaced by a browser-safe sequential adapter.",
+      note: "The browser orchestrates the repository's original preparation modules locally: MSAP preprocessing/back-translation/trimming in Pyodide, MAFFT 7.520 or MUSCLE 5.1.0 in Biowasm, then the original QC, renaming, concatenation, codon splitting, four-fold extraction and format-conversion code. Linux process-management features are replaced by a browser-safe sequential adapter.",
     };
   }
   if (module.browserWorkflow === "batch") {
     return {
       key: "compatible",
       label: "Browser batch adapter",
-      note: "Processes loci sequentially in the browser with the same MSAP sequence workflow and Biowasm MUSCLE 5.1.0, then generates batch-style path lists and a merged sequence-change report. Linux process groups, file locks and concurrent jobs are intentionally not used in the browser.",
+      note: "Processes loci sequentially in the browser with the same MSAP sequence workflow and Biowasm MAFFT 7.520 or MUSCLE 5.1.0, then generates batch-style path lists and a merged sequence-change report. Linux process groups, file locks and concurrent jobs are intentionally not used in the browser.",
     };
   }
   if (module.fullWorkflow) {
     return {
       key: "compatible",
-      label: "Original MSAP.py + Biowasm MUSCLE",
-      note: "Runs the repository's untouched MSAP.py in Pyodide. Its MUSCLE subprocess call is fulfilled locally by Biowasm MUSCLE 5.1.0; bundled AA2Codon.py and trimAlnSeq.py continue inside the same browser Python runtime. No sequence file is uploaded to PhyloPrep.",
+      label: "Original MSAP.py + Biowasm aligner",
+      note: "Runs the repository's untouched MSAP.py in Pyodide. Its MAFFT or MUSCLE subprocess call is fulfilled locally by Biowasm/WebAssembly; bundled AA2Codon.py and trimAlnSeq.py continue inside the same browser Python runtime. No sequence file is uploaded to PhyloPrep.",
     };
   }
   return {
@@ -1026,9 +1026,9 @@ function runInWorker(payload) {
 }
 
 function cancelActiveRun() {
-  if (cancelMuscleRun()) {
+  if (cancelAlignmentRun()) {
     elements.cancelRun.hidden = true;
-    elements.runtimeStatus.textContent = "MUSCLE stopped";
+    elements.runtimeStatus.textContent = "Alignment stopped";
     return;
   }
   if (!activeWorkerRun) return;
@@ -1200,40 +1200,40 @@ function downloadAllOutputs() {
 }
 
 
-function createMuscleWorker() {
-  const worker = new Worker("muscle-worker.js");
+function createAlignmentWorker() {
+  const worker = new Worker("alignment-worker.js");
   worker.addEventListener("message", (event) => {
-    if (!activeMuscleRun || event.data.runId !== activeMuscleRun.id) return;
-    const run = activeMuscleRun;
-    activeMuscleRun = undefined;
+    if (!activeAlignmentRun || event.data.runId !== activeAlignmentRun.id) return;
+    const run = activeAlignmentRun;
+    activeAlignmentRun = undefined;
     if (event.data.type === "result") run.resolve(event.data.alignment);
-    else run.reject(new Error(event.data.message || "MUSCLE failed."));
+    else run.reject(new Error(event.data.message || "Alignment failed."));
   });
   worker.addEventListener("error", (event) => {
-    if (!activeMuscleRun) return;
-    const run = activeMuscleRun;
-    activeMuscleRun = undefined;
-    run.reject(new Error(event.message || "MUSCLE worker stopped unexpectedly."));
+    if (!activeAlignmentRun) return;
+    const run = activeAlignmentRun;
+    activeAlignmentRun = undefined;
+    run.reject(new Error(event.message || "Alignment worker stopped unexpectedly."));
   });
-  muscleWorker = worker;
+  alignmentWorker = worker;
   return worker;
 }
 
-function runMuscleAlignment(sequenceText) {
-  const worker = muscleWorker || createMuscleWorker();
-  const runId = ++muscleRunCounter;
+function runBrowserAlignment(sequenceText, tool, seqtype) {
+  const worker = alignmentWorker || createAlignmentWorker();
+  const runId = ++alignmentRunCounter;
   return new Promise((resolve, reject) => {
-    activeMuscleRun = { id: runId, resolve, reject };
-    worker.postMessage({ type: "align", runId, sequenceText });
+    activeAlignmentRun = { id: runId, resolve, reject };
+    worker.postMessage({ type: "align", runId, sequenceText, tool, seqtype });
   });
 }
 
-function cancelMuscleRun() {
-  if (!activeMuscleRun) return false;
-  const run = activeMuscleRun;
-  activeMuscleRun = undefined;
-  muscleWorker?.terminate();
-  muscleWorker = undefined;
+function cancelAlignmentRun() {
+  if (!activeAlignmentRun) return false;
+  const run = activeAlignmentRun;
+  activeAlignmentRun = undefined;
+  alignmentWorker?.terminate();
+  alignmentWorker = undefined;
   run.reject(cancellationError());
   return true;
 }
@@ -1243,12 +1243,13 @@ async function runMsapBrowserWorkflow(request) {
   setRunStage(2, "Preparing input with original MSAP.py");
   elements.runtimeStatus.textContent = "Preparing MSAP.py workflow";
   const probe = await runInWorker({ type: "msap-probe", ...request });
-  if (!probe.alignmentInput) throw new Error("MSAP.py did not provide an alignment input for MUSCLE.");
+  if (!probe.alignmentInput) throw new Error("MSAP.py did not provide an input for the selected browser aligner.");
 
+  const alignerLabel = probe.tool === "mafft" ? "MAFFT 7.520" : "MUSCLE 5.1.0";
   elements.cancelRun.hidden = false;
-  setRunStage(2, "Running Biowasm MUSCLE 5.1.0");
-  elements.runtimeStatus.textContent = "Biowasm MUSCLE running";
-  const alignmentContent = await runMuscleAlignment(probe.alignmentInput);
+  setRunStage(2, `Running Biowasm ${alignerLabel}`);
+  elements.runtimeStatus.textContent = `Biowasm ${alignerLabel} running`;
+  const alignmentContent = await runBrowserAlignment(probe.alignmentInput, probe.tool, request.options.seqtype || "codon");
 
   setRunStage(2, "Finishing original MSAP.py workflow");
   elements.runtimeStatus.textContent = "Finishing MSAP.py workflow";
@@ -1309,7 +1310,7 @@ async function runMsapBatchBrowserWorkflow(request) {
   for (let index = 0; index < inputs.length; index += 1) {
     const input = inputs[index];
     setRunStage(2, `Aligning locus ${index + 1}/${inputs.length}: ${input.name}`);
-    elements.runtimeStatus.textContent = `MUSCLE locus ${index + 1}/${inputs.length}`;
+    elements.runtimeStatus.textContent = `${request.options.align_software === "mafft" ? "MAFFT" : "MUSCLE"} locus ${index + 1}/${inputs.length}`;
     const result = await runMsapBrowserWorkflow({
       ...request,
       script: "MSAP.py",
@@ -1326,7 +1327,7 @@ async function runMsapBatchBrowserWorkflow(request) {
   return {
     files: outputs,
     summary: `Processed ${inputs.length} loci with the browser MSAP batch workflow.`,
-    provenance: "Browser MSAP_batch adapter · untouched MSAP.py + Biowasm MUSCLE 5.1.0",
+    provenance: `Browser MSAP_batch adapter · untouched MSAP.py + Biowasm ${request.options.align_software === "mafft" ? "MAFFT 7.520" : "MUSCLE 5.1.0"}`,
   };
 }
 
@@ -1398,7 +1399,9 @@ async function buildRunManifest(module, request, result, outputs) {
     provenance: result.provenance || null,
     runtime: {
       pyodide: "0.27.2",
-      muscle: ["phyloprep.py", "MSAP_batch.py"].includes(module.script) ? "Biowasm MUSCLE 5.1.0" : null,
+      aligner: ["phyloprep.py", "MSAP_batch.py"].includes(module.script)
+        ? (request.options.align_software === "mafft" ? "Biowasm MAFFT 7.520" : "Biowasm MUSCLE 5.1.0")
+        : null,
       user_agent: navigator.userAgent,
     },
   }, null, 2) + "\n";

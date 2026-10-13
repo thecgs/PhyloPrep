@@ -21,12 +21,13 @@ filtering, renaming, trimming, and conversion.
 
 The browser also exposes the original single-locus `MSAP.py` workflow for
 `codon`, `prot`, and `nucl` input. `MSAP.py` itself is not modified: the browser
-runs it in Pyodide until it requests MUSCLE, delegates that command to Biowasm
-MUSCLE 5.1.0/WebAssembly, and then resumes the same original workflow with the
-result. Back-translation and the default `trimAlnSeq.py` trimming remain the
-original bundled Python scripts. The browser implementation uses one MUSCLE
-thread and does not currently expose MAFFT, PRANK, ClustalW2, trimAl, MACSE, or
-pseudogene mode.
+runs it in Pyodide until it requests MAFFT or MUSCLE, delegates that command to
+Biowasm MAFFT 7.520 or MUSCLE 5.1.0/WebAssembly, and then resumes the same
+original workflow with the result. Back-translation and the default
+`trimAlnSeq.py` trimming remain the original bundled Python scripts. The
+browser implementation uses one alignment thread. MAFFT is the browser default,
+matching the CLI default. PRANK, ClustalW2, trimAl, MACSE, and pseudogene mode
+remain CLI-only.
 
 FASTA content remains local to the browser. Pyodide and Biowasm assets are
 downloaded from their public CDNs on first use, but sequence data are not sent
@@ -42,15 +43,16 @@ processes), the web edition uses a browser-safe compatibility layer rather than
 modifying those core scripts.
 
 `MSAP_batch.py` browser mode processes loci sequentially with the existing
-MSAP/Pyodide + Biowasm MUSCLE workflow, then creates batch-style path lists and
+MSAP/Pyodide + Biowasm MAFFT/MUSCLE workflow, then creates batch-style path lists and
 a merged sequence-change report. `phyloprep.py` browser mode reuses those
 alignments and invokes the repository's original QC, taxon-renaming,
 supermatrix, codon-position, four-fold and FASTA/PHYLIP/NEXUS modules inside
 Pyodide.
 
-Current browser constraints are explicit in the parameter UI: MUSCLE 5.1.0,
-one MUSCLE thread, one locus at a time, and `trimAlnSeq.py` trimming.
-Pseudogene/MACSE, MAFFT, PRANK, ClustalW2 and trimAl remain CLI-only.
+Current browser constraints are explicit in the parameter UI: MAFFT 7.520 or
+MUSCLE 5.1.0, one alignment thread, one locus at a time, and
+`trimAlnSeq.py` trimming. Pseudogene/MACSE, PRANK, ClustalW2 and trimAl remain
+CLI-only.
 
 
 ## Orthology tools in the browser
@@ -84,9 +86,9 @@ SHA256 hashes for input and output content. Pyodide run directories are removed
 after each worker request so repeated batch runs do not accumulate virtual
 filesystem workspaces.
 
-MUSCLE is executed in a dedicated Web Worker. Cancelling a run terminates that
-worker and therefore interrupts an active WebAssembly alignment rather than
-only cancelling the surrounding Pyodide step.
+MAFFT and MUSCLE are executed in a dedicated alignment Web Worker. Cancelling a
+run terminates that worker and therefore interrupts the active WebAssembly
+alignment rather than only cancelling the surrounding Pyodide step.
 
 The Pages workflow runs syntax and browser-bundle smoke checks before building
 and deploying the static site.
