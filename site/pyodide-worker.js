@@ -221,7 +221,7 @@ function msapArguments(request, stage) {
   return [
     "-i", inputFile(stage),
     "-st", option(values.seqtype, "codon"),
-    "-s", "muscle",
+    "-s", option(values.align_software, "mafft"),
     "-t", "1",
     "-g", option(values.genetic_code, "1"),
     "-ts", "trimAlnSeq",
@@ -244,18 +244,18 @@ self.addEventListener("message", async (event) => {
     stage = stageBrowserInputs(runtime, request);
 
     if (request.type === "msap-probe") {
-      self.postMessage({ type: "stage", runId, stage: "process", label: "Preparing MSAP.py MUSCLE input" });
+      self.postMessage({ type: "stage", runId, stage: "process", label: "Preparing MSAP.py alignment input" });
       const args = msapArguments(request, stage);
       const raw = await runtime.runPythonAsync(`run_msap_probe(${JSON.stringify(args)}, ${JSON.stringify(stage.outputRoot)})`);
       const result = JSON.parse(raw);
-      if (!result.ok) throw new Error(result.error || "MSAP.py could not prepare the MUSCLE input.");
+      if (!result.ok) throw new Error(result.error || "MSAP.py could not prepare the alignment input.");
       self.postMessage({ type: "result", runId, result });
       return;
     }
 
     if (request.type === "msap-complete") {
       self.postMessage({ type: "stage", runId, stage: "process", label: "Finishing original MSAP.py workflow" });
-      const alignmentPath = `${stage.optionsRoot}/biowasm-muscle.aln.fasta`;
+      const alignmentPath = `${stage.optionsRoot}/biowasm-alignment.aln.fasta`;
       runtime.FS.writeFile(alignmentPath, request.alignmentContent || "");
       const args = msapArguments(request, stage);
       const raw = await runtime.runPythonAsync(`run_msap_complete(${JSON.stringify(args)}, ${JSON.stringify(stage.outputRoot)}, ${JSON.stringify(alignmentPath)})`);
@@ -266,7 +266,7 @@ self.addEventListener("message", async (event) => {
         runId,
         result: {
           ...result,
-          provenance: `Untouched MSAP.py + Biowasm MUSCLE 5.1.0 · source bundle ${engineManifest.bundleSha256.slice(0, 12)}`,
+          provenance: `Untouched MSAP.py + Biowasm ${request.options.align_software === "mafft" ? "MAFFT 7.520" : "MUSCLE 5.1.0"} · source bundle ${engineManifest.bundleSha256.slice(0, 12)}`,
         },
       });
       return;

@@ -4,7 +4,7 @@ const requiredFiles = [
   "site/index.html",
   "site/app.js",
   "site/pyodide-worker.js",
-  "site/muscle-worker.js",
+  "site/alignment-worker.js",
   "site/browser_runner.py",
   "site/build-engine.mjs",
 ];
@@ -51,7 +51,7 @@ for (const selector of ["script-search", "preflight-summary", "use-next-step"]) 
 }
 if (!worker.includes("removeTree(runtime, stage.runRoot)")) throw new Error("Pyodide run workspace cleanup is missing.");
 if (!app.includes("phyloprep-run.json")) throw new Error("Run provenance manifest is missing.");
-if (!app.includes('new Worker("muscle-worker.js")')) throw new Error("Dedicated cancellable MUSCLE worker is missing.");
+if (!app.includes('new Worker("alignment-worker.js")')) throw new Error("Dedicated cancellable alignment worker is missing.");
 
 console.log(`PhyloPrep Web smoke checks passed for ${visibleModules.length} visible modules.`);
 
@@ -63,9 +63,9 @@ if (!app.includes("protein_stop_symbol_cli: cliQuote(")) throw new Error("Protei
 if (!app.includes("taxon_separator_cli: cliQuote(")) throw new Error("Taxon separator CLI quoting is missing.");
 
 
-const muscleWorker = contents["site/muscle-worker.js"];
-if (!muscleWorker.includes("await cli.cat(outputPath)")) throw new Error("MUSCLE output must be read directly from the Aioli filesystem.");
-if (muscleWorker.includes("cli.download(outputPath)")) throw new Error("Worker-scoped Aioli blob URLs must not be used for MUSCLE output.");
+const muscleWorker = contents["site/alignment-worker.js"];
+if (!alignmentWorker.includes("await cli.cat(outputPath)")) throw new Error("MUSCLE output must be read directly from the Aioli filesystem.");
+if (alignmentWorker.includes("cli.download(outputPath)")) throw new Error("Worker-scoped Aioli blob URLs must not be used for MUSCLE output.");
 
 
 if (!app.includes('script: "phyloprep.py"') || !app.includes('script: "MSAP_batch.py"')) throw new Error("Batch workflow modules are missing.");
@@ -75,3 +75,11 @@ if (!phyloprepBlock.includes('multiple: true, pathList: true')) throw new Error(
 if (!batchBlock.includes('multiple: true, pathList: true')) throw new Error("MSAP_batch.py multi-file input must use browser pathlist mode.");
 if (!app.includes('name: "path-lists/inputs.pathlist"')) throw new Error("MSAP_batch browser input pathlist output is missing.");
 if (!app.includes('name: "inputs.pathlist"')) throw new Error("PhyloPrep browser input pathlist output is missing.");
+
+if (!alignmentWorker.includes('cli.exec("muscle -align "')) throw new Error("MUSCLE must use Aioli single-string exec form.");
+if (alignmentWorker.includes('cli.exec("muscle", [')) throw new Error("Two-argument Aioli exec form must not be used for MUSCLE.");
+
+if (!app.includes('["mafft", "MAFFT 7.520"]')) throw new Error("MAFFT 7.520 must be exposed in the browser aligner selector.");
+if (!worker.includes('option(values.align_software, "mafft")')) throw new Error("MSAP browser arguments must honor the selected aligner.");
+if (!alignmentWorker.includes('"mafft/7.520"')) throw new Error("Biowasm MAFFT 7.520 is missing from the alignment worker.");
+if (!alignmentWorker.includes('mafft ${mode} --thread 1 --quiet --auto')) throw new Error("MAFFT browser command must mirror MSAP.py alignment flags.");
