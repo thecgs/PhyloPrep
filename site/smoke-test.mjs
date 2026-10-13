@@ -61,3 +61,8 @@ if (!app.includes("const optionValues = rawParameterValues();")) throw new Error
 if (app.includes("protein_stop_symbol: cliQuote(")) throw new Error("Protein stop symbol must not be CLI-quoted in runtime options.");
 if (!app.includes("protein_stop_symbol_cli: cliQuote(")) throw new Error("Protein stop symbol CLI quoting is missing.");
 if (!app.includes("taxon_separator_cli: cliQuote(")) throw new Error("Taxon separator CLI quoting is missing.");
+
+
+const muscleWorker = contents["site/muscle-worker.js"];
+if (!muscleWorker.includes("await cli.cat(outputPath)")) throw new Error("MUSCLE output must be read directly from the Aioli filesystem.");
+if (muscleWorker.includes("cli.download(outputPath)")) throw new Error("Worker-scoped Aioli blob URLs must not be used for MUSCLE output.");
