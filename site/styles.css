@@ -211,6 +211,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, [tabindex]:focu
 .cancel-button:hover { color: #a94436; border-color: #d7a39c; background: #fff4f2; }
 .workspace-log { min-height: 22px; margin: 10px 0 0; color: var(--muted); font-size: 14px; }
 .workspace-log.error { color: #a94436; }
+.workspace-log.warning { color: var(--warning); font-weight: 700; }
 .workspace-log.success { color: #28704d; }
 
 .result-section, .command-section { margin-top: 24px; padding-top: 19px; border-top: 1px solid var(--line); }

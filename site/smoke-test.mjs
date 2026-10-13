@@ -115,3 +115,10 @@ if (!worker.includes("function pythonJson(value)")) {
 if (!worker.includes("run_phyloprep_finalize(${pythonJson(manifest)}, ${pythonJson(request.options)}")) {
   throw new Error("PhyloPrep finalizer must not inject JSON booleans directly as Python literals.");
 }
+
+if (!app.includes("No map.tsv selected and no FASTA IDs are shared across all loci")) {
+  throw new Error("PhyloPrep preflight must warn when mapping is absent and locus IDs do not overlap.");
+}
+if (!app.includes("if (result.partial)")) {
+  throw new Error("Recoverable PhyloPrep finalizer failures must render diagnostic outputs instead of a raw traceback.");
+}

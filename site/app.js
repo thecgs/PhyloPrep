@@ -927,6 +927,7 @@ async function updatePreflight() {
   let sequences = 0;
   let duplicateIds = 0;
   let malformedCodon = 0;
+  const fastaIdSets = [];
   for (const file of files) {
     if (!/\.(fa|faa|fas|fasta|aln|pep)$/i.test(file.name)) continue;
     const text = await file.text();
@@ -935,6 +936,7 @@ async function updatePreflight() {
     const ids = text.split(/\r?\n/).filter((line) => line.startsWith(">")).map((line) => line.slice(1).trim().split(/\s+/, 1)[0]).filter(Boolean);
     sequences += ids.length;
     duplicateIds += ids.length - new Set(ids).size;
+    fastaIdSets.push(new Set(ids));
     if ((rawParameterValues().seqtype || "nucl") === "codon") {
       const chunks = text.split(/^>/m).slice(1);
       malformedCodon += chunks.filter((chunk) => {
@@ -947,6 +949,13 @@ async function updatePreflight() {
   const problems = [];
   if (duplicateIds) problems.push(`<span class="preflight-error">${duplicateIds} duplicate FASTA ID(s)</span>`);
   if (malformedCodon) problems.push(`<span class="preflight-warning">${malformedCodon} sequence(s) are not complete codon multiples</span>`);
+  const mappingProvided = Boolean(selectedInputFiles.get("mapping")?.length);
+  if (activeModule().script === "phyloprep.py" && !mappingProvided && fastaIdSets.length > 1) {
+    const sharedIds = [...fastaIdSets[0]].filter((id) => fastaIdSets.slice(1).every((set) => set.has(id)));
+    if (!sharedIds.length) {
+      problems.push('<span class="preflight-warning">No map.tsv selected and no FASTA IDs are shared across all loci. If IDs are locus-specific (for example GenBank/CDS IDs), provide FASTA_ID→Taxon mapping before building a supermatrix.</span>');
+    }
+  }
   const level = totalBytes > 100 * 1024 ** 2 ? "Large — CLI recommended" : totalBytes > 25 * 1024 ** 2 ? "Moderate browser workload" : "Browser-friendly";
   elements.preflightStatus.textContent = level;
   elements.preflightSummary.innerHTML = [
@@ -1493,8 +1502,13 @@ async function runBrowserModule() {
     }
     renderGeneratedFiles();
     elements.useNextStep.hidden = !transferTarget(module);
-    setRunStage(4, "Completed");
-    setLog([result.summary || `Created ${generatedFiles.length} output file(s).`, result.provenance].filter(Boolean).join(" "), "success");
+    if (result.partial) {
+      setRunStage(3, "Needs map.tsv or missing-taxa adjustment", true);
+      setLog(result.user_error || result.summary || "PhyloPrep needs input adjustment before a supermatrix can be completed.", "warning");
+    } else {
+      setRunStage(4, "Completed");
+      setLog([result.summary || `Created ${generatedFiles.length} output file(s).`, result.provenance].filter(Boolean).join(" "), "success");
+    }
   } catch (error) {
     const cancelled = error.code === "CANCELLED";
     setRunStage(stage, cancelled ? "Run cancelled" : "Workflow needs attention", !cancelled);
