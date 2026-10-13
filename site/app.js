@@ -396,12 +396,38 @@ function implementationProfile(module) {
   };
 }
 
+function normalizeCatalogText(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/\.py\b/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function catalogSearchText(module) {
+  return normalizeCatalogText([
+    module.script,
+    module.title,
+    module.category,
+    module.summary,
+    ...(module.inputs || []),
+    ...(module.outputs || []),
+    ...(module.parameters || []).flatMap((parameter) => [parameter.label, parameter.flag, parameter.description]),
+  ].join(" "));
+}
+
 function renderCatalog() {
   elements.scriptList.replaceChildren();
-  const query = catalogQuery.trim().toLowerCase();
+  const query = normalizeCatalogText(catalogQuery);
+  const tokens = query.split(/\s+/).filter(Boolean);
   const matched = modules
     .map((module, index) => ({ module, index }))
-    .filter(({ module }) => !query || [module.script, module.title, module.category, module.summary].some((value) => String(value || "").toLowerCase().includes(query)));
+    .filter(({ module }) => {
+      if (!tokens.length) return true;
+      const haystack = catalogSearchText(module);
+      const compact = haystack.replace(/\s+/g, "");
+      return tokens.every((token) => haystack.includes(token) || compact.includes(token));
+    });
   if (!matched.length) {
     const empty = document.createElement("p");
     empty.className = "catalog-empty";
@@ -1529,10 +1555,13 @@ async function runBrowserModule() {
   }
 }
 
-elements.scriptSearch.addEventListener("input", () => {
+function refreshCatalogSearch() {
   catalogQuery = elements.scriptSearch.value;
   renderCatalog();
-});
+}
+
+elements.scriptSearch.addEventListener("input", refreshCatalogSearch);
+elements.scriptSearch.addEventListener("search", refreshCatalogSearch);
 elements.useNextStep.addEventListener("click", prepareNextStep);
 elements.clearInputFiles.addEventListener("click", clearAllInputFiles);
 elements.chooseFolder.addEventListener("click", chooseOutputFolder);

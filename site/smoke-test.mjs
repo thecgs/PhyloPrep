@@ -129,3 +129,10 @@ if (!html.includes('id="clear-input-files"')) {
 if (!app.includes("function clearAllInputFiles()") || !app.includes('elements.clearInputFiles.addEventListener("click", clearAllInputFiles)')) {
   throw new Error("Clear all must remove every selected input file and refresh the workspace.");
 }
+
+if (!app.includes("function normalizeCatalogText(value)") || !app.includes("function catalogSearchText(module)")) {
+  throw new Error("Tool search must normalize punctuation and search across module metadata.");
+}
+if (!app.includes('elements.scriptSearch.addEventListener("search", refreshCatalogSearch)')) {
+  throw new Error("Tool search must respond to the native search-field clear action.");
+}
