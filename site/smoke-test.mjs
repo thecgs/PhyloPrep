@@ -115,3 +115,24 @@ if (!worker.includes("function pythonJson(value)")) {
 if (!worker.includes("run_phyloprep_finalize(${pythonJson(manifest)}, ${pythonJson(request.options)}")) {
   throw new Error("PhyloPrep finalizer must not inject JSON booleans directly as Python literals.");
 }
+
+if (!app.includes("No map.tsv selected and no FASTA IDs are shared across all loci")) {
+  throw new Error("PhyloPrep preflight must warn when mapping is absent and locus IDs do not overlap.");
+}
+if (!app.includes("if (result.partial)")) {
+  throw new Error("Recoverable PhyloPrep finalizer failures must render diagnostic outputs instead of a raw traceback.");
+}
+
+if (!html.includes('id="clear-input-files"')) {
+  throw new Error("Input selection needs a one-click Clear all control.");
+}
+if (!app.includes("function clearAllInputFiles()") || !app.includes('elements.clearInputFiles.addEventListener("click", clearAllInputFiles)')) {
+  throw new Error("Clear all must remove every selected input file and refresh the workspace.");
+}
+
+if (!app.includes("function normalizeCatalogText(value)") || !app.includes("function catalogSearchText(module)")) {
+  throw new Error("Tool search must normalize punctuation and search across module metadata.");
+}
+if (!app.includes('elements.scriptSearch.addEventListener("search", refreshCatalogSearch)')) {
+  throw new Error("Tool search must respond to the native search-field clear action.");
+}

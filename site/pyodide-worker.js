@@ -282,12 +282,15 @@ self.addEventListener("message", async (event) => {
       const manifest = stage.files.map(({ name, path, role, inputKey, fasta }) => ({ name, path, role, inputKey, fasta }));
       const raw = await runtime.runPythonAsync(`run_phyloprep_finalize(${pythonJson(manifest)}, ${pythonJson(request.options)}, ${JSON.stringify(stage.outputRoot)})`);
       const result = JSON.parse(raw);
-      if (!result.ok) throw new Error(result.error || "The browser PhyloPrep pipeline could not complete.");
+      if (!result.ok && !result.recoverable) {
+        throw new Error(result.user_error || result.error || "The browser PhyloPrep pipeline could not complete.");
+      }
       self.postMessage({
         type: "result",
         runId,
         result: {
           ...result,
+          partial: Boolean(result.recoverable),
           provenance: `Browser phyloprep.py adapter · original downstream modules · source bundle ${engineManifest.bundleSha256.slice(0, 12)}`,
         },
       });

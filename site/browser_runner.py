@@ -323,6 +323,7 @@ def run_phyloprep_finalize(file_manifest, options, output_root, engine_root="/en
     root = Path(output_root).resolve()
     root.mkdir(parents=True, exist_ok=True)
     stdout, stderr = io.StringIO(), io.StringIO()
+    mapping_supplied = False
     try:
         if str(engine) not in sys.path:
             sys.path.insert(0, str(engine))
@@ -356,6 +357,7 @@ def run_phyloprep_finalize(file_manifest, options, output_root, engine_root="/en
         sequence_audit.merge_reports(change_reports, merged_changes)
 
         mapping = Path(mapping_items[0]["path"]) if mapping_items else None
+        mapping_supplied = mapping is not None
         taxon_mapping = rename_taxa.read_mapping(mapping) if mapping else None
         if mapping:
             phyloprep.annotate_change_report(merged_changes, taxon_mapping)
@@ -419,11 +421,39 @@ def run_phyloprep_finalize(file_manifest, options, output_root, engine_root="/en
             "stdout": stdout.getvalue(),
             "stderr": stderr.getvalue(),
         })
-    except Exception:
+    except Exception as error:
         traceback.print_exc(file=stderr)
+        technical_error = stderr.getvalue().strip() or "The browser PhyloPrep pipeline failed."
+        message = str(error)
+        if "No genes were included in the supermatrix" in message:
+            files = _visible_output_files(root)
+            if mapping_supplied:
+                user_error = (
+                    "No supermatrix could be built with missing-taxa=skip-gene because no locus retained the full "
+                    "taxon set. Inspect supermatrix.report.tsv. If taxa are genuinely absent, use pad-gaps; if the "
+                    "mapping is incorrect, correct map.tsv and rerun."
+                )
+            else:
+                user_error = (
+                    "No supermatrix could be built because no map.tsv was provided and the FASTA IDs do not resolve "
+                    "to a shared taxon set across loci. This commonly happens with locus-specific GenBank/CDS IDs. "
+                    "Provide a two-column map.tsv (FASTA_ID<TAB>Taxon) and rerun. Use pad-gaps only for genuinely "
+                    "missing taxa, not to replace taxon mapping. Diagnostic reports and intermediate outputs are "
+                    "available below."
+                )
+            return json.dumps({
+                "ok": False,
+                "recoverable": True,
+                "files": files,
+                "user_error": user_error,
+                "summary": "PhyloPrep stopped before supermatrix completion; diagnostic files were preserved.",
+                "technical_error": technical_error,
+                "stdout": stdout.getvalue(),
+                "stderr": stderr.getvalue(),
+            })
         return json.dumps({
             "ok": False,
-            "error": stderr.getvalue().strip() or "The browser PhyloPrep pipeline failed.",
+            "error": technical_error,
             "stdout": stdout.getvalue(),
             "stderr": stderr.getvalue(),
         })

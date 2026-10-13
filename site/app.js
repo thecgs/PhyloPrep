@@ -10,6 +10,7 @@ const elements = {
   outputFolder: document.querySelector("#output-folder-display"),
   inputFileFields: document.querySelector("#input-file-fields"),
   inputFilesList: document.querySelector("#input-files-list"),
+  clearInputFiles: document.querySelector("#clear-input-files"),
   inputFilesHelp: document.querySelector("#input-files-help"),
   outputNameLabel: document.querySelector("#output-name-label"),
   outputName: document.querySelector("#output-name"),
@@ -395,12 +396,38 @@ function implementationProfile(module) {
   };
 }
 
+function normalizeCatalogText(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/\.py\b/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function catalogSearchText(module) {
+  return normalizeCatalogText([
+    module.script,
+    module.title,
+    module.category,
+    module.summary,
+    ...(module.inputs || []),
+    ...(module.outputs || []),
+    ...(module.parameters || []).flatMap((parameter) => [parameter.label, parameter.flag, parameter.description]),
+  ].join(" "));
+}
+
 function renderCatalog() {
   elements.scriptList.replaceChildren();
-  const query = catalogQuery.trim().toLowerCase();
+  const query = normalizeCatalogText(catalogQuery);
+  const tokens = query.split(/\s+/).filter(Boolean);
   const matched = modules
     .map((module, index) => ({ module, index }))
-    .filter(({ module }) => !query || [module.script, module.title, module.category, module.summary].some((value) => String(value || "").toLowerCase().includes(query)));
+    .filter(({ module }) => {
+      if (!tokens.length) return true;
+      const haystack = catalogSearchText(module);
+      const compact = haystack.replace(/\s+/g, "");
+      return tokens.every((token) => haystack.includes(token) || compact.includes(token));
+    });
   if (!matched.length) {
     const empty = document.createElement("p");
     empty.className = "catalog-empty";
@@ -619,6 +646,14 @@ function removeInputFile(inputKey, index) {
   void renderInputFiles();
 }
 
+function clearAllInputFiles() {
+  inputControls().forEach((control) => {
+    selectedInputFiles.set(control.dataset.inputKey, []);
+    control.value = "";
+  });
+  void renderInputFiles();
+}
+
 function virtualInputPath(name) {
   return `/work/input/${name}`;
 }
@@ -804,6 +839,7 @@ function selectModule(index) {
     : "Select the files required by this module.";
   renderInputFileFields(module);
   elements.inputFilesList.textContent = "No files selected.";
+  elements.clearInputFiles.hidden = true;
   if (pendingTransfer?.script === module.script) {
     selectedInputFiles = pendingTransfer.inputs;
     pendingTransfer = undefined;
@@ -867,6 +903,7 @@ async function renderInputFiles() {
       : (control.multiple ? "Select local files" : "Select a local file");
     display.title = selected.map((file) => file.name).join(", ");
   });
+  elements.clearInputFiles.hidden = names.length === 0;
   if (!names.length) {
     elements.inputFilesList.textContent = "No files selected.";
   } else {
@@ -927,6 +964,7 @@ async function updatePreflight() {
   let sequences = 0;
   let duplicateIds = 0;
   let malformedCodon = 0;
+  const fastaIdSets = [];
   for (const file of files) {
     if (!/\.(fa|faa|fas|fasta|aln|pep)$/i.test(file.name)) continue;
     const text = await file.text();
@@ -935,6 +973,7 @@ async function updatePreflight() {
     const ids = text.split(/\r?\n/).filter((line) => line.startsWith(">")).map((line) => line.slice(1).trim().split(/\s+/, 1)[0]).filter(Boolean);
     sequences += ids.length;
     duplicateIds += ids.length - new Set(ids).size;
+    fastaIdSets.push(new Set(ids));
     if ((rawParameterValues().seqtype || "nucl") === "codon") {
       const chunks = text.split(/^>/m).slice(1);
       malformedCodon += chunks.filter((chunk) => {
@@ -947,6 +986,13 @@ async function updatePreflight() {
   const problems = [];
   if (duplicateIds) problems.push(`<span class="preflight-error">${duplicateIds} duplicate FASTA ID(s)</span>`);
   if (malformedCodon) problems.push(`<span class="preflight-warning">${malformedCodon} sequence(s) are not complete codon multiples</span>`);
+  const mappingProvided = Boolean(selectedInputFiles.get("mapping")?.length);
+  if (activeModule().script === "phyloprep.py" && !mappingProvided && fastaIdSets.length > 1) {
+    const sharedIds = [...fastaIdSets[0]].filter((id) => fastaIdSets.slice(1).every((set) => set.has(id)));
+    if (!sharedIds.length) {
+      problems.push('<span class="preflight-warning">No map.tsv selected and no FASTA IDs are shared across all loci. If IDs are locus-specific (for example GenBank/CDS IDs), provide FASTA_ID→Taxon mapping before building a supermatrix.</span>');
+    }
+  }
   const level = totalBytes > 100 * 1024 ** 2 ? "Large — CLI recommended" : totalBytes > 25 * 1024 ** 2 ? "Moderate browser workload" : "Browser-friendly";
   elements.preflightStatus.textContent = level;
   elements.preflightSummary.innerHTML = [
@@ -1493,8 +1539,13 @@ async function runBrowserModule() {
     }
     renderGeneratedFiles();
     elements.useNextStep.hidden = !transferTarget(module);
-    setRunStage(4, "Completed");
-    setLog([result.summary || `Created ${generatedFiles.length} output file(s).`, result.provenance].filter(Boolean).join(" "), "success");
+    if (result.partial) {
+      setRunStage(3, "Needs map.tsv or missing-taxa adjustment", true);
+      setLog(result.user_error || result.summary || "PhyloPrep needs input adjustment before a supermatrix can be completed.", "warning");
+    } else {
+      setRunStage(4, "Completed");
+      setLog([result.summary || `Created ${generatedFiles.length} output file(s).`, result.provenance].filter(Boolean).join(" "), "success");
+    }
   } catch (error) {
     const cancelled = error.code === "CANCELLED";
     setRunStage(stage, cancelled ? "Run cancelled" : "Workflow needs attention", !cancelled);
@@ -1504,11 +1555,15 @@ async function runBrowserModule() {
   }
 }
 
-elements.scriptSearch.addEventListener("input", () => {
+function refreshCatalogSearch() {
   catalogQuery = elements.scriptSearch.value;
   renderCatalog();
-});
+}
+
+elements.scriptSearch.addEventListener("input", refreshCatalogSearch);
+elements.scriptSearch.addEventListener("search", refreshCatalogSearch);
 elements.useNextStep.addEventListener("click", prepareNextStep);
+elements.clearInputFiles.addEventListener("click", clearAllInputFiles);
 elements.chooseFolder.addEventListener("click", chooseOutputFolder);
 elements.outputName.addEventListener("input", updateCommand);
 elements.run.addEventListener("click", runBrowserModule);
