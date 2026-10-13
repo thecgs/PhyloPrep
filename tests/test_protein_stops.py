@@ -105,7 +105,7 @@ def test_stop_option_invalidates_resume_and_trimming_uses_cleaned_protein(tmp_pa
     source.write_text('>a\nMA.G..\n>b\nMAAG.\n')
     result = subprocess.run(args + ['--protein-stop-symbol', '.'], cwd=tmp_path, env=env, capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
-    assert {str(r.seq) for r in SeqIO.parse(output/'protein.mafft.prot.trimal.aln', 'fasta')} == {'MAG'}
+    assert {str(r.seq) for r in SeqIO.parse(output/'protein.mafft.prot.trimmed.aln', 'fasta')} == {'MAG'}
     assert len(rows(output/'reports/sequence_changes.tsv')) == 4
 
 

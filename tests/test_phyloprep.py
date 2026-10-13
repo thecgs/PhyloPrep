@@ -54,7 +54,7 @@ def test_codon_pipeline_and_resume(tmp_path, fake_aligner, mapping_alias):
         check_formats(protein_dir, "supermatrix", {a: "AG", b: "AG"})
         assert "datatype=protein" in (protein_dir / "supermatrix.nex").read_text().lower()
         assert not list(protein_dir.glob("codon*"))
-        suffix = ".aln" if variant == "raw" else ".trimal.aln"
+        suffix = ".aln" if variant == "raw" else ".trimmed.aln"
         for seqtype in ("codon", "prot"):
             paths = (output / "qc" / seqtype / variant / "alignment.pass.tsv").read_text()
             assert f".{seqtype}{suffix}" in paths

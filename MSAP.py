@@ -256,7 +256,7 @@ def run_pseudogene(args, infile, prefix, tools):
     os.remove(input_report)
     if args.notrim:
         return
-    out_nt, out_aa = prefix + '.macse.codon.trimal.aln', prefix + '.macse.prot.trimal.aln'
+    out_nt, out_aa = prefix + '.macse.codon.trimmed.aln', prefix + '.macse.prot.trimmed.aln'
     if args.trim_software == 'trimal':
         trim_codon_with_trimal(tools['trimal'], args.trimal_args, aa, nt, out_aa, out_nt)
         return
@@ -493,20 +493,20 @@ Notes:
                 software_path["trimal"], trimal_args,
                 f"{prefix}.{align_software}.prot.aln",
                 f"{prefix}.{align_software}.codon.aln",
-                f"{prefix}.{align_software}.prot.trimal.aln",
-                f"{prefix}.{align_software}.codon.trimal.aln",
+                f"{prefix}.{align_software}.prot.trimmed.aln",
+                f"{prefix}.{align_software}.codon.trimmed.aln",
             )
         elif not notrim:
             trim_alignment(
                 trim_software, software_path.get("trimal"), trimal_args,
                 f"{prefix}.{align_software}.codon.aln",
-                f"{prefix}.{align_software}.codon.trimal.aln",
+                f"{prefix}.{align_software}.codon.trimmed.aln",
                 "codon", args.G, args.N, args.X,
             )
             trim_alignment(
                 trim_software, software_path.get("trimal"), trimal_args,
                 f"{prefix}.{align_software}.prot.aln",
-                f"{prefix}.{align_software}.prot.trimal.aln",
+                f"{prefix}.{align_software}.prot.trimmed.aln",
                 "prot", args.G, args.N, args.X,
             )
     else:
@@ -515,7 +515,7 @@ Notes:
             trim_alignment(
                 trim_software, software_path.get("trimal"), trimal_args,
                 f"{prefix}.{align_software}.{seqtype}.aln",
-                f"{prefix}.{align_software}.{seqtype}.trimal.aln",
+                f"{prefix}.{align_software}.{seqtype}.trimmed.aln",
                 seqtype, args.G, args.N, args.X,
             )
 

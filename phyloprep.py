@@ -390,7 +390,7 @@ def prepare_group(args, inputs, root, stage, seqtype, variant):
     print(f"[phyloprep] Processing {seqtype}/{variant}", flush=True)
     # Select only this invocation's inputs, never historical output globs.
     suffix = f".{args.align_software}.{seqtype}"
-    suffix += ".aln" if variant == "raw" else ".trimal.aln"
+    suffix += ".aln" if variant == "raw" else ".trimmed.aln"
     selected = [root / "alignments" / (source.stem + suffix) for source in inputs]
     selected = [path for path in selected if path.is_file()]
     if not selected:
