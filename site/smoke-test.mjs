@@ -105,3 +105,13 @@ if (!alignmentWorker.includes('if (tool === "mafft") {\n        try { await cli.
 if (alignmentWorker.includes('let cliPromise;')) {
   throw new Error("MAFFT and MUSCLE must not share one persistent Aioli instance.");
 }
+
+if (!alignmentWorker.includes('"base/1.0.0"')) {
+  throw new Error("Aioli MUSCLE reinit requires base/1.0.0 as the persistent filesystem module.");
+}
+if (!worker.includes("function pythonJson(value)")) {
+  throw new Error("Pyodide worker must convert JavaScript objects to Python through json.loads().");
+}
+if (!worker.includes("run_phyloprep_finalize(${pythonJson(manifest)}, ${pythonJson(request.options)}")) {
+  throw new Error("PhyloPrep finalizer must not inject JSON booleans directly as Python literals.");
+}
