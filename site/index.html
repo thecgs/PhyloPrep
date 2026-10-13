@@ -49,7 +49,10 @@
           </section>
 
           <div id="input-file-fields" aria-live="polite"></div>
-          <div id="input-files-list" class="input-files-list" aria-live="polite">No files selected.</div>
+          <div class="input-files-toolbar">
+            <div id="input-files-list" class="input-files-list" aria-live="polite">No files selected.</div>
+            <button id="clear-input-files" class="clear-input-files" type="button" hidden>Clear all</button>
+          </div>
           <p id="input-files-help" class="field-help"></p>
 
           <section class="preflight-panel" aria-labelledby="preflight-title">

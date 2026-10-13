@@ -10,6 +10,7 @@ const elements = {
   outputFolder: document.querySelector("#output-folder-display"),
   inputFileFields: document.querySelector("#input-file-fields"),
   inputFilesList: document.querySelector("#input-files-list"),
+  clearInputFiles: document.querySelector("#clear-input-files"),
   inputFilesHelp: document.querySelector("#input-files-help"),
   outputNameLabel: document.querySelector("#output-name-label"),
   outputName: document.querySelector("#output-name"),
@@ -619,6 +620,14 @@ function removeInputFile(inputKey, index) {
   void renderInputFiles();
 }
 
+function clearAllInputFiles() {
+  inputControls().forEach((control) => {
+    selectedInputFiles.set(control.dataset.inputKey, []);
+    control.value = "";
+  });
+  void renderInputFiles();
+}
+
 function virtualInputPath(name) {
   return `/work/input/${name}`;
 }
@@ -804,6 +813,7 @@ function selectModule(index) {
     : "Select the files required by this module.";
   renderInputFileFields(module);
   elements.inputFilesList.textContent = "No files selected.";
+  elements.clearInputFiles.hidden = true;
   if (pendingTransfer?.script === module.script) {
     selectedInputFiles = pendingTransfer.inputs;
     pendingTransfer = undefined;
@@ -867,6 +877,7 @@ async function renderInputFiles() {
       : (control.multiple ? "Select local files" : "Select a local file");
     display.title = selected.map((file) => file.name).join(", ");
   });
+  elements.clearInputFiles.hidden = names.length === 0;
   if (!names.length) {
     elements.inputFilesList.textContent = "No files selected.";
   } else {
@@ -1523,6 +1534,7 @@ elements.scriptSearch.addEventListener("input", () => {
   renderCatalog();
 });
 elements.useNextStep.addEventListener("click", prepareNextStep);
+elements.clearInputFiles.addEventListener("click", clearAllInputFiles);
 elements.chooseFolder.addEventListener("click", chooseOutputFolder);
 elements.outputName.addEventListener("input", updateCommand);
 elements.run.addEventListener("click", runBrowserModule);

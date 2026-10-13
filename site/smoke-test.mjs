@@ -122,3 +122,10 @@ if (!app.includes("No map.tsv selected and no FASTA IDs are shared across all lo
 if (!app.includes("if (result.partial)")) {
   throw new Error("Recoverable PhyloPrep finalizer failures must render diagnostic outputs instead of a raw traceback.");
 }
+
+if (!html.includes('id="clear-input-files"')) {
+  throw new Error("Input selection needs a one-click Clear all control.");
+}
+if (!app.includes("function clearAllInputFiles()") || !app.includes('elements.clearInputFiles.addEventListener("click", clearAllInputFiles)')) {
+  throw new Error("Clear all must remove every selected input file and refresh the workspace.");
+}
