@@ -366,7 +366,7 @@ def run_phyloprep_finalize(file_manifest, options, output_root, engine_root="/en
 
         args = types.SimpleNamespace(
             seqtype=str(options.get("seqtype", "codon")),
-            align_software=str(options.get("align_software", "mafft")),
+            align_software=str(options.get("align_software", "muscle")),
             notrim=bool(options.get("notrim", False)),
             genetic_code=int(options.get("genetic_code", 1)),
             G=number("gap_ratio", 0.2),

@@ -103,7 +103,7 @@ const modules = [
       { flag: "-st", label: "Sequence type", description: "Browser pipeline supports codon, protein, and nucleotide modes. Pseudogene/MACSE remains CLI-only.", type: "select", value: "codon", options: [["codon", "Codon / CDS"], ["prot", "Protein"], ["nucl", "Nucleotide"]], token: "seqtype" },
       geneticCodeParameter(),
       { flag: "--missing-taxa", label: "Missing taxa policy", description: "Skip genes missing taxa, or pad missing taxa with gaps during concatenation.", type: "select", value: "skip-gene", options: [["skip-gene", "Skip gene"], ["pad-gaps", "Pad gaps"]], token: "missing_taxa" },
-      { flag: "-s", label: "Alignment software", description: "Runs locally through Biowasm/WebAssembly. Browser MAFFT uses Biowasm's compiled tbfast + dvtditr pipeline; the CLI continues to use the upstream mafft wrapper.", type: "select", value: "mafft", options: [["mafft", "MAFFT 7.520 (Biowasm)"], ["muscle", "MUSCLE 5.1.0"]], token: "align_software" },
+      { flag: "-s", label: "Alignment software", description: "Runs locally through Biowasm/WebAssembly. MUSCLE is the recommended browser default. MAFFT is optional E-INS-i through Biowasm's compiled tbfast + dvtditr pipeline; CLI -s mafft continues to use upstream mafft --auto and can differ.", type: "select", value: "muscle", options: [["muscle", "MUSCLE 5.1.0 (recommended)"], ["mafft", "MAFFT E-INS-i 7.520 (Biowasm)"]], token: "align_software" },
       { flag: "-t", label: "Threads per locus", description: "Browser fixed to one thread for GitHub Pages/WebAssembly compatibility.", type: "select", value: "1", options: [["1", "1 (browser fixed)"]], token: "thread" },
       { flag: "-j", label: "Concurrent loci", description: "Browser edition processes loci sequentially to keep memory predictable.", type: "select", value: "1", options: [["1", "1 (browser sequential)"]], token: "jobs" },
       { flag: "-ts", label: "Trimming software", description: "Browser fixed to PhyloPrep's bundled trimAlnSeq.py.", type: "select", value: "trimAlnSeq", options: [["trimAlnSeq", "trimAlnSeq.py (browser fixed)"]], token: "trim_software" },
@@ -132,7 +132,7 @@ const modules = [
     parameters: [
       { flag: "-st", label: "Sequence type", description: "Browser batch supports codon, protein, and nucleotide modes. Pseudogene/MACSE remains CLI-only.", type: "select", value: "codon", options: [["codon", "Codon / CDS"], ["prot", "Protein"], ["nucl", "Nucleotide"]], token: "seqtype" },
       geneticCodeParameter(),
-      { flag: "-s", label: "Alignment software", description: "Runs locally through Biowasm/WebAssembly. Browser MAFFT uses Biowasm's compiled tbfast + dvtditr pipeline; the CLI continues to use the upstream mafft wrapper.", type: "select", value: "mafft", options: [["mafft", "MAFFT 7.520 (Biowasm)"], ["muscle", "MUSCLE 5.1.0"]], token: "align_software" },
+      { flag: "-s", label: "Alignment software", description: "Runs locally through Biowasm/WebAssembly. MUSCLE is the recommended browser default. MAFFT is optional E-INS-i through Biowasm's compiled tbfast + dvtditr pipeline; CLI -s mafft continues to use upstream mafft --auto and can differ.", type: "select", value: "muscle", options: [["muscle", "MUSCLE 5.1.0 (recommended)"], ["mafft", "MAFFT E-INS-i 7.520 (Biowasm)"]], token: "align_software" },
       { flag: "-t", label: "Threads per locus", description: "Browser fixed to one thread.", type: "select", value: "1", options: [["1", "1 (browser fixed)"]], token: "thread" },
       { flag: "-j", label: "Concurrent loci", description: "Browser edition processes loci sequentially.", type: "select", value: "1", options: [["1", "1 (browser sequential)"]], token: "jobs" },
       { flag: "-ts", label: "Trimming software", description: "Browser fixed to PhyloPrep's bundled trimAlnSeq.py.", type: "select", value: "trimAlnSeq", options: [["trimAlnSeq", "trimAlnSeq.py (browser fixed)"]], token: "trim_software" },
@@ -371,14 +371,14 @@ function implementationProfile(module) {
     return {
       key: "compatible",
       label: "Browser PhyloPrep pipeline",
-      note: "The browser orchestrates the repository's original preparation modules locally: MSAP preprocessing/back-translation/trimming in Pyodide, MAFFT 7.520 or MUSCLE 5.1.0 in Biowasm, then the original QC, renaming, concatenation, codon splitting, four-fold extraction and format-conversion code. Linux process-management features are replaced by a browser-safe sequential adapter.",
+      note: "The browser orchestrates the repository's original preparation modules locally: MSAP preprocessing/back-translation/trimming in Pyodide, MUSCLE 5.1.0 or optional MAFFT E-INS-i 7.520 in Biowasm, then the original QC, renaming, concatenation, codon splitting, four-fold extraction and format-conversion code. Linux process-management features are replaced by a browser-safe sequential adapter.",
     };
   }
   if (module.browserWorkflow === "batch") {
     return {
       key: "compatible",
       label: "Browser batch adapter",
-      note: "Processes loci sequentially in the browser with the same MSAP sequence workflow and Biowasm MAFFT 7.520 or MUSCLE 5.1.0, then generates batch-style path lists and a merged sequence-change report. Linux process groups, file locks and concurrent jobs are intentionally not used in the browser.",
+      note: "Processes loci sequentially in the browser with the same MSAP sequence workflow and Biowasm MUSCLE 5.1.0 or MAFFT E-INS-i 7.520, then generates batch-style path lists and a merged sequence-change report. Linux process groups, file locks and concurrent jobs are intentionally not used in the browser.",
     };
   }
   if (module.fullWorkflow) {
@@ -743,7 +743,11 @@ function valuesForCommand() {
 
 function updateCommand() {
   const values = valuesForCommand();
-  elements.command.textContent = activeModule().command.replace(/\{([a-z_]+)\}/g, (_, key) => values[key] ?? `{${key}}`);
+  let command = activeModule().command.replace(/\{([a-z_]+)\}/g, (_, key) => values[key] ?? `{${key}}`);
+  if (["phyloprep.py", "MSAP_batch.py"].includes(activeModule().script) && values.align_software === "mafft") {
+    command += "\n# Web note: MAFFT E-INS-i 7.520 (Biowasm) is selected here; CLI -s mafft runs upstream mafft --auto and may produce different alignments.";
+  }
+  elements.command.textContent = command;
 }
 
 function setRunStage(stage = 0, label = "Ready to run", failed = false) {
@@ -1245,7 +1249,7 @@ async function runMsapBrowserWorkflow(request) {
   const probe = await runInWorker({ type: "msap-probe", ...request });
   if (!probe.alignmentInput) throw new Error("MSAP.py did not provide an input for the selected browser aligner.");
 
-  const alignerLabel = probe.tool === "mafft" ? "MAFFT 7.520 (Biowasm)" : "MUSCLE 5.1.0";
+  const alignerLabel = probe.tool === "mafft" ? "MAFFT E-INS-i 7.520 (Biowasm)" : "MUSCLE 5.1.0";
   elements.cancelRun.hidden = false;
   setRunStage(2, `Running Biowasm ${alignerLabel}`);
   elements.runtimeStatus.textContent = `Biowasm ${alignerLabel} running`;
@@ -1310,7 +1314,7 @@ async function runMsapBatchBrowserWorkflow(request) {
   for (let index = 0; index < inputs.length; index += 1) {
     const input = inputs[index];
     setRunStage(2, `Aligning locus ${index + 1}/${inputs.length}: ${input.name}`);
-    elements.runtimeStatus.textContent = `${request.options.align_software === "mafft" ? "MAFFT" : "MUSCLE"} locus ${index + 1}/${inputs.length}`;
+    elements.runtimeStatus.textContent = `${request.options.align_software === "mafft" ? "MAFFT E-INS-i" : "MUSCLE"} locus ${index + 1}/${inputs.length}`;
     const result = await runMsapBrowserWorkflow({
       ...request,
       script: "MSAP.py",
@@ -1327,7 +1331,7 @@ async function runMsapBatchBrowserWorkflow(request) {
   return {
     files: outputs,
     summary: `Processed ${inputs.length} loci with the browser MSAP batch workflow.`,
-    provenance: `Browser MSAP_batch adapter · untouched MSAP.py + Biowasm ${request.options.align_software === "mafft" ? "MAFFT 7.520 (Biowasm)" : "MUSCLE 5.1.0"}`,
+    provenance: `Browser MSAP_batch adapter · untouched MSAP.py + Biowasm ${request.options.align_software === "mafft" ? "MAFFT E-INS-i 7.520 (Biowasm)" : "MUSCLE 5.1.0"}`,
   };
 }
 
@@ -1400,7 +1404,7 @@ async function buildRunManifest(module, request, result, outputs) {
     runtime: {
       pyodide: "0.27.2",
       aligner: ["phyloprep.py", "MSAP_batch.py"].includes(module.script)
-        ? (request.options.align_software === "mafft" ? "Biowasm MAFFT 7.520" : "Biowasm MUSCLE 5.1.0")
+        ? (request.options.align_software === "mafft" ? "Biowasm MAFFT E-INS-i 7.520" : "Biowasm MUSCLE 5.1.0")
         : null,
       user_agent: navigator.userAgent,
     },

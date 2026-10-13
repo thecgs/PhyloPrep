@@ -221,7 +221,7 @@ function msapArguments(request, stage) {
   return [
     "-i", inputFile(stage),
     "-st", option(values.seqtype, "codon"),
-    "-s", option(values.align_software, "mafft"),
+    "-s", option(values.align_software, "muscle"),
     "-t", "1",
     "-g", option(values.genetic_code, "1"),
     "-ts", "trimAlnSeq",
@@ -266,7 +266,7 @@ self.addEventListener("message", async (event) => {
         runId,
         result: {
           ...result,
-          provenance: `Untouched MSAP.py + Biowasm ${request.options.align_software === "mafft" ? "MAFFT 7.520" : "MUSCLE 5.1.0"} · source bundle ${engineManifest.bundleSha256.slice(0, 12)}`,
+          provenance: `Untouched MSAP.py + Biowasm ${request.options.align_software === "mafft" ? "MAFFT E-INS-i 7.520" : "MUSCLE 5.1.0"} · source bundle ${engineManifest.bundleSha256.slice(0, 12)}`,
         },
       });
       return;
