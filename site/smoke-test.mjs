@@ -79,7 +79,15 @@ if (!app.includes('name: "inputs.pathlist"')) throw new Error("PhyloPrep browser
 if (!alignmentWorker.includes('cli.exec("muscle -align "')) throw new Error("MUSCLE must use Aioli single-string exec form.");
 if (alignmentWorker.includes('cli.exec("muscle", [')) throw new Error("Two-argument Aioli exec form must not be used for MUSCLE.");
 
-if (!app.includes('["mafft", "MAFFT 7.520 (Biowasm)"]')) throw new Error("MAFFT 7.520 must be exposed in the browser aligner selector.");
-if (!worker.includes('option(values.align_software, "mafft")')) throw new Error("MSAP browser arguments must honor the selected aligner.");
+if (!app.includes('["muscle", "MUSCLE 5.1.0 (recommended)"]')) throw new Error("MUSCLE must be the recommended browser default.");
+if (!app.includes('["mafft", "MAFFT E-INS-i 7.520 (Biowasm)"]')) throw new Error("MAFFT E-INS-i 7.520 must be exposed as an optional browser aligner.");
+if (!worker.includes('option(values.align_software, "muscle")')) throw new Error("MUSCLE must be the browser fallback aligner.");
 if (!alignmentWorker.includes('program: "tbfast"') || !alignmentWorker.includes('program: "dvtditr"')) throw new Error("Biowasm MAFFT core programs are missing from the alignment worker.");
 if (alignmentWorker.includes('"mafft/7.520"')) throw new Error("Biowasm MAFFT has no mafft.js wrapper; load tbfast/dvtditr explicitly.");
+
+if (!app.includes("CLI -s mafft runs upstream mafft --auto")) throw new Error("The Web/CLI MAFFT difference must be disclosed in the command preview.");
+
+const missingTaxaOptions = 'options: [["skip-gene", "skip-gene"], ["pad-gaps", "pad-gaps"]]';
+if (app.split(missingTaxaOptions).length - 1 < 2) {
+  throw new Error("phyloprep.py and get_supergenes.py must use identical skip-gene/pad-gaps Missing taxa policy labels.");
+}

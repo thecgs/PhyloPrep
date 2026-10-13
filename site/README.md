@@ -22,7 +22,7 @@ filtering, renaming, trimming, and conversion.
 The browser also exposes the original single-locus `MSAP.py` workflow for
 `codon`, `prot`, and `nucl` input. `MSAP.py` itself is not modified: the browser
 runs it in Pyodide until it requests MAFFT or MUSCLE, delegates that command to
-Biowasm MAFFT 7.520 (`tbfast` + `dvtditr`) or MUSCLE 5.1.0/WebAssembly, and then resumes the same
+Biowasm MUSCLE 5.1.0 or optional MAFFT E-INS-i 7.520 (`tbfast` + `dvtditr`)/WebAssembly, and then resumes the same
 original workflow with the result. Back-translation and the default
 `trimAlnSeq.py` trimming remain the original bundled Python scripts. The
 browser implementation uses one alignment worker. The Biowasm MAFFT package
@@ -50,8 +50,9 @@ alignments and invokes the repository's original QC, taxon-renaming,
 supermatrix, codon-position, four-fold and FASTA/PHYLIP/NEXUS modules inside
 Pyodide.
 
-Current browser constraints are explicit in the parameter UI: MAFFT 7.520 or
-MUSCLE 5.1.0, one alignment thread, one locus at a time, and
+Current browser constraints are explicit in the parameter UI: MUSCLE 5.1.0 is
+the recommended default; MAFFT E-INS-i 7.520 is optional. The browser uses one
+alignment worker, one locus at a time, and
 `trimAlnSeq.py` trimming. Pseudogene/MACSE, PRANK, ClustalW2 and trimAl remain
 CLI-only.
 
@@ -87,7 +88,7 @@ SHA256 hashes for input and output content. Pyodide run directories are removed
 after each worker request so repeated batch runs do not accumulate virtual
 filesystem workspaces.
 
-MAFFT and MUSCLE are executed in a dedicated alignment Web Worker. Cancelling a
+MAFFT E-INS-i and MUSCLE are executed in a dedicated alignment Web Worker. Cancelling a
 run terminates that worker and therefore interrupts the active WebAssembly
 alignment rather than only cancelling the surrounding Pyodide step.
 
