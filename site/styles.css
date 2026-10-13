@@ -227,8 +227,11 @@ button:focus-visible, input:focus-visible, select:focus-visible, [tabindex]:focu
 .download-all-button:hover { background: var(--accent-dark); }
 .output-files-list {
   height: 108px;
+  min-height: 72px;
+  max-height: 70vh;
   margin-top: 9px;
   overflow: auto;
+  resize: vertical;
   padding: 8px;
   color: var(--muted);
   border: 1px solid var(--line-dark);
@@ -257,6 +260,9 @@ button:focus-visible, input:focus-visible, select:focus-visible, [tabindex]:focu
 }
 .output-preview {
   height: 215px;
+  min-height: 120px;
+  max-height: 75vh;
+  resize: vertical;
   color: var(--muted);
   border: 1px solid var(--line-dark);
   background: #fbfdff;
