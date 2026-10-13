@@ -173,7 +173,7 @@ if (!app.includes('hide("x_ratio", seqtype === "nucl"') ||
   throw new Error("Codon workflow must expose protein X trimming/QC thresholds for paired processing.");
 }
 
-if (!app.includes('script: "alignment_qc.py", title: "Alignment QC", category: "QC", browser: true, inputListKey: "inputs"')) {
+if (!app.includes('script: "alignment_qc.py", title: "Alignment quality control", category: "QC", browser: true, inputListKey: "inputs"')) {
   throw new Error("alignment_qc.py command preview must scope -i inputs to alignment files only.");
 }
 if (!app.includes('flag: "--min-codon-pis"') || !app.includes('flag: "--min-protein-pis"')) {

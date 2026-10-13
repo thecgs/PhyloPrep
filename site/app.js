@@ -237,7 +237,7 @@ const modules = [
     command: "python AA2Codon.py -c {cds} -p {protaln} -o {output} -g {genetic_code}",
   },
   {
-    script: "alignment_qc.py", title: "Alignment quality control", category: "QC", browser: true,
+    script: "alignment_qc.py", title: "Alignment quality control", category: "QC", browser: true, inputListKey: "inputs",
     summary: "Checks FASTA alignments locally and can combine observed alignment features with PhyloPrep sequence-change provenance, including masked internal stops.",
     inputs: ["FASTA files and/or pathlist files (one FASTA path per line) (-i, --input)", "Optional PhyloPrep sequence_changes.tsv provenance", "Required report prefix (-p, --prefix)", "Sequence type (-st, --seqtype)"],
     inputFields: [
