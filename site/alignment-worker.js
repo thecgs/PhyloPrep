@@ -9,7 +9,7 @@ async function ensureCli() {
       return await new globalThis.Aioli([
         { tool: "mafft", version: "7.520", program: "tbfast", reinit: false },
         { tool: "mafft", version: "7.520", program: "dvtditr", reinit: false },
-        "muscle/5.1.0",
+        { tool: "muscle", version: "5.1.0", program: "muscle", reinit: true },
       ], { printInterleaved: false });
     })();
   }

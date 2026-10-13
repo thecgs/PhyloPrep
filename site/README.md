@@ -105,3 +105,11 @@ path-list input model. The equivalent CLI command therefore uses one generated
 `MSAP_batch.py` retains the generated list as `path-lists/inputs.pathlist`;
 the browser-adapted `phyloprep.py` result retains `inputs.pathlist`, matching
 the top-level pipeline's CLI organization.
+
+
+## Repeated browser alignments
+
+MUSCLE 5.1.0 is configured with Aioli `reinit: true`. Batch workflows reuse
+the alignment worker across loci, but the MUSCLE WebAssembly module itself is
+reinitialized after each invocation so argument-parser and other module-global
+state cannot leak from one FASTA alignment into the next.
