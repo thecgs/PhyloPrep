@@ -137,7 +137,7 @@ def test_msap_can_use_trimal_with_a_path_containing_spaces(tmp_path):
         env=env,
     )
 
-    output = tmp_path / "input with spaces.mafft.nucl.trimal.aln"
+    output = tmp_path / "input with spaces.mafft.nucl.trimmed.aln"
     assert output.read_text() == input_file.read_text()
     assert "-automated1" in (tmp_path / "trimal.args").read_text().splitlines()
 
@@ -185,7 +185,7 @@ def test_msap_can_use_trimal_with_a_path_containing_spaces(tmp_path):
     )
 
     assert (tmp_path / "untrimmed input.mafft.nucl.aln").read_text() == untrimmed_input.read_text()
-    assert not (tmp_path / "untrimmed input.mafft.nucl.trimal.aln").exists()
+    assert not (tmp_path / "untrimmed input.mafft.nucl.trimmed.aln").exists()
 
 
 @pytest.mark.parametrize(
@@ -230,8 +230,8 @@ def _fake_trimal(path, output_fasta, columns):
 def test_trimal_codon_columns_are_transferred_as_whole_triplets(tmp_path):
     protein = tmp_path / "protein.aln"
     codon = tmp_path / "codon.aln"
-    protein_out = tmp_path / "protein.trim.aln"
-    codon_out = tmp_path / "codon.trim.aln"
+    protein_out = tmp_path / "protein.trimmed.aln"
+    codon_out = tmp_path / "codon.trimmed.aln"
     trimal = tmp_path / "trimal"
     protein.write_text(">a\nMKA\n>b\nMKA\n")
     codon.write_text(">a\nATGAAAGCT\n>b\nATGAAGGCC\n")
@@ -250,8 +250,8 @@ def test_trimal_codon_columns_are_transferred_as_whole_triplets(tmp_path):
 def test_trimal_codon_rejects_changed_sequence_set_without_writing_outputs(tmp_path):
     protein = tmp_path / "protein.aln"
     codon = tmp_path / "codon.aln"
-    protein_out = tmp_path / "protein.trim.aln"
-    codon_out = tmp_path / "codon.trim.aln"
+    protein_out = tmp_path / "protein.trimmed.aln"
+    codon_out = tmp_path / "codon.trimmed.aln"
     trimal = tmp_path / "trimal"
     protein.write_text(">a\nMKA\n>b\nMKA\n")
     codon.write_text(">a\nATGAAAGCT\n>b\nATGAAGGCC\n")

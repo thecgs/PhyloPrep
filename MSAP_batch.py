@@ -141,7 +141,7 @@ def _expected_alignment_outputs(args: argparse.Namespace, infile: Path, stage: P
     suffixes = ["prot", "codon"] if args.seqtype in {"codon", "pseudogene"} else [args.seqtype]
     outputs = [stage / f"{infile.stem}.{args.align_software}.{suffix}.aln" for suffix in suffixes]
     if not args.notrim:
-        outputs.extend(stage / f"{infile.stem}.{args.align_software}.{suffix}.trimal.aln" for suffix in suffixes)
+        outputs.extend(stage / f"{infile.stem}.{args.align_software}.{suffix}.trimmed.aln" for suffix in suffixes)
     return outputs
 
 
@@ -170,9 +170,9 @@ def _write_path_lists(root: Path, args: argparse.Namespace, inputs: list[Path]) 
     list_dir.mkdir(parents=True, exist_ok=True)
     suffixes = ["prot.aln", "codon.aln"] if args.seqtype in {"codon", "pseudogene"} else [f"{args.seqtype}.aln"]
     if not args.notrim:
-        suffixes += [suffix.replace(".aln", ".trimal.aln") for suffix in list(suffixes)]
+        suffixes += [suffix.replace(".aln", ".trimmed.aln") for suffix in list(suffixes)]
     for kind in ('nucl', 'prot', 'codon'):
-        for variant in ('aln', 'trimal.aln'):
+        for variant in ('aln', 'trimmed.aln', 'trimal.aln'):
             suffix = f'{kind}.{variant}'
             if suffix not in suffixes:
                 (list_dir / f'all.{suffix}.pathlist').unlink(missing_ok=True)
@@ -364,7 +364,7 @@ def _run_one(args: argparse.Namespace, infile: Path, root: Path) -> tuple[str, s
         if process.returncode != 0:
             raise subprocess.CalledProcessError(process.returncode, command)
         for path in _expected_alignment_outputs(args, infile, stage):
-            read_fasta_alignment(path, codon=path.name.endswith((".codon.aln", ".codon.trimal.aln")))
+            read_fasta_alignment(path, codon=path.name.endswith((".codon.aln", ".codon.trimmed.aln")))
         if _signature(infile) != signature:
             raise RuntimeError("Input changed during alignment; results were not promoted")
     except BaseException:

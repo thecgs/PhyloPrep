@@ -354,13 +354,13 @@ def run_phyloprep_finalize(file_manifest, options, output_root, engine_root="/en
         path_lists = alignments / "path-lists"
         path_lists.mkdir(parents=True, exist_ok=True)
         for kind in ("nucl", "prot", "codon"):
-            for variant, suffix in (("raw", f".{kind}.aln"), ("trimmed", f".{kind}.trimal.aln")):
+            for variant, suffix in (("raw", f".{kind}.aln"), ("trimmed", f".{kind}.trimmed.aln")):
                 files = sorted(
                     path.resolve() for path in alignments.iterdir()
                     if path.is_file() and path.name.endswith(suffix)
                 )
                 if files:
-                    list_name = f"all.{kind}.aln.pathlist" if variant == "raw" else f"all.{kind}.trimal.aln.pathlist"
+                    list_name = f"all.{kind}.aln.pathlist" if variant == "raw" else f"all.{kind}.trimmed.aln.pathlist"
                     phyloprep.write_paths(path_lists / list_name, files)
 
         reports = root / "reports"

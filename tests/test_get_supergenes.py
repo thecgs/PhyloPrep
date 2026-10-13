@@ -116,3 +116,11 @@ def test_rejects_colliding_partition_names(tmp_path):
     assert result.returncode != 0
     assert "Duplicate partition names after filename normalization" in result.stderr
     assert "gene_1_fasta" in result.stderr
+
+
+def test_trimmed_alignment_suffix_preserves_locus_names():
+    from get_supergenes import tidy_name
+    for aligner in ('mafft', 'muscle', 'prank', 'clustalw2', 'macse'):
+        for seqtype in ('nucl', 'prot', 'codon'):
+            for variant in ('aln', 'trimmed.aln'):
+                assert tidy_name(f'/work/ND5.{aligner}.{seqtype}.{variant}') == 'ND5'

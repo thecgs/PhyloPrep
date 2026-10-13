@@ -359,7 +359,7 @@ def test_alignment_qc_allows_raw_and_trimmed_same_audit_locus(tmp_path):
     source = tmp_path / "gene.fa"
     source.write_text(">a\nATGTGA\n>b\nATGGCT\n")
     raw = tmp_path / "gene.mafft.codon.aln"
-    trimmed = tmp_path / "gene.mafft.codon.trimal.aln"
+    trimmed = tmp_path / "gene.mafft.codon.trimmed.aln"
     for path in (raw, trimmed):
         path.write_text(">a\nATGNNN\n>b\nATGGCT\n")
     report = tmp_path / "sequence_changes.tsv"

@@ -9,39 +9,11 @@ from Bio import SeqIO
 from msap_io import atomic_output, expand_input_paths, check_output_path
 
 def tidy_name(file):
-    file = os.path.basename(file).replace('.', '_').replace('-', '_')
-    file = file.replace("_mafft_nucl_trimal_aln", "")
-    file = file.replace("_mafft_codon_trimal_aln", "")
-    file = file.replace("_mafft_prot_trimal_aln", "")
-    file = file.replace("_mafft_nucl_aln", "")
-    file = file.replace("_mafft_codon_aln", "")
-    file = file.replace("_mafft_prot_aln", "")
-
-    file = file.replace("_muscle_nucl_trimal_aln", "")
-    file = file.replace("_muscle_codon_trimal_aln", "")
-    file = file.replace("_muscle_prot_trimal_aln", "")
-    file = file.replace("_muscle_nucl_aln", "")
-    file = file.replace("_muscle_codon_aln", "")
-    file = file.replace("_muscle_prot_aln", "")
-
-    file = file.replace("_clustalw2_nucl_trimal_aln", "")
-    file = file.replace("_clustalw2_codon_trimal_aln", "")
-    file = file.replace("_clustalw2_prot_trimal_aln", "")
-    file = file.replace("_clustalw2_nucl_aln", "")
-    file = file.replace("_clustalw2_codon_aln", "")
-    file = file.replace("_clustalw2_prot_aln", "")
-
-    file = file.replace("_prank_nucl_trimal_aln", "")
-    file = file.replace("_prank_codon_trimal_aln", "")
-    file = file.replace("_prank_prot_trimal_aln", "")
-    file = file.replace("_prank_nucl_aln", "")
-    file = file.replace("_prank_codon_aln", "")
-    file = file.replace("_prank_prot_aln", "")
-
-    file = file.replace("_mafft_codon_trimal_fasta", "")
-    file = file.replace("_muscle_codon_trimal_fasta", "")
-    file = file.replace("_clustalw2_codon_trimal_fasta", "")
-    file = file.replace("_prank_codon_trimal_fasta", "")
+    # Strip only the current PhyloPrep alignment suffix.
+    file = re.sub(
+        r'\.(?:mafft|muscle|clustalw2|prank|macse)\.(?:nucl|codon|prot)(?:\.trimmed)?\.aln$',
+        '', os.path.basename(file),
+    ).replace('.', '_').replace('-', '_')
 
     file = re.sub(r'[^A-Za-z0-9_]', '_', file)
     if not file or not file[0].isalpha():

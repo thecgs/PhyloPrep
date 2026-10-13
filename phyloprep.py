@@ -420,7 +420,7 @@ def _group_stage(stage_root, workflow, seqtype, variant):
 def _alignment_locus_key(path, args, seqtype, variant):
     name = Path(path).name
     suffix = f".{args.align_software}.{seqtype}"
-    suffix += ".aln" if variant == "raw" else ".trimal.aln"
+    suffix += ".aln" if variant == "raw" else ".trimmed.aln"
     return name[:-len(suffix)] if name.endswith(suffix) else Path(name).stem
 
 
@@ -428,7 +428,7 @@ def run_group_qc(args, root, stage, seqtype, variant, selected=None):
     """Run one representation-specific QC pass and return its pairing context."""
     print(f"[phyloprep] QC {seqtype}/{variant}", flush=True)
     if selected is None:
-        list_suffix = f"{seqtype}.aln" if variant == "raw" else f"{seqtype}.trimal.aln"
+        list_suffix = f"{seqtype}.aln" if variant == "raw" else f"{seqtype}.trimmed.aln"
         batch_list = root / "alignments" / "path-lists" / f"all.{list_suffix}.pathlist"
         if not batch_list.is_file():
             raise ValueError(
@@ -735,7 +735,7 @@ def prepare_variant(args, root, stage_root, variant):
 def prepare_group(args, inputs, root, stage, seqtype, variant):
     """Backward-compatible single-representation helper used by external callers."""
     suffix = f".{args.align_software}.{seqtype}"
-    suffix += ".aln" if variant == "raw" else ".trimal.aln"
+    suffix += ".aln" if variant == "raw" else ".trimmed.aln"
     selected = [Path(root) / "alignments" / (Path(source).stem + suffix) for source in inputs]
     context = run_group_qc(args, root, stage, seqtype, variant, selected=selected)
     _require_passing_group(args, context)

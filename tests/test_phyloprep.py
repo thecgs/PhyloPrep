@@ -55,7 +55,7 @@ def test_codon_pipeline_and_resume(tmp_path, fake_aligner, mapping_alias):
         check_formats(protein_dir, "supermatrix", {a: "AG", b: "AG"})
         assert "datatype=protein" in (protein_dir / "supermatrix.nex").read_text().lower()
         assert not list(protein_dir.glob("codon*"))
-        suffix = ".aln" if variant == "raw" else ".trimal.aln"
+        suffix = ".aln" if variant == "raw" else ".trimmed.aln"
         for seqtype in ("codon", "prot"):
             paths = (output / "qc" / seqtype / variant / "alignment.pass.tsv").read_text()
             assert f".{seqtype}{suffix}" in paths
@@ -298,8 +298,8 @@ def test_codon_default_trimming_uses_one_shared_site_mask(tmp_path, fake_aligner
         '-N', '0', '-X', '1'
     )
     assert result.returncode == 0, result.stdout + result.stderr
-    codon = AlignIO.read(output / 'alignments/gene.mafft.codon.trimal.aln', 'fasta')
-    protein = AlignIO.read(output / 'alignments/gene.mafft.prot.trimal.aln', 'fasta')
+    codon = AlignIO.read(output / 'alignments/gene.mafft.codon.trimmed.aln', 'fasta')
+    protein = AlignIO.read(output / 'alignments/gene.mafft.prot.trimmed.aln', 'fasta')
     assert {r.id: str(r.seq) for r in codon} == {'a': 'GGT', 'b': 'GGA'}
     assert {r.id: str(r.seq) for r in protein} == {'a': 'G', 'b': 'G'}
     assert len(codon[0].seq) == 3 * len(protein[0].seq)

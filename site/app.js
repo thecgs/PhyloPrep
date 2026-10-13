@@ -321,7 +321,7 @@ const modules = [
     summary: "Removes low-quality columns or sequences from an alignment under explicit thresholds.",
     inputs: ["Alignment FASTA (-i, --input)", "Required sequence type (-st, --seqtype)"], outputs: ["Trimmed alignment FASTA (-o, --out; optional)"],
     inputFields: [{ key: "input", label: "Alignment FASTA", flag: "-i, --input" }],
-    outputLabel: "Output file name", outputHelp: "Trimmed FASTA written by -o when provided.", defaultOutput: "trimmed.fasta",
+    outputLabel: "Output file name", outputHelp: "Trimmed FASTA written by -o when provided.", defaultOutput: "trimmed.aln",
     parameters: [
       { flag: "-st", label: "Sequence type", description: "Alignment sequence type.", type: "select", value: "codon", options: [["codon", "Codon"], ["prot", "Protein"], ["nucl", "Nucleotide"]], token: "seqtype" },
       { flag: "-G", label: "Maximum gap proportion", description: "Column gap threshold for trimming. Range: 0–1.", type: "number", value: "0.2", step: "0.01", token: "gap_ratio" },
@@ -1357,7 +1357,7 @@ function selectedInputPathList(inputs) {
 }
 
 function batchPathLists(files) {
-  const suffixes = ["nucl.aln", "prot.aln", "codon.aln", "nucl.trimal.aln", "prot.trimal.aln", "codon.trimal.aln"];
+  const suffixes = ["nucl.aln", "prot.aln", "codon.aln", "nucl.trimmed.aln", "prot.trimmed.aln", "codon.trimmed.aln"];
   const outputs = [];
   suffixes.forEach((suffix) => {
     const names = files.filter((file) => file.name.endsWith(`.${suffix}`)).map((file) => file.name).sort();
