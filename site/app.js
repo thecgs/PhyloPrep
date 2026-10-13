@@ -94,7 +94,7 @@ const modules = [
     summary: "Aligns multiple loci with browser MUSCLE, applies PhyloPrep QC and optional taxon renaming, builds supermatrices, and exports downstream matrices.",
     inputs: ["One or more input FASTA files", "Optional two-column taxon mapping table"],
     inputFields: [
-      { key: "inputs", label: "Input FASTA files", flag: "-i, --input", multiple: true },
+      { key: "inputs", label: "Input FASTA files", flag: "-i, --input", multiple: true, pathList: true },
       { key: "mapping", label: "Taxon mapping table", flag: "-m, --mapping", accept: ".tsv,.txt,.csv", required: false },
     ],
     outputs: ["Per-locus alignments and audit reports", "QC reports", "Optional renamed alignments", "Raw/trimmed supermatrices", "Codon-position and four-fold matrices", "FASTA/PHYLIP/NEXUS exports"],
@@ -120,13 +120,13 @@ const modules = [
       { flag: "--allow-terminal-stop", label: "Allow terminal stop codons", description: "Permit terminal stop codons in codon-mode QC.", type: "checkbox", value: false, token: "allow_terminal_stop" },
       { flag: "--allow-internal-stop", label: "Allow internal stop codons", description: "Permit internal stop codons in codon-mode QC.", type: "checkbox", value: false, token: "allow_internal_stop" },
     ],
-    command: "python phyloprep.py -i {inputs} -o phyloprep-results{mapping_option} -st {seqtype} -s muscle -t 1 -j 1 -g {genetic_code} -ts trimAlnSeq -G {gap_ratio} -N {n_ratio} -X {x_ratio} --missing-taxa {missing_taxa} --min-length {min_length} --max-n-ratio {max_n_ratio} --max-x-ratio {max_x_ratio} --max-gap-ratio {max_gap_ratio} --min-parsimony-informative-sites {min_parsimony_informative_sites} --protein-stop-symbol {protein_stop_symbol}{allow_terminal_stop}{allow_internal_stop}{notrim_option}",
+    command: "python phyloprep.py -i {inputs} -o phyloprep-results{mapping_option} -st {seqtype} -s muscle -t 1 -j 1 -g {genetic_code} -ts trimAlnSeq -G {gap_ratio} -N {n_ratio} -X {x_ratio} --missing-taxa {missing_taxa} --min-length {min_length} --max-n-ratio {max_n_ratio} --max-x-ratio {max_x_ratio} --max-gap-ratio {max_gap_ratio} --min-parsimony-informative-sites {min_parsimony_informative_sites} --protein-stop-symbol {protein_stop_symbol_cli}{allow_terminal_stop}{allow_internal_stop}{notrim_option}",
   },
   {
     script: "MSAP_batch.py", title: "Batch alignment workflow", category: "Batch", browser: true, browserWorkflow: "batch", inputListKey: "inputs", cliOutputDir: "msap-results",
     summary: "Runs the MSAP workflow over multiple FASTA loci in the browser using Biowasm MUSCLE and aggregates path lists and sequence-change reports.",
     inputs: ["One or more input FASTA files"],
-    inputFields: [{ key: "inputs", label: "Input FASTA files", flag: "-i, --input", multiple: true }],
+    inputFields: [{ key: "inputs", label: "Input FASTA files", flag: "-i, --input", multiple: true, pathList: true }],
     outputs: ["Per-locus preprocessing and audit files", "MUSCLE alignments", "Optional trimmed alignments", "Batch path lists", "Merged sequence-change report"],
     outputLabel: "Batch output", outputHelp: "Browser output is collected as downloadable files or written into the selected local folder.", defaultOutput: "", hideOutputName: true,
     parameters: [
@@ -142,7 +142,7 @@ const modules = [
       { flag: "-N", label: "Maximum N proportion", description: "Maximum N ratio per site during nucleotide/codon trimming. Range: 0–1.", type: "number", value: "0.2", step: "0.01", token: "n_ratio" },
       { flag: "-X", label: "Maximum X proportion", description: "Maximum X ratio per site during protein trimming. Range: 0–1.", type: "number", value: "0.2", step: "0.01", token: "x_ratio" },
     ],
-    command: "python MSAP_batch.py -i {inputs} -o msap-results -st {seqtype} -s muscle -t 1 -j 1 -g {genetic_code} -ts trimAlnSeq -G {gap_ratio} -N {n_ratio} -X {x_ratio} --protein-stop-symbol {protein_stop_symbol}{notrim_option}",
+    command: "python MSAP_batch.py -i {inputs} -o msap-results -st {seqtype} -s muscle -t 1 -j 1 -g {genetic_code} -ts trimAlnSeq -G {gap_ratio} -N {n_ratio} -X {x_ratio} --protein-stop-symbol {protein_stop_symbol_cli}{notrim_option}",
   },
   {
     script: "extract_orthofinder_orthogroups.py", title: "Extract OrthoFinder orthogroups", category: "Orthology", browser: true, browserWorkflow: "orthofinder-extract",
@@ -177,7 +177,7 @@ const modules = [
       { flag: "--taxon-separator", label: "Taxon separator", description: "Genome/gene separator used by OMA members.", type: "text", value: "|", token: "taxon_separator" },
       { flag: "--strip-taxon-prefix", label: "Strip taxon prefix", description: "Write gene IDs without the leading genome and separator.", type: "checkbox", value: false, token: "strip_taxon_prefix" },
     ],
-    command: "python oma_to_orthogroups.py -i {input} -o {output} --taxon-separator {taxon_separator}{strip_taxon_prefix_option}",
+    command: "python oma_to_orthogroups.py -i {input} -o {output} --taxon-separator {taxon_separator_cli}{strip_taxon_prefix_option}",
   },
   {
     script: "orthomcl_to_orthogroups.py", title: "Convert OrthoMCL orthogroups", category: "Orthology", browser: true,
@@ -190,7 +190,7 @@ const modules = [
       { flag: "--taxon-separator", label: "Taxon separator", description: "Taxon/gene separator used by OrthoMCL members.", type: "text", value: "|", token: "taxon_separator" },
       { flag: "--strip-taxon-prefix", label: "Strip taxon prefix", description: "Write gene IDs without the leading taxon and separator.", type: "checkbox", value: false, token: "strip_taxon_prefix" },
     ],
-    command: "python orthomcl_to_orthogroups.py -i {input} -o {output} --taxon-separator {taxon_separator}{strip_taxon_prefix_option}",
+    command: "python orthomcl_to_orthogroups.py -i {input} -o {output} --taxon-separator {taxon_separator_cli}{strip_taxon_prefix_option}",
   },
   {
     script: "proteinortho_to_orthogroups.py", title: "Convert Proteinortho groups", category: "Orthology", browser: true,
@@ -672,15 +672,8 @@ function cliQuote(value) {
   return /^[A-Za-z0-9_./:=+,-]+$/u.test(text) ? text : JSON.stringify(text);
 }
 
-function valuesForCommand() {
+function rawParameterValues() {
   const module = activeModule();
-  const allInputNames = selectedInputNames();
-  const listControl = module.inputListKey
-    ? inputControls().find((control) => control.dataset.inputKey === module.inputListKey)
-    : undefined;
-  const commandInputNames = listControl
-    ? filesForInput(listControl).map((file) => file.name)
-    : allInputNames;
   const parameterValues = {};
   module.parameters.forEach((parameter) => {
     const control = elements.parameterList.querySelector(`[data-parameter="${parameterToken(parameter)}"]`);
@@ -690,6 +683,19 @@ function valuesForCommand() {
         ? [...control.selectedOptions].map((option) => option.value)
         : (control?.value || parameter.value || "");
   });
+  return parameterValues;
+}
+
+function valuesForCommand() {
+  const module = activeModule();
+  const allInputNames = selectedInputNames();
+  const listControl = module.inputListKey
+    ? inputControls().find((control) => control.dataset.inputKey === module.inputListKey)
+    : undefined;
+  const commandInputNames = listControl
+    ? filesForInput(listControl).map((file) => file.name)
+    : allInputNames;
+  const parameterValues = rawParameterValues();
   const rawOutput = elements.outputName.value.trim() || module.defaultOutput;
   const outputPath = outputDirectoryHandle ? `${outputDirectoryHandle.name}/${rawOutput}` : rawOutput;
   const usePathList = module.inputFields.some((field) => field.pathList) && commandInputNames.length > 1;
@@ -710,7 +716,9 @@ function valuesForCommand() {
     prefix: cliQuote(outputPath),
     seqtype: parameterValues.seqtype || "nucl",
     genetic_code: parameterValues.genetic_code || "1",
-    protein_stop_symbol: cliQuote(parameterValues.protein_stop_symbol || "*"),
+    protein_stop_symbol: parameterValues.protein_stop_symbol || "*",
+    protein_stop_symbol_cli: cliQuote(parameterValues.protein_stop_symbol || "*"),
+    taxon_separator_cli: cliQuote(parameterValues.taxon_separator || "|"),
     allow_terminal_stop: parameterValues.allow_terminal_stop ? " --allow-terminal-stop" : "",
     allow_internal_stop: parameterValues.allow_internal_stop ? " --allow-internal-stop" : "",
     removeall: parameterValues.removeall ? " -ra" : "",
@@ -923,7 +931,7 @@ async function updatePreflight() {
     const ids = text.split(/\r?\n/).filter((line) => line.startsWith(">")).map((line) => line.slice(1).trim().split(/\s+/, 1)[0]).filter(Boolean);
     sequences += ids.length;
     duplicateIds += ids.length - new Set(ids).size;
-    if (valuesForCommand().seqtype === "codon") {
+    if ((rawParameterValues().seqtype || "nucl") === "codon") {
       const chunks = text.split(/^>/m).slice(1);
       malformedCodon += chunks.filter((chunk) => {
         const lines = chunk.split(/\r?\n/);
@@ -1273,6 +1281,10 @@ function mergeTsvContents(files) {
   return header ? `${header}\n${rows.join("\n")}${rows.length ? "\n" : ""}` : "";
 }
 
+function selectedInputPathList(inputs) {
+  return `${inputs.map((file) => virtualInputPath(file.name)).join("\n")}\n`;
+}
+
 function batchPathLists(files) {
   const suffixes = ["nucl.aln", "prot.aln", "codon.aln", "nucl.trimal.aln", "prot.trimal.aln", "codon.trimal.aln"];
   const outputs = [];
@@ -1288,6 +1300,12 @@ async function runMsapBatchBrowserWorkflow(request) {
   if (!inputs.length) throw new Error("Select at least one FASTA input.");
   requireUniqueStems(inputs);
   const outputs = [];
+  if (inputs.length > 1) {
+    outputs.push({
+      name: "path-lists/inputs.pathlist",
+      content: selectedInputPathList(inputs),
+    });
+  }
   for (let index = 0; index < inputs.length; index += 1) {
     const input = inputs[index];
     setRunStage(2, `Aligning locus ${index + 1}/${inputs.length}: ${input.name}`);
@@ -1328,7 +1346,7 @@ async function runPhyloPrepBrowserWorkflow(request) {
   ];
   setRunStage(2, "Running PhyloPrep QC and matrix construction");
   elements.runtimeStatus.textContent = "PhyloPrep matrix construction";
-  return runInWorker({
+  const result = await runInWorker({
     type: "phyloprep-finalize",
     script: "phyloprep.py",
     files: finalFiles,
@@ -1336,6 +1354,13 @@ async function runPhyloPrepBrowserWorkflow(request) {
     outputName: "",
     usesPathList: false,
   });
+  if (sources.length > 1) {
+    result.files.push({
+      name: "inputs.pathlist",
+      content: selectedInputPathList(sources),
+    });
+  }
+  return result;
 }
 
 async function sha256Text(text) {
@@ -1431,7 +1456,7 @@ async function runBrowserModule() {
         inputKey: control.dataset.inputKey,
       }))
     ));
-    const optionValues = valuesForCommand();
+    const optionValues = rawParameterValues();
     setRunStage(stage, "Loading local workflow");
     elements.cancelRun.hidden = false;
     const request = {

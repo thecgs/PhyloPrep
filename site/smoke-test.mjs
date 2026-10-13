@@ -54,3 +54,24 @@ if (!app.includes("phyloprep-run.json")) throw new Error("Run provenance manifes
 if (!app.includes('new Worker("muscle-worker.js")')) throw new Error("Dedicated cancellable MUSCLE worker is missing.");
 
 console.log(`PhyloPrep Web smoke checks passed for ${visibleModules.length} visible modules.`);
+
+
+if (!app.includes("function rawParameterValues()")) throw new Error("Raw runtime parameter collection is missing.");
+if (!app.includes("const optionValues = rawParameterValues();")) throw new Error("Browser runtime must use raw UI parameter values.");
+if (app.includes("protein_stop_symbol: cliQuote(")) throw new Error("Protein stop symbol must not be CLI-quoted in runtime options.");
+if (!app.includes("protein_stop_symbol_cli: cliQuote(")) throw new Error("Protein stop symbol CLI quoting is missing.");
+if (!app.includes("taxon_separator_cli: cliQuote(")) throw new Error("Taxon separator CLI quoting is missing.");
+
+
+const muscleWorker = contents["site/muscle-worker.js"];
+if (!muscleWorker.includes("await cli.cat(outputPath)")) throw new Error("MUSCLE output must be read directly from the Aioli filesystem.");
+if (muscleWorker.includes("cli.download(outputPath)")) throw new Error("Worker-scoped Aioli blob URLs must not be used for MUSCLE output.");
+
+
+if (!app.includes('script: "phyloprep.py"') || !app.includes('script: "MSAP_batch.py"')) throw new Error("Batch workflow modules are missing.");
+const phyloprepBlock = app.slice(app.indexOf('script: "phyloprep.py"'), app.indexOf('script: "MSAP_batch.py"'));
+const batchBlock = app.slice(app.indexOf('script: "MSAP_batch.py"'), app.indexOf('script: "extract_orthofinder_orthogroups.py"'));
+if (!phyloprepBlock.includes('multiple: true, pathList: true')) throw new Error("phyloprep.py multi-file input must use browser pathlist mode.");
+if (!batchBlock.includes('multiple: true, pathList: true')) throw new Error("MSAP_batch.py multi-file input must use browser pathlist mode.");
+if (!app.includes('name: "path-lists/inputs.pathlist"')) throw new Error("MSAP_batch browser input pathlist output is missing.");
+if (!app.includes('name: "inputs.pathlist"')) throw new Error("PhyloPrep browser input pathlist output is missing.");

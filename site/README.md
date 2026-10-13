@@ -90,3 +90,14 @@ only cancelling the surrounding Pyodide step.
 
 The Pages workflow runs syntax and browser-bundle smoke checks before building
 and deploying the static site.
+
+
+## Multi-file browser input
+
+For `phyloprep.py`, `MSAP_batch.py`, and the existing multi-alignment tools,
+selecting more than one FASTA file automatically switches the browser to a
+path-list input model. The equivalent CLI command therefore uses one generated
+`.pathlist` instead of expanding every FASTA path on the command line.
+`MSAP_batch.py` retains the generated list as `path-lists/inputs.pathlist`;
+the browser-adapted `phyloprep.py` result retains `inputs.pathlist`, matching
+the top-level pipeline's CLI organization.

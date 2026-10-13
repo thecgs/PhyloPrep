@@ -19,7 +19,6 @@ self.addEventListener("message", async (event) => {
   let cli;
   let inputPath;
   let outputPath;
-  let url;
   try {
     cli = await ensureCli();
     const token = `phyloprep-${Date.now()}-${runId}`;
@@ -28,19 +27,26 @@ self.addEventListener("message", async (event) => {
     if (!inputPath) throw new Error("Biowasm could not mount the MUSCLE input.");
     outputPath = `/shared/data/${token}.aligned.fasta`;
     const execution = await cli.exec("muscle", ["-align", inputPath, "-output", outputPath, "-threads", "1"]);
-    url = await cli.download(outputPath);
-    const response = await fetch(url);
-    if (!response.ok) throw new Error("Biowasm could not read the MUSCLE output.");
-    const alignment = await response.text();
-    if (!alignment.trimStart().startsWith(">")) {
-      const detail = execution?.stderr || execution?.stdout || "MUSCLE did not produce a FASTA alignment.";
-      throw new Error(String(detail).trim());
+
+    // Aioli.download() creates a blob URL inside Aioli's own internal worker.
+    // This file is already running in a second Web Worker, so reading that
+    // worker-scoped URL with fetch() is not reliable. MUSCLE output is text;
+    // read it directly from Aioli's shared Emscripten filesystem instead.
+    let alignment = await cli.cat(outputPath);
+    if (typeof alignment !== "string") {
+      const blob = await cli.downloadBlob(outputPath);
+      if (blob instanceof Blob) alignment = await blob.text();
+    }
+    if (typeof alignment !== "string" || !alignment.trimStart().startsWith(">")) {
+      const stderr = String(execution?.stderr || "").trim();
+      const stdout = String(execution?.stdout || "").trim();
+      const detail = stderr || stdout || `MUSCLE did not create a readable FASTA file at ${outputPath}.`;
+      throw new Error(detail);
     }
     self.postMessage({ type: "result", runId, alignment });
   } catch (error) {
     self.postMessage({ type: "error", runId, message: error.message || String(error) });
   } finally {
-    if (url) URL.revokeObjectURL(url);
     if (cli) {
       try { if (outputPath) await cli.fs.unlink(outputPath); } catch {}
       try { if (inputPath) await cli.fs.unlink(inputPath); } catch {}
