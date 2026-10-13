@@ -15,6 +15,7 @@ async function ensureMuscleCli() {
     muscleCliPromise = (async () => {
       ensureAioliLoaded();
       return await new globalThis.Aioli([
+        "base/1.0.0",
         { tool: "muscle", version: "5.1.0", program: "muscle", reinit: true },
       ], { printInterleaved: false });
     })();

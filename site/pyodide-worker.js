@@ -117,6 +117,11 @@ function removeTree(runtime, path) {
   }
 }
 
+function pythonJson(value) {
+  const json = JSON.stringify(value);
+  return `__import__("json").loads(${JSON.stringify(json)})`;
+}
+
 function outputPath(stage, outputName, fallback) {
   return `${stage.outputRoot}/${safeRelativePath(outputName, fallback)}`;
 }
@@ -275,7 +280,7 @@ self.addEventListener("message", async (event) => {
     if (request.type === "phyloprep-finalize") {
       self.postMessage({ type: "stage", runId, stage: "process", label: "Running PhyloPrep QC and matrix construction" });
       const manifest = stage.files.map(({ name, path, role, inputKey, fasta }) => ({ name, path, role, inputKey, fasta }));
-      const raw = await runtime.runPythonAsync(`run_phyloprep_finalize(${JSON.stringify(manifest)}, ${JSON.stringify(request.options)}, ${JSON.stringify(stage.outputRoot)})`);
+      const raw = await runtime.runPythonAsync(`run_phyloprep_finalize(${pythonJson(manifest)}, ${pythonJson(request.options)}, ${JSON.stringify(stage.outputRoot)})`);
       const result = JSON.parse(raw);
       if (!result.ok) throw new Error(result.error || "The browser PhyloPrep pipeline could not complete.");
       self.postMessage({
