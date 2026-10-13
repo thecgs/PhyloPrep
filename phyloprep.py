@@ -16,11 +16,9 @@ import subprocess
 import sys
 import tempfile
 
-from Bio.Data import CodonTable
 from sequence_audit import normalize_workflow, merge_reports
 from MSAP_batch import build_parser as batch_parser
 from msap_io import atomic_output, expand_input_paths, read_fasta_alignment
-from alignment_qc import alignment_stats
 from rename_taxa import rename_fasta, read_mapping, normalized_taxon_id
 
 SCRIPTS = Path(__file__).resolve().parent
@@ -91,6 +89,26 @@ matrices are published only after all requested conversions succeed.
     qc.add_argument("--min-protein-pis", type=int, default=None, metavar="N",
                     help="Paired codon workflow: minimum protein-alignment PIS. Defaults to --min-parsimony-informative-sites when omitted.")
     return parser
+
+
+def validate_pipeline_options(args):
+    """Validate PhyloPrep-owned QC and paired-retention options."""
+    qc_ratios = [args.max_n_ratio, args.max_x_ratio, args.max_gap_ratio]
+    if any(not 0 <= value <= 1 for value in qc_ratios):
+        raise ValueError("QC ratios must be between 0 and 1")
+    if (args.min_length < 0 or args.min_parsimony_informative_sites < 0 or
+            (args.min_codon_pis is not None and args.min_codon_pis < 0) or
+            (args.min_protein_pis is not None and args.min_protein_pis < 0)):
+        raise ValueError("QC length/site thresholds must be non-negative")
+    if args.paired_pis_policy not in {"both", "either", "codon", "protein"}:
+        raise ValueError("Invalid paired PIS policy")
+    if args.seqtype not in {"codon", "pseudogene"}:
+        if args.min_codon_pis is not None or args.min_protein_pis is not None:
+            raise ValueError(
+                "--min-codon-pis and --min-protein-pis require a paired codon/protein workflow"
+            )
+        if args.paired_pis_policy != "both":
+            raise ValueError("--paired-pis-policy requires a paired codon/protein workflow")
 
 
 def run(script, *arguments, cwd=None):
@@ -406,15 +424,22 @@ def _alignment_locus_key(path, args, seqtype, variant):
     return name[:-len(suffix)] if name.endswith(suffix) else Path(name).stem
 
 
-def run_group_qc(args, inputs, root, stage, seqtype, variant):
+def run_group_qc(args, root, stage, seqtype, variant):
     """Run one representation-specific QC pass and return its pairing context."""
     print(f"[phyloprep] QC {seqtype}/{variant}", flush=True)
-    suffix = f".{args.align_software}.{seqtype}"
-    suffix += ".aln" if variant == "raw" else ".trimal.aln"
-    selected = [root / "alignments" / (source.stem + suffix) for source in inputs]
-    selected = [path for path in selected if path.is_file()]
+    list_suffix = f"{seqtype}.aln" if variant == "raw" else f"{seqtype}.trimal.aln"
+    batch_list = root / "alignments" / "path-lists" / f"all.{list_suffix}.pathlist"
+    if not batch_list.is_file():
+        raise ValueError(
+            f"Validated MSAP batch path list is missing for {seqtype}/{variant}: {batch_list}"
+        )
+    selected = [
+        Path(line.strip()).resolve()
+        for line in batch_list.read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.lstrip().startswith(("#", ";"))
+    ]
     if not selected:
-        raise ValueError(f"No completed alignments are available for {seqtype}/{variant}")
+        raise ValueError(f"No validated completed alignments are available for {seqtype}/{variant}")
 
     qc_dir = root / "qc" / ("pseudogene" if args.seqtype == "pseudogene" else "") / seqtype / variant
     qc_paths = selected
@@ -476,11 +501,29 @@ def _context_map(context, args):
 
 
 def _pis_map(context, args):
-    return {
-        locus: alignment_stats(path, context["seqtype"])[0]["parsimony_informative_sites"]
-        for locus, path in _context_map(context, args).items()
-    }
-
+    """Reuse PIS already computed by alignment_qc.py instead of rereading alignments."""
+    details = Path(str(context["prefix"]) + ".details.tsv")
+    values = {}
+    with details.open(newline="") as handle:
+        reader = csv.DictReader(handle, delimiter="\t")
+        required = {"File", "Parsimony_informative_sites"}
+        if not required <= set(reader.fieldnames or []):
+            raise ValueError(f"{details}: missing PIS columns from alignment_qc output")
+        for row in reader:
+            path = Path(row["File"])
+            locus = _alignment_locus_key(
+                path, args, context["seqtype"], context["variant"]
+            )
+            values[locus] = int(row["Parsimony_informative_sites"])
+    expected = set(_context_map(context, args))
+    if set(values) != expected:
+        missing = sorted(expected - set(values))
+        unexpected = sorted(set(values) - expected)
+        raise ValueError(
+            f"{details}: QC/PIS locus mismatch; missing={missing or 'none'}, "
+            f"unexpected={unexpected or 'none'}"
+        )
+    return values
 
 def _paired_pis_thresholds(args):
     fallback = args.min_parsimony_informative_sites
@@ -671,21 +714,21 @@ def prepare_variant(args, inputs, root, stage_root, variant):
         contexts = {}
         for seqtype in ("codon", "prot"):
             stage = _group_stage(stage_root, args.seqtype, seqtype, variant)
-            contexts[seqtype] = run_group_qc(args, inputs, root, stage, seqtype, variant)
+            contexts[seqtype] = run_group_qc(args, root, stage, seqtype, variant)
         synchronize_paired_qc(args, root, variant, contexts["codon"], contexts["prot"])
         for seqtype in ("codon", "prot"):
             build_group_matrices(args, root, contexts[seqtype])
         return
 
     stage = _group_stage(stage_root, args.seqtype, args.seqtype, variant)
-    context = run_group_qc(args, inputs, root, stage, args.seqtype, variant)
+    context = run_group_qc(args, root, stage, args.seqtype, variant)
     _require_passing_group(args, context)
     build_group_matrices(args, root, context)
 
 
 def prepare_group(args, inputs, root, stage, seqtype, variant):
     """Backward-compatible single-representation helper used by external callers."""
-    context = run_group_qc(args, inputs, root, stage, seqtype, variant)
+    context = run_group_qc(args, root, stage, seqtype, variant)
     _require_passing_group(args, context)
     build_group_matrices(args, root, context)
 
@@ -695,24 +738,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
     try:
         normalize_workflow(args)
-        if args.jobs < 1 or args.thread < 1:
-            raise ValueError("--jobs and --thread must be positive")
-        ratios = [args.G, args.N, args.X, args.max_n_ratio, args.max_x_ratio, args.max_gap_ratio]
-        if any(not 0 <= value <= 1 for value in ratios):
-            raise ValueError("Trimming and QC ratios must be between 0 and 1")
-        if (args.min_length < 0 or args.min_parsimony_informative_sites < 0 or
-                (args.min_codon_pis is not None and args.min_codon_pis < 0) or
-                (args.min_protein_pis is not None and args.min_protein_pis < 0)):
-            raise ValueError("QC length/site thresholds must be non-negative")
-        if args.seqtype not in {"codon", "pseudogene"}:
-            if args.min_codon_pis is not None or args.min_protein_pis is not None:
-                raise ValueError("--min-codon-pis and --min-protein-pis require a paired codon/protein workflow")
-            if args.paired_pis_policy != "both":
-                raise ValueError("--paired-pis-policy requires a paired codon/protein workflow")
-        if not args.notrim and args.trimal_args and args.trim_software != "trimal":
-            raise ValueError("--trimal-args requires --trim-software trimal")
-        if args.genetic_code not in CodonTable.unambiguous_dna_by_id:
-            raise ValueError("Unknown genetic-code table")
+        validate_pipeline_options(args)
         inputs = [Path(p).resolve() for p in expand_input_paths(args.input)]
         if not inputs or any(not p.is_file() for p in inputs):
             raise ValueError("Provide at least one existing input FASTA")

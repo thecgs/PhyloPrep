@@ -351,6 +351,18 @@ def run_phyloprep_finalize(file_manifest, options, output_root, engine_root="/en
             if target.name.endswith(".sequence_changes.tsv"):
                 change_reports.append(target)
 
+        path_lists = alignments / "path-lists"
+        path_lists.mkdir(parents=True, exist_ok=True)
+        for kind in ("nucl", "prot", "codon"):
+            for variant, suffix in (("raw", f".{kind}.aln"), ("trimmed", f".{kind}.trimal.aln")):
+                files = sorted(
+                    path.resolve() for path in alignments.iterdir()
+                    if path.is_file() and path.name.endswith(suffix)
+                )
+                if files:
+                    list_name = f"all.{kind}.aln.pathlist" if variant == "raw" else f"all.{kind}.trimal.aln.pathlist"
+                    phyloprep.write_paths(path_lists / list_name, files)
+
         reports = root / "reports"
         reports.mkdir(parents=True, exist_ok=True)
         merged_changes = reports / "sequence_changes.tsv"
@@ -395,15 +407,7 @@ def run_phyloprep_finalize(file_manifest, options, output_root, engine_root="/en
             allow_terminal_stop=bool(options.get("allow_terminal_stop", False)),
             allow_internal_stop=bool(options.get("allow_internal_stop", False)),
         )
-        ratios = [args.G, args.N, args.X, args.max_n_ratio, args.max_x_ratio, args.max_gap_ratio]
-        if any(value < 0 or value > 1 for value in ratios):
-            raise ValueError("Trimming and QC ratios must be between 0 and 1.")
-        if (args.min_length < 0 or args.min_parsimony_informative_sites < 0 or
-                (args.min_codon_pis is not None and args.min_codon_pis < 0) or
-                (args.min_protein_pis is not None and args.min_protein_pis < 0)):
-            raise ValueError("QC length/site thresholds must be non-negative.")
-        if args.paired_pis_policy not in {"both", "either", "codon", "protein"}:
-            raise ValueError("Invalid paired PIS policy.")
+        phyloprep.validate_pipeline_options(args)
 
         original_run = phyloprep.run
 

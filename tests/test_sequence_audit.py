@@ -411,3 +411,32 @@ def test_alignment_qc_detects_observed_protein_stops(tmp_path):
     )
     assert result.returncode == 0, result.stderr
     assert str(alignment.resolve()) in Path(str(allowed) + ".pass.tsv").read_text()
+
+
+def test_phyloprep_uses_validated_batch_pathlist_not_stale_alignment(tmp_path, fake_aligner):
+    _, env = fake_aligner
+    source = tmp_path / "gene.fa"
+    output = tmp_path / "out"
+
+    source.write_text(">a\nGCT\n>b\nGCC\n")
+    first = cli(
+        "phyloprep.py", "-i", source, "-o", output,
+        "--notrim", "-t", "1", cwd=tmp_path, env=env
+    )
+    assert first.returncode == 0, first.stdout + first.stderr
+    stale = output / "alignments/gene.mafft.codon.aln"
+    assert stale.exists()
+
+    # The same source later becomes a terminal-stop-only locus. MSAP_batch marks
+    # it skipped; an old public alignment may still exist but is no longer valid.
+    source.write_text(">a\nTAA\n>b\nTAA\n")
+    second = cli(
+        "phyloprep.py", "-i", source, "-o", output,
+        "--notrim", "-t", "1", cwd=tmp_path, env=env
+    )
+    assert second.returncode == 2
+    assert "No validated completed alignments are available for codon/raw" in second.stderr
+    pathlist = output / "alignments/path-lists/all.codon.aln.pathlist"
+    assert pathlist.exists()
+    assert not pathlist.read_text().strip()
+    assert stale.exists()  # retained as prior public output, but no longer consumed

@@ -181,3 +181,8 @@ if (!app.includes('flag: "--min-codon-pis"') || !app.includes('flag: "--min-prot
 if (!app.includes('script === "alignment_qc.py" && seqtype === "codon"')) {
   throw new Error("Browser QC visibility must hide protein-X threshold for standalone codon alignment_qc.");
 }
+
+if (!browserRunner.includes('path_lists = alignments / "path-lists"') ||
+    !browserRunner.includes("phyloprep.write_paths(path_lists / list_name, files)")) {
+  throw new Error("Browser finalizer must publish validated batch-style path lists for downstream QC.");
+}

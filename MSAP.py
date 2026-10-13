@@ -197,7 +197,10 @@ def trim_codon_protein_pair(protein_file, codon_file, protein_output, codon_outp
     for index in range(aa_length):
         aa_column = [protein_map[name][index] for name in protein_map]
         codon_column = [codon_map[name][3 * index:3 * index + 3] for name in protein_map]
-        gap_fraction = sum(residue == "-" for residue in aa_column) / count
+        gap_fraction = sum(
+            residue == "-" or "-" in codon
+            for residue, codon in zip(aa_column, codon_column)
+        ) / count
         n_fraction = sum("N" in codon for codon in codon_column) / count
         x_fraction = sum(residue == "X" for residue in aa_column) / count
         if gap_fraction > gap_ratio or n_fraction > n_ratio or x_fraction > x_ratio:
@@ -304,24 +307,10 @@ def run_pseudogene(args, infile, prefix, tools):
     if args.trim_software == 'trimal':
         trim_codon_with_trimal(tools['trimal'], args.trimal_args, aa, nt, out_aa, out_nt)
         return
-    nucleotides = read_fasta_alignment(nt, codon=True)
-    proteins = {r.id: str(r.seq).upper() for r in read_fasta_alignment(aa)}
-    length = len(nucleotides[0].seq) // 3
-    count = len(nucleotides)
-    keep = []
-    for i in range(length):
-        codons = [str(r.seq[3*i:3*i+3]).upper() for r in nucleotides]
-        residues = [proteins[r.id][i] for r in nucleotides]
-        if (sum('-' in c for c in codons) / count <= args.G and
-                sum('N' in c for c in codons) / count <= args.N and
-                residues.count('X') / count <= args.X):
-            keep.append(i)
-    if not keep:
-        raise ValueError('No codons remain after paired pseudogene trimming')
-    with atomic_output(out_nt) as handle_nt, atomic_output(out_aa) as handle_aa:
-        for r in nucleotides:
-            handle_nt.write(f'>{r.id}\n' + ''.join(str(r.seq[3*i:3*i+3]) for i in keep) + '\n')
-            handle_aa.write(f'>{r.id}\n' + ''.join(proteins[r.id][i] for i in keep) + '\n')
+    trim_codon_protein_pair(
+        aa, nt, out_aa, out_nt,
+        args.G, args.N, args.X,
+    )
 
 
 if __name__ == '__main__':

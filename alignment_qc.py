@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import csv
-import html
 import sys
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -20,8 +19,8 @@ def length_units(length, seqtype):
     """Return the length in the units used by the --min-length threshold."""
     return length // 3 if seqtype == "codon" else length
 
-def alignment_stats(path, seqtype="nucl"):
-    records = list(SeqIO.parse(path, "fasta"))
+def alignment_stats(path, seqtype="nucl", records=None):
+    records = list(records) if records is not None else list(SeqIO.parse(path, "fasta"))
     if not records:
         raise ValueError(f"{path}: no sequences found")
     seqs = [str(r.seq).upper() if seqtype == 'prot' else str(r.seq).upper().replace('U', 'T') for r in records]
@@ -137,20 +136,20 @@ def _audit_for_alignment(path, audit_index):
 
 
 def alignment_qc(path: str, seqtype: str, genetic_code: int = 1,
-                    min_length: int = 1, audit_index=None) -> dict:
+                    audit_index=None) -> dict:
     """Return summary, sequence and column findings for one FASTA file."""
     source = Path(path)
     if not source.is_file():
         raise ValueError(f"Input FASTA file does not exist: {path}")
     records = _records(path)
     actual_type = seqtype
+    stat, aligned = alignment_stats(path, actual_type, records=records)
     audit_rows = _audit_for_alignment(path, audit_index) if actual_type in {"codon", "prot"} else {}
     allowed = DNA_CHARS if actual_type in {"nucl", "codon"} else PROTEIN_CHARS
     ids = [record.id for record in records]
     duplicate_ids = sorted(identifier for identifier, count in Counter(ids).items() if count > 1)
     lengths = [len(record.seq) for record in records]
-    aligned = len(set(lengths)) == 1
-    alignment_length = lengths[0] if aligned else 0
+    alignment_length = stat["alignment_length"]
     sequence_rows = []
     all_invalid = []
     for record in records:
@@ -167,9 +166,6 @@ def alignment_qc(path: str, seqtype: str, genetic_code: int = 1,
             "x_count": sequence.count("X"),
             "x_ratio": sequence.count("X") / len(sequence) if sequence else 0.0,
             "invalid": "".join(invalid),
-            # In codon mode a threshold of N means N complete codons, so it
-            # has the same biological unit as the translated protein matrix.
-            "short": length_units(len(sequence), actual_type) < min_length,
             "audited_terminal_stop": ";".join(audit_rows.get(record.id, {}).get("terminal", [])) or "NA",
             "audited_internal_stop": ";".join(audit_rows.get(record.id, {}).get("internal", [])) or "NA",
         }
@@ -220,8 +216,6 @@ def alignment_qc(path: str, seqtype: str, genetic_code: int = 1,
         issues.append("invalid_characters")
     if any(not row["length"] for row in sequence_rows):
         issues.append("empty_sequence")
-    if any(row["short"] for row in sequence_rows):
-        issues.append("short_sequence")
     if full_gap_columns:
         issues.append("all_gap_columns")
     if actual_type == "codon":
@@ -238,61 +232,11 @@ def alignment_qc(path: str, seqtype: str, genetic_code: int = 1,
         "valid_sites": valid_sites, "full_gap_columns": full_gap_columns,
         "max_gap_ratio": max(column_gap_ratios, default=0.0),
         "issues": issues, "sequences": sequence_rows,
+        "alignment_stats": stat,
         "audited_terminal_stop": any(row["audited_terminal_stop"] != "NA" for row in sequence_rows),
         "audited_internal_stop": any(row["audited_internal_stop"] != "NA" for row in sequence_rows),
     }
 
-
-SUMMARY_COLUMNS = ["file", "seqtype", "sequence_count", "aligned", "alignment_length",
-                   "valid_sites", "full_gap_columns", "max_gap_ratio", "issues"]
-SEQUENCE_COLUMNS = ["id", "length", "gap_count", "gap_ratio", "n_count", "n_ratio",
-                    "x_count", "x_ratio", "invalid", "short", "frame_ok",
-                    "terminal_stop", "internal_stop_count"]
-
-
-def write_tsv(results, output):
-    with atomic_output(output) as handle:
-        protein = results[0]["seqtype"] == "prot"
-        codon = results[0]["seqtype"] == "codon"
-        columns = ["File", "Taxa_ID", "Sequence_length", "X_count" if protein else "N_count", "Gap_count"]
-        if codon:
-            columns += ["Terminal_stop", "Internal_stop_count"]
-        handle.write("\t".join(columns) + "\n")
-        for result in results:
-            for row in result["sequences"]:
-                terminal = "NA"
-                internal = "NA"
-                if result["seqtype"] == "codon":
-                    terminal = row["terminal_stop"]
-                    internal = row["internal_stop_count"]
-                    if len(str(next(r.seq for r in _records(result["file"]) if r.id == row["id"]))) % 3:
-                        terminal = "not_multiple_of_3"
-                values = [result["file"], row["id"], row["length"],
-                          row["x_count"] if protein else row["n_count"], row["gap_count"]]
-                if codon:
-                    values += [terminal, internal]
-                handle.write("\t".join(map(str, values)) + "\n")
-
-
-def write_html(results, output):
-    protein = results[0]["seqtype"] == "prot"
-    codon = results[0]["seqtype"] == "codon"
-    columns = ["File", "Taxa_ID", "Sequence_length", "X_count" if protein else "N_count", "Gap_count"]
-    if codon:
-        columns += ["Terminal_stop", "Internal_stop_count"]
-    rows = []
-    for result in results:
-        for row in result["sequences"]:
-            values = [result["file"], row["id"], row["length"], row["x_count"] if protein else row["n_count"], row["gap_count"]]
-            if codon:
-                values += [row.get("terminal_stop", "NA"), row.get("internal_stop_count", "NA")]
-            if codon and len(str(next(r.seq for r in _records(result["file"]) if r.id == row["id"]))) % 3:
-                values[-2] = "not_multiple_of_3"
-                values[-1] = "NA"
-            rows.append("<tr>" + "".join(f"<td>{html.escape(str(value))}</td>" for value in values) + "</tr>")
-    body = "<table><thead><tr>" + "".join(f"<th>{html.escape(key)}</th>" for key in columns) + "</tr></thead><tbody>" + "".join(rows) + "</tbody></table>"
-    with atomic_output(output) as handle:
-        handle.write("<!doctype html><meta charset='utf-8'><title>Alignment QC</title>" + body)
 
 def validate_report_paths(prefix, inputs):
     outputs = [str(prefix) + suffix for suffix in (".pass.tsv", ".fail.tsv", ".details.tsv")]
@@ -350,10 +294,10 @@ reading frame and terminal/internal stop codons.""",
 
 Notes:
   * -st/--seqtype is required and must be codon, prot, or nucl.
-  * --min-length is applied to every sequence and to the aligned matrix length.
-    Its unit is nucleotides for nucl, amino acids for prot, and complete codons
-    for codon. Thus --min-length 100 applies the same 100-residue threshold to
-    paired codon and protein matrices in phyloprep.
+  * --min-length is applied to the alignment length. Its unit is nucleotides
+    for nucl, amino acids for prot, and complete codons for codon. Unequal
+    sequence lengths already fail as length_mismatch, so no second per-sequence
+    length gate is applied.
   * --max-n-ratio applies to nucl/codon matrices; --max-x-ratio applies to prot.
     In nucl mode it is the fraction of N bases. In codon mode it is the
     fraction of complete codons containing at least one N. This need not equal
@@ -426,9 +370,8 @@ Notes:
         validate_report_paths(args.prefix, [*args.input, *paths, *(args.sequence_changes or [])])
         results, passed, failed = [], [], []
         for path in paths:
-            result = alignment_qc(path, args.seqtype, args.genetic_code, args.min_length, audit_index)
-            stat, aligned = alignment_stats(path, args.seqtype)
-            result["alignment_stats"] = stat
+            result = alignment_qc(path, args.seqtype, args.genetic_code, audit_index)
+            stat = result["alignment_stats"]
             reasons = [x for x in result["issues"] if x != "stop_codon"]
             observed_terminal = args.seqtype in {"codon", "prot"} and any(
                 x.get("terminal_stop", "NA") != "NA" for x in result["sequences"])
@@ -440,7 +383,6 @@ Notes:
                 reasons.append("terminal_stop")
             if (observed_internal or audited_internal) and not args.allow_internal_stop:
                 reasons.append("internal_stop")
-            if not aligned: reasons.append("length_mismatch")
             if length_units(stat["alignment_length"], args.seqtype) < args.min_length:
                 reasons.append("short_alignment")
             if stat["gap_ratio"] > args.max_gap_ratio: reasons.append("gap_ratio")

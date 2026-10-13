@@ -89,7 +89,7 @@ Original input files are never changed. Each replacement is recorded in `sequenc
 
 ## Complete workflow
 
-`phyloprep.py` is the recommended command. It runs `MSAP_batch.py` using the original, unique gene IDs, optionally renames all raw and trimmed alignment matrices, performs provenance-aware QC, concatenates passing genes, splits codon positions, extracts four-fold sites, and exports FASTA, relaxed PHYLIP, and NEXUS. In `codon` and `pseudogene` workflows, codon and protein alignments are treated as paired representations of the same locus: trimming preserves a shared site mask, structural 3-nt:1-aa correspondence is validated, and the final codon/protein supermatrices use the same QC-passing locus set.
+`phyloprep.py` is the recommended command. It runs `MSAP_batch.py` using the original, unique gene IDs, optionally renames all raw and trimmed alignment matrices, performs provenance-aware QC, concatenates passing genes, splits codon positions, extracts four-fold sites, and exports FASTA, relaxed PHYLIP, and NEXUS. Downstream QC consumes the validated `alignments/path-lists/all.*.pathlist` manifests written by `MSAP_batch.py`; it does not reconstruct alignment paths from filenames. This prevents stale outputs from failed or newly skipped loci from re-entering a later matrix build. In `codon` and `pseudogene` workflows, codon and protein alignments are treated as paired representations of the same locus: trimming preserves a shared site mask, structural 3-nt:1-aa correspondence is validated, and the final codon/protein supermatrices use the same QC-passing locus set.
 
 The following project diagram shows how the executable scripts connect. It is
 also useful as a reference when running any component independently.
