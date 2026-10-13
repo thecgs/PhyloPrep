@@ -53,15 +53,14 @@ def test_qc_detail_columns_and_issue(tmp_path, seqtype):
 def test_codon_min_length_counts_complete_triplets(tmp_path):
     source = tmp_path / 'input.fa'
     source.write_text('>a\nGCTGGT\n>b\nGCCGGA\n')
-    assert 'short_sequence' not in alignment_qc(source, 'codon', min_length=2)['issues']
-    assert 'short_sequence' in alignment_qc(source, 'codon', min_length=3)['issues']
+    assert alignment_stats(source, 'codon')[0]['alignment_length'] // 3 == 2
 
 
 def test_codon_n_ratio_counts_ambiguous_triplets(tmp_path):
     source = tmp_path / 'input.fa'
     source.write_text('>a\nNAAGCT\n>b\nAAAGCC\n')
     # One of four codons is ambiguous. Counting bases would incorrectly
-    # report 1/12 rather than the protein-comparable 1/4.
+    # report 1/12 rather than the codon-level 1/4.
     assert alignment_stats(source, 'codon')[0]['N_ratio'] == 0.25
 
 

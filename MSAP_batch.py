@@ -392,6 +392,10 @@ Batch-only options:
   -t/--thread controls MAFFT/MUSCLE threads; MACSE, PRANK and ClustalW2 do not use it.
   nucl/codon accept RNA, normalize U to T and IUPAC ambiguity codes to N, and audit the changes.
   codon trims a trailing 1-2-base excess with a warning and terminal_partial_codon audit event.
+  With trimAlnSeq, codon/protein sites use one shared mask: gap, codon-N and protein-X thresholds
+  are evaluated for the same paired site and either representation is removed together.
+  With trimAl, -G/-N/-X are not applied; trimAl selects protein columns and PhyloPrep transfers
+  exactly those retained columns to complete codon triplets.
   prot removes trailing stops and masks internal stops, ambiguous and non-standard residues as X,
   with recorded amino-acid positions.
   --protein-stop-symbol '.' selects dot-encoded stops (default: '*').
@@ -414,9 +418,9 @@ Batch-only options:
     workflow.add_argument("-s", "--align_software", "--align-software", default=None, choices=["mafft", "muscle", "prank", "clustalw2", "macse"], help="Alignment program (default: mafft; pseudogene requires macse).")
     workflow.add_argument("-n", "--notrim", action="store_true", help="Skip alignment trimming.")
     workflow.add_argument("-ts", "--trim-software", default="trimAlnSeq", choices=["trimAlnSeq", "trimal"], help="Trimming program (default: trimAlnSeq).")
-    trim_seq.add_argument("-G", "--G", "--trimAlnSeq-G", dest="G", type=float, default=0.2, help="Maximum gap ratio (default: 0.2).")
-    trim_seq.add_argument("-N", "--N", "--trimAlnSeq-N", dest="N", type=float, default=0.2, help="Maximum N ratio (default: 0.2).")
-    trim_seq.add_argument("-X", "--X", "--trimAlnSeq-X", dest="X", type=float, default=0.2, help="Maximum X ratio (default: 0.2).")
+    trim_seq.add_argument("-G", "--G", "--trimAlnSeq-G", dest="G", type=float, default=0.2, help="trimAlnSeq only: maximum gap ratio per site (default: 0.2).")
+    trim_seq.add_argument("-N", "--N", "--trimAlnSeq-N", dest="N", type=float, default=0.2, help="trimAlnSeq only: maximum codon-N ratio per paired site (default: 0.2).")
+    trim_seq.add_argument("-X", "--X", "--trimAlnSeq-X", dest="X", type=float, default=0.2, help="trimAlnSeq only: maximum protein-X ratio per paired site (default: 0.2).")
     trim_al.add_argument("--trimal-args", nargs=argparse.REMAINDER, default=[], help="Arguments passed to trimAl; must be final. In codon/pseudogene mode, do not pass -in, -out, -fasta, -backtrans or -colnumbering.")
     workflow.add_argument("-st", "--seqtype", "--seq-type", default="codon", choices=["codon", "prot", "nucl", "pseudogene"], help="Input sequence type (default: codon).")
     workflow.add_argument("-g", "--genetic_code", "--genetic-code", type=int, default=1, help="NCBI genetic-code table (default: 1).")

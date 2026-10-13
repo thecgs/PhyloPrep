@@ -45,16 +45,24 @@ modifying those core scripts.
 
 `MSAP_batch.py` browser mode processes loci sequentially with the existing
 MSAP/Pyodide + Biowasm MAFFT/MUSCLE workflow, then creates batch-style path lists and
-a merged sequence-change report. `phyloprep.py` browser mode reuses those
-alignments and invokes the repository's original QC, taxon-renaming,
-supermatrix, codon-position, four-fold and FASTA/PHYLIP/NEXUS modules inside
-Pyodide.
+a merged sequence-change report. Those validated path lists are also the browser finalizer's only source of downstream alignment membership, matching the CLI contract. `phyloprep.py` browser mode reuses those
+alignments and invokes the repository's provenance-aware paired codon/protein QC,
+taxon-renaming, supermatrix, codon-position, four-fold and FASTA/PHYLIP/NEXUS
+modules inside Pyodide.
 
 Current browser constraints are explicit in the parameter UI: MUSCLE 5.1.0 is
 the recommended default; MAFFT E-INS-i 7.520 is optional. The browser uses one
 alignment worker, one locus at a time, and
 `trimAlnSeq.py` trimming. Pseudogene/MACSE, PRANK, ClustalW2 and trimAl remain
 CLI-only.
+
+### Stop provenance and paired codon/protein QC
+
+In browser `phyloprep.py`, codon and protein alignments from the same CDS locus are treated as a pair. The browser uses the merged `reports/sequence_changes.tsv` automatically when running QC. Internal stops that MSAP already masked are therefore still visible to QC as provenance events in both the codon and protein representations. They fail the pair by default and are allowed only when `--allow-internal-stop` is selected; the masked sequence state is never restored. Terminal stops normally removed from complete CDS inputs are reported but do not fail QC. A terminal stop that remains directly observable in a final codon alignment is controlled by `--allow-terminal-stop`.
+
+The paired workflow also keeps codon and protein site structure synchronized. Browser codon trimming uses the same paired site mask as the CLI: gap, codon-N, and protein-X thresholds are evaluated for the same amino-acid/codon site, and rejected sites are removed from both representations together. After non-PIS representation-specific QC, both sides must pass. PIS is evaluated separately for codon and protein, and the browser exposes a **Paired PIS policy** selector with `both`, `either`, `codon`, and `protein`. Optional **Minimum codon PIS** and **Minimum protein PIS** fields let the two representations use different thresholds; blank fields fall back to the general minimum-PIS value. The final codon and protein matrices still use exactly the same retained locus set. Representation-specific pass/fail reports are preserved, while final retained manifests are written as `qc/paired/<raw|trimmed>/codon.retained.tsv` and `prot.retained.tsv`. Pair decisions, both PIS values, both thresholds, selected policy, and final status are written under `qc/paired/<raw|trimmed>/loci.details.tsv`.
+
+The standalone browser `alignment_qc.py` tool accepts an optional `sequence_changes.tsv` input. Without it, directly visible stops are detected from codons or protein `*`; with it, masked internal-stop provenance is restored for QC. Terminal and internal observed-stop controls are therefore available for codon and standalone protein QC.
 
 
 ## Orthology tools in the browser
