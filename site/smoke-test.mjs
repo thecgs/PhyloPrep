@@ -91,3 +91,17 @@ const missingTaxaOptions = 'options: [["skip-gene", "skip-gene"], ["pad-gaps", "
 if (app.split(missingTaxaOptions).length - 1 < 2) {
   throw new Error("phyloprep.py and get_supergenes.py must use identical skip-gene/pad-gaps Missing taxa policy labels.");
 }
+
+if (!alignmentWorker.includes('{ tool: "muscle", version: "5.1.0", program: "muscle", reinit: true }')) {
+  throw new Error("MUSCLE must reinitialize after each Biowasm invocation so multi-locus runs do not reuse parser/global state.");
+}
+
+if (!alignmentWorker.includes("async function createMafftCli()")) {
+  throw new Error("MAFFT must create a fresh Aioli instance for each locus.");
+}
+if (!alignmentWorker.includes('if (tool === "mafft") {\n        try { await cli.close(); } catch {}')) {
+  throw new Error("MAFFT Aioli instances must be closed after each locus.");
+}
+if (alignmentWorker.includes('let cliPromise;')) {
+  throw new Error("MAFFT and MUSCLE must not share one persistent Aioli instance.");
+}

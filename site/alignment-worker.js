@@ -1,19 +1,33 @@
 const AIOLI_URL = "https://biowasm.com/cdn/v3/aioli.js";
-let cliPromise;
+let muscleCliPromise;
+let aioliLoaded = false;
 
-async function ensureCli() {
-  if (!cliPromise) {
-    cliPromise = (async () => {
-      importScripts(AIOLI_URL);
-      if (typeof globalThis.Aioli !== "function") throw new Error("Biowasm Aioli did not initialize.");
+function ensureAioliLoaded() {
+  if (!aioliLoaded) {
+    importScripts(AIOLI_URL);
+    if (typeof globalThis.Aioli !== "function") throw new Error("Biowasm Aioli did not initialize.");
+    aioliLoaded = true;
+  }
+}
+
+async function ensureMuscleCli() {
+  if (!muscleCliPromise) {
+    muscleCliPromise = (async () => {
+      ensureAioliLoaded();
       return await new globalThis.Aioli([
-        { tool: "mafft", version: "7.520", program: "tbfast", reinit: false },
-        { tool: "mafft", version: "7.520", program: "dvtditr", reinit: false },
-        "muscle/5.1.0",
+        { tool: "muscle", version: "5.1.0", program: "muscle", reinit: true },
       ], { printInterleaved: false });
     })();
   }
-  return cliPromise;
+  return muscleCliPromise;
+}
+
+async function createMafftCli() {
+  ensureAioliLoaded();
+  return await new globalThis.Aioli([
+    { tool: "mafft", version: "7.520", program: "tbfast", reinit: false },
+    { tool: "mafft", version: "7.520", program: "dvtditr", reinit: false },
+  ], { printInterleaved: false });
 }
 
 function validateAlignment(alignment, tool, execution) {
@@ -31,7 +45,7 @@ self.addEventListener("message", async (event) => {
   let inputPath;
   let outputPath;
   try {
-    cli = await ensureCli();
+    cli = tool === "mafft" ? await createMafftCli() : await ensureMuscleCli();
     const token = `phyloprep-${Date.now()}-${runId}`;
     const mounted = await cli.mount([{ name: `${token}.fasta`, data: request.sequenceText }]);
     inputPath = mounted?.[0];
@@ -84,6 +98,9 @@ self.addEventListener("message", async (event) => {
       try { if (outputPath) await cli.fs.unlink(outputPath); } catch {}
       try { if (tool === "mafft") await cli.fs.unlink("/shared/data/pre"); } catch {}
       try { if (inputPath) await cli.fs.unlink(inputPath); } catch {}
+      if (tool === "mafft") {
+        try { await cli.close(); } catch {}
+      }
     }
   }
 });
