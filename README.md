@@ -370,12 +370,9 @@ These are imported by workflow scripts. They implement normalization, MACSE prov
 
 ### Paired codon/protein QC
 
-For `-st codon`, the protein alignment and its back-translated codon alignment are two representations of the same locus, not independent datasets. PhyloPrep therefore enforces paired structural QC before matrix construction:
+For `-st codon`, the protein alignment and its back-translated codon alignment are two representations of the same locus, not independent datasets. Their structural correspondence is established upstream when `AA2Codon.py` back-translates the protein alignment and when paired trimming writes codon/protein outputs from one shared site mask. `phyloprep.py` therefore does not repeat those construction checks during downstream paired QC.
 
-1. the taxon IDs must be identical;
-2. every codon sequence must be exactly three times the corresponding protein length, with codon gaps and protein gaps occupying the same paired sites;
-3. all non-PIS QC requirements must pass for both representations;
-4. PIS is calculated separately for codon and protein because synonymous substitutions can make the two values differ legitimately.
+Paired QC operates only on filtering policy: all non-PIS QC requirements must pass for both representations, while PIS is calculated separately for codon and protein because synonymous substitutions can make the two values differ legitimately.
 
 The user decides how PIS controls pair retention with `--paired-pis-policy`:
 

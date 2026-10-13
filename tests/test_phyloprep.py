@@ -2,14 +2,12 @@
 import subprocess
 import sys
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 from Bio import AlignIO
 
 REPO = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(REPO))
-import phyloprep
+
 
 
 def invoke(tmp_path, env, *args):
@@ -357,28 +355,3 @@ def test_paired_pis_thresholds_can_differ(tmp_path, fake_aligner):
     assert result.returncode == 0, result.stdout + result.stderr
     paired = (output / "qc/paired/raw/loci.details.tsv").read_text()
     assert "\t1\t0\t1\t0\tboth\tpass\tpass\tNA\n" in paired
-
-
-def test_paired_validation_rejects_translation_mismatch(tmp_path):
-    codon = tmp_path / "gene.mafft.codon.aln"
-    protein = tmp_path / "gene.mafft.prot.aln"
-    codon.write_text(">a\nGCT\n>b\nGCT\n")
-    protein.write_text(">a\nV\n>b\nV\n")
-    args = SimpleNamespace(align_software="mafft", genetic_code=1)
-    codon_context = {"qc_paths": [codon], "seqtype": "codon", "variant": "raw"}
-    protein_context = {"qc_paths": [protein], "seqtype": "prot", "variant": "raw"}
-    with pytest.raises(ValueError, match="translation mismatch"):
-        phyloprep.validate_paired_alignments(args, codon_context, protein_context)
-
-
-def test_paired_validation_does_not_reinterpret_trimmed_first_codon_as_start(tmp_path):
-    codon = tmp_path / "gene.mafft.codon.trimal.aln"
-    protein = tmp_path / "gene.mafft.prot.trimal.aln"
-    # GTG is start-capable in table 1, but after trimming it may be an internal
-    # codon whose ordinary translation is V rather than initiator M.
-    codon.write_text(">a\nGTG\n>b\nGTG\n")
-    protein.write_text(">a\nV\n>b\nV\n")
-    args = SimpleNamespace(align_software="mafft", genetic_code=1)
-    codon_context = {"qc_paths": [codon], "seqtype": "codon", "variant": "trimmed"}
-    protein_context = {"qc_paths": [protein], "seqtype": "prot", "variant": "trimmed"}
-    phyloprep.validate_paired_alignments(args, codon_context, protein_context)

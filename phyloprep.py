@@ -16,7 +16,6 @@ import subprocess
 import sys
 import tempfile
 
-from Bio.Seq import Seq
 from Bio.Data import CodonTable
 from sequence_audit import normalize_workflow, merge_reports
 from MSAP_batch import build_parser as batch_parser
@@ -476,61 +475,6 @@ def _context_map(context, args):
     }
 
 
-def validate_paired_alignments(args, codon_context, protein_context):
-    """Enforce the structural 3-nt:1-aa relationship before paired filtering."""
-    codon = _context_map(codon_context, args)
-    protein = _context_map(protein_context, args)
-    if set(codon) != set(protein):
-        missing_codon = sorted(set(protein) - set(codon))
-        missing_protein = sorted(set(codon) - set(protein))
-        raise ValueError(
-            "Paired codon/protein alignment set mismatch. "
-            f"Missing codon: {missing_codon or 'none'}; missing protein: {missing_protein or 'none'}"
-        )
-    for locus in sorted(codon):
-        codon_records = {r.id: str(r.seq).upper() for r in read_fasta_alignment(codon[locus], codon=True)}
-        protein_records = {r.id: str(r.seq).upper() for r in read_fasta_alignment(protein[locus])}
-        if set(codon_records) != set(protein_records):
-            raise ValueError(f"{locus}: paired codon/protein taxon IDs differ")
-        for taxon in codon_records:
-            nt = codon_records[taxon]
-            aa = protein_records[taxon]
-            if len(nt) != 3 * len(aa):
-                raise ValueError(
-                    f"{locus}/{taxon}: paired codon/protein lengths are not 3:1 "
-                    f"({len(nt)} nt vs {len(aa)} aa)"
-                )
-            table = CodonTable.unambiguous_dna_by_id[args.genetic_code]
-            coding_index = 0
-            for index, residue in enumerate(aa):
-                codon_triplet = nt[3 * index:3 * index + 3]
-                if (codon_triplet == "---") != (residue == "-"):
-                    raise ValueError(
-                        f"{locus}/{taxon}: codon/protein gap correspondence is broken at paired site {index + 1}"
-                    )
-                if codon_triplet == "---" or residue == "-":
-                    continue
-                normalized_codon = codon_triplet.replace("U", "T")
-                if "N" not in normalized_codon and "?" not in normalized_codon:
-                    translated = str(Seq(normalized_codon).translate(table=args.genetic_code))
-                    allowed_residues = {translated}
-                    if codon_context["variant"] == "raw":
-                        if coding_index == 0 and normalized_codon in table.start_codons:
-                            allowed_residues = {"M"}
-                    elif normalized_codon in table.start_codons:
-                        # Trimming can remove the biological first codon, so a retained
-                        # start-capable codon may legitimately encode either its normal
-                        # amino acid or the initiator M inherited from the raw translation.
-                        allowed_residues.add("M")
-                    if residue not in allowed_residues:
-                        expected = "/".join(sorted(allowed_residues))
-                        raise ValueError(
-                            f"{locus}/{taxon}: paired codon/protein translation mismatch at site {index + 1} "
-                            f"({codon_triplet}->{expected}, protein={residue})"
-                        )
-                coding_index += 1
-
-
 def _pis_map(context, args):
     return {
         locus: alignment_stats(path, context["seqtype"])[0]["parsimony_informative_sites"]
@@ -562,7 +506,6 @@ def _paired_pis_decision(policy, codon_pis, protein_pis, codon_threshold, protei
 
 def synchronize_paired_qc(args, root, variant, codon_context, protein_context):
     """Keep one locus set while applying non-PIS QC and a user-selected paired PIS policy."""
-    validate_paired_alignments(args, codon_context, protein_context)
     codon_all = _context_map(codon_context, args)
     protein_all = _context_map(protein_context, args)
     codon_pass = _pass_map(codon_context, args)
