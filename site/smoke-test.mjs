@@ -136,3 +136,11 @@ if (!app.includes("function normalizeCatalogText(value)") || !app.includes("func
 if (!app.includes('elements.scriptSearch.addEventListener("search", refreshCatalogSearch)')) {
   throw new Error("Tool search must respond to the native search-field clear action.");
 }
+
+const styles = await readFile("site/styles.css", "utf8");
+if (!/\.output-files-list[\s\S]*?resize:\s*vertical/.test(styles)) {
+  throw new Error("Output files panel must be vertically resizable.");
+}
+if (!/\.output-preview\s*\{[\s\S]*?resize:\s*vertical/.test(styles)) {
+  throw new Error("Output preview panel must be vertically resizable.");
+}
