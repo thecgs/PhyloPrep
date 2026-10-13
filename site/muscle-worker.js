@@ -26,7 +26,7 @@ self.addEventListener("message", async (event) => {
     inputPath = mounted?.[0];
     if (!inputPath) throw new Error("Biowasm could not mount the MUSCLE input.");
     outputPath = `/shared/data/${token}.aligned.fasta`;
-    const execution = await cli.exec("muscle", ["-align", inputPath, "-output", outputPath, "-threads", "1"]);
+    const execution = await cli.exec("muscle -align " + inputPath + " -output " + outputPath + " -threads 1");
 
     // Aioli.download() creates a blob URL inside Aioli's own internal worker.
     // This file is already running in a second Web Worker, so reading that
