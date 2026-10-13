@@ -113,3 +113,10 @@ MUSCLE 5.1.0 is configured with Aioli `reinit: true`. Batch workflows reuse
 the alignment worker across loci, but the MUSCLE WebAssembly module itself is
 reinitialized after each invocation so argument-parser and other module-global
 state cannot leak from one FASTA alignment into the next.
+
+
+MAFFT E-INS-i uses a stricter isolation model than MUSCLE. Each locus creates a
+fresh Aioli instance containing `tbfast` and `dvtditr`; that instance is
+closed after the two-stage alignment completes. This preserves the shared
+`/shared/data/pre` file within a locus while preventing MAFFT module-global
+state from leaking into the next FASTA in a batch.
