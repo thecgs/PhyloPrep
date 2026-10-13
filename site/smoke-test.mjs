@@ -164,8 +164,9 @@ if (!app.includes('flag: "--paired-pis-policy"') ||
     !app.includes('["either", "either — codon OR protein may pass"]')) {
   throw new Error("Browser PhyloPrep must expose the four paired PIS policies.");
 }
-if (!app.includes('hide("paired_pis_policy", seqtype !== "codon")')) {
-  throw new Error("Paired PIS policy must be contextual to codon workflow in the browser.");
+if (!app.includes('const pairedPis = script === "phyloprep.py" && seqtype === "codon"') ||
+    !app.includes('hide("paired_pis_policy", !pairedPis)')) {
+  throw new Error("Paired PIS policy must be contextual to the PhyloPrep codon workflow.");
 }
 if (!app.includes('hide("x_ratio", seqtype === "nucl"') ||
     !app.includes('hide("max_x_ratio", seqtype === "nucl"')) {
