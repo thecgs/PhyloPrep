@@ -351,6 +351,18 @@ def run_phyloprep_finalize(file_manifest, options, output_root, engine_root="/en
             if target.name.endswith(".sequence_changes.tsv"):
                 change_reports.append(target)
 
+        path_lists = alignments / "path-lists"
+        path_lists.mkdir(parents=True, exist_ok=True)
+        for kind in ("nucl", "prot", "codon"):
+            for variant, suffix in (("raw", f".{kind}.aln"), ("trimmed", f".{kind}.trimal.aln")):
+                files = sorted(
+                    path.resolve() for path in alignments.iterdir()
+                    if path.is_file() and path.name.endswith(suffix)
+                )
+                if files:
+                    list_name = f"all.{kind}.aln.pathlist" if variant == "raw" else f"all.{kind}.trimal.aln.pathlist"
+                    phyloprep.write_paths(path_lists / list_name, files)
+
         reports = root / "reports"
         reports.mkdir(parents=True, exist_ok=True)
         merged_changes = reports / "sequence_changes.tsv"
@@ -364,6 +376,12 @@ def run_phyloprep_finalize(file_manifest, options, output_root, engine_root="/en
 
         def number(name, default, kind=float):
             value = options.get(name, default)
+            return kind(value)
+
+        def optional_number(name, kind=int):
+            value = options.get(name)
+            if value in (None, ""):
+                return None
             return kind(value)
 
         args = types.SimpleNamespace(
@@ -383,14 +401,13 @@ def run_phyloprep_finalize(file_manifest, options, output_root, engine_root="/en
             max_x_ratio=number("max_x_ratio", 1.0),
             max_gap_ratio=number("max_gap_ratio", 1.0),
             min_parsimony_informative_sites=number("min_parsimony_informative_sites", 0, int),
+            min_codon_pis=optional_number("min_codon_pis", int),
+            min_protein_pis=optional_number("min_protein_pis", int),
+            paired_pis_policy=str(options.get("paired_pis_policy", "both")),
             allow_terminal_stop=bool(options.get("allow_terminal_stop", False)),
             allow_internal_stop=bool(options.get("allow_internal_stop", False)),
         )
-        ratios = [args.G, args.N, args.X, args.max_n_ratio, args.max_x_ratio, args.max_gap_ratio]
-        if any(value < 0 or value > 1 for value in ratios):
-            raise ValueError("Trimming and QC ratios must be between 0 and 1.")
-        if args.min_length < 0 or args.min_parsimony_informative_sites < 0:
-            raise ValueError("QC length/site thresholds must be non-negative.")
+        phyloprep.validate_pipeline_options(args)
 
         original_run = phyloprep.run
 
@@ -400,14 +417,11 @@ def run_phyloprep_finalize(file_manifest, options, output_root, engine_root="/en
 
         phyloprep.run = browser_run
         try:
-            seqtypes = ("codon", "prot") if args.seqtype == "codon" else (args.seqtype,)
             variants = ("raw",) if args.notrim else ("raw", "trimmed")
+            matrix_root = root / "matrices"
             with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
-                for seqtype in seqtypes:
-                    for variant in variants:
-                        stage = root / "matrices" / seqtype / variant
-                        stage.mkdir(parents=True, exist_ok=True)
-                        phyloprep.prepare_group(args, sources, root, stage, seqtype, variant)
+                for variant in variants:
+                    phyloprep.prepare_variant(args, root, matrix_root, variant)
         finally:
             phyloprep.run = original_run
 

@@ -144,3 +144,46 @@ if (!/\.output-files-list[\s\S]*?resize:\s*vertical/.test(styles)) {
 if (!/\.output-preview\s*\{[\s\S]*?resize:\s*vertical/.test(styles)) {
   throw new Error("Output preview panel must be vertically resizable.");
 }
+
+if (!app.includes('key: "sequence_changes"') || !app.includes("--sequence-changes")) {
+  throw new Error("Browser alignment_qc.py must accept sequence_changes.tsv provenance.");
+}
+if (!app.includes("Retain a codon/protein locus pair") || !app.includes("masked to NNN/X")) {
+  throw new Error("Browser PhyloPrep must explain provenance-aware internal-stop policy.");
+}
+if (!worker.includes('...(changes ? ["--sequence-changes", changes.path] : [])')) {
+  throw new Error("Browser worker must forward sequence_changes.tsv to alignment_qc.py.");
+}
+const browserRunner = contents["site/browser_runner.py"];
+if (!browserRunner.includes("phyloprep.prepare_variant(args, root, matrix_root, variant)")) {
+  throw new Error("Browser PhyloPrep must use paired prepare_variant orchestration.");
+}
+
+if (!app.includes('flag: "--paired-pis-policy"') ||
+    !app.includes('["both", "both — codon AND protein must pass"]') ||
+    !app.includes('["either", "either — codon OR protein may pass"]')) {
+  throw new Error("Browser PhyloPrep must expose the four paired PIS policies.");
+}
+if (!app.includes('const pairedPis = script === "phyloprep.py" && seqtype === "codon"') ||
+    !app.includes('hide("paired_pis_policy", !pairedPis)')) {
+  throw new Error("Paired PIS policy must be contextual to the PhyloPrep codon workflow.");
+}
+if (!app.includes('hide("x_ratio", seqtype === "nucl"') ||
+    !app.includes('hide("max_x_ratio", seqtype === "nucl"')) {
+  throw new Error("Codon workflow must expose protein X trimming/QC thresholds for paired processing.");
+}
+
+if (!app.includes('script: "alignment_qc.py", title: "Alignment quality control", category: "QC", browser: true, inputListKey: "inputs"')) {
+  throw new Error("alignment_qc.py command preview must scope -i inputs to alignment files only.");
+}
+if (!app.includes('flag: "--min-codon-pis"') || !app.includes('flag: "--min-protein-pis"')) {
+  throw new Error("Browser PhyloPrep must expose independent codon/protein PIS thresholds.");
+}
+if (!app.includes('script === "alignment_qc.py" && seqtype === "codon"')) {
+  throw new Error("Browser QC visibility must hide protein-X threshold for standalone codon alignment_qc.");
+}
+
+if (!browserRunner.includes('path_lists = alignments / "path-lists"') ||
+    !browserRunner.includes("phyloprep.write_paths(path_lists / list_name, files)")) {
+  throw new Error("Browser finalizer must publish validated batch-style path lists for downstream QC.");
+}

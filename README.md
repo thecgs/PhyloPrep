@@ -89,7 +89,7 @@ Original input files are never changed. Each replacement is recorded in `sequenc
 
 ## Complete workflow
 
-`phyloprep.py` is the recommended command. It runs `MSAP_batch.py` using the original, unique gene IDs, optionally renames all raw and trimmed alignment matrices, QC-checks them independently, concatenates passing genes, splits codon positions, extracts four-fold sites, and exports FASTA, relaxed PHYLIP, and NEXUS.
+`phyloprep.py` is the recommended command. It runs `MSAP_batch.py` using the original, unique gene IDs, optionally renames all raw and trimmed alignment matrices, performs provenance-aware QC, concatenates passing genes, splits codon positions, extracts four-fold sites, and exports FASTA, relaxed PHYLIP, and NEXUS. Downstream QC consumes the validated `alignments/path-lists/all.*.pathlist` manifests written by `MSAP_batch.py`; it does not reconstruct alignment paths from filenames. This prevents stale outputs from failed or newly skipped loci from re-entering a later matrix build. In `codon` and `pseudogene` workflows, codon and protein alignments are treated as paired representations of the same locus: trimming preserves a shared site mask, structural 3-nt:1-aa correspondence is validated, and the final codon/protein supermatrices use the same QC-passing locus set.
 
 The following project diagram shows how the executable scripts connect. It is
 also useful as a reference when running any component independently.
@@ -98,11 +98,12 @@ also useful as a reference when running any component independently.
 
 ```mermaid
 flowchart LR
-  A[FASTA inputs: unique gene IDs] --> B[MSAP_batch.py] --> C[alignment_qc.py]
-  C --> D{Mapping TSV}
+  A[FASTA inputs: unique gene IDs] --> B[MSAP_batch.py]
+  B --> D{Mapping TSV}
   D -->|yes| E[rename_taxa.py]
-  D -->|no| F[get_supergenes.py]
-  E --> F
+  D -->|no| C[alignment_qc.py]
+  E --> C
+  C --> F[get_supergenes.py]
   F --> G[FASTA / PHY / NEX]
   F --> |is codon and pesudogene model| H[Codon positions and four-fold sites]
 ```
@@ -115,7 +116,11 @@ flowchart LR
 | `-st` | `codon`, `nucl`, `prot`, or `pseudogene`. |
 | `-t N`, `-j N` | MAFFT/MUSCLE threads and concurrent jobs. |
 | `--missing-taxa` | `skip-gene` or `pad-gaps` during concatenation. |
-| `--min-length`, `--max-*-ratio`, `--min-parsimony-informative-sites` | QC thresholds. |
+| `--min-length`, `--max-*-ratio`, `--min-parsimony-informative-sites` | Representation-specific QC thresholds. In paired codon/protein workflows, non-PIS QC must pass on both sides; PIS retention is controlled separately by `--paired-pis-policy`. |
+| `--allow-internal-stop` | Retain a paired codon/protein locus when an internal stop is observed directly or recorded by preprocessing as masked to `NNN/X`. The masked state is not restored. |
+| `--allow-terminal-stop` | Allow a terminal stop that remains directly observable in a final codon alignment. Normal terminal stops removed by MSAP preprocessing are provenance only and do not fail QC. |
+| `--paired-pis-policy` | `both` (default), `either`, `codon`, or `protein`; controls how paired codon/protein PIS decisions are combined while keeping the final locus set identical in both matrices. |
+| `--min-codon-pis`, `--min-protein-pis` | Optional representation-specific PIS thresholds for paired codon workflows. Each falls back to `--min-parsimony-informative-sites` when omitted. |
 | `-g TABLE` | NCBI genetic-code table; default 1. |
 | `--macse-jar`, `--macse-memory` | Pseudogene MACSE settings. |
 
@@ -128,7 +133,8 @@ results/
   renamed/<type>/<raw|trimmed>/    # passing matrices after -m ID mapping
   alignments/                      # batch products and checkpoints
   reports/sequence_changes.tsv     # merged provenance report
-  qc/<type>/<raw|trimmed>/          # pass, fail, and details TSVs
+  qc/<type>/<raw|trimmed>/          # representation-specific pass, fail, and details TSVs
+  qc/paired/<raw|trimmed>/           # paired decisions + codon/prot.retained.tsv manifests
   matrices/
     codon/<raw|trimmed>/            # supermatrix, codon1st/2nd/3rd, fourfold
     prot/<raw|trimmed>/             # protein supermatrix
@@ -175,7 +181,7 @@ python MSAP.py -i proteins.fa -st prot --protein-stop-symbol .
 python MSAP.py -i pseudo.fa -st pseudogene --macse-jar macse_v2.07.jar
 ```
 
-Outputs use `GENE.ALIGNER.{nucl|prot|codon}[.trimal].aln`; audit reports are retained.
+Outputs use `GENE.ALIGNER.{nucl|prot|codon}[.trimal].aln`; audit reports are retained. In codon mode, default trimming uses one shared site mask for the paired protein and back-translated codon alignments. For each amino-acid/codon site, gap, codon-N, and protein-X fractions are evaluated together; if any selected threshold rejects the site, the amino-acid column and its complete codon triplet are removed together. trimAl codon mode likewise transfers retained protein columns to complete codon triplets.
 
 ### `MSAP_batch.py` — concurrent, resumable alignment
 
@@ -189,14 +195,27 @@ It writes validated alignments, checkpoints, reports, and current path lists und
 
 ### `alignment_qc.py` — matrix QC
 
-Checks IDs, lengths, gap/N/X ratios, PIS, and codon frame/stops. It writes `PREFIX.pass.tsv`, `PREFIX.fail.tsv`, and `PREFIX.details.tsv`.
+Checks IDs, lengths, gap/N/X ratios, PIS, codon frame/stops, and optional PhyloPrep preprocessing provenance. It writes `PREFIX.pass.tsv`, `PREFIX.fail.tsv`, and `PREFIX.details.tsv`.
 
 ```bash
+# Direct inspection of an alignment
 python alignment_qc.py -i alignments.pathlist -st codon -p qc/codon \
   --max-n-ratio 0.2 --min-parsimony-informative-sites 20
+
+# Provenance-aware inspection of MSAP/PhyloPrep products
+python alignment_qc.py -i alignments.pathlist -st codon -p qc/codon \
+  --sequence-changes reports/sequence_changes.tsv
 ```
 
-Codon gaps must be `---`. Stops fail by default; use `--allow-terminal-stop` or `--allow-internal-stop` only when justified.
+Codon gaps must be complete triplets (`---`). Without `--sequence-changes`, stop control is based on stops directly observable in the supplied alignment: genetic-code-aware stop codons for `codon`, and `*` for `prot`. With one or more `--sequence-changes TSV` reports, QC also recovers stop events that MSAP already standardized before alignment:
+
+- **Internal stop:** MSAP replaces the codon with `NNN`; the paired protein representation carries the corresponding standardized uncertainty. The audit row remains an `internal_stop` event. `alignment_qc.py` therefore marks both the codon representation and the paired protein representation as containing an audited internal stop. The locus fails by default. `--allow-internal-stop` permits the locus, but the sequence remains masked; it never restores the original stop codon or `*`.
+- **Terminal stop removed by MSAP:** a normal complete-CDS terminal stop is deleted before translation and recorded as `terminal_stop`. This is reported in the audited-stop columns but **does not fail QC**.
+- **Stop still present in a supplied alignment:** a definite codon stop or protein `*` is an observed alignment feature and fails by default. `--allow-terminal-stop` permits a terminal stop and `--allow-internal-stop` permits internal stops. Custom protein stop symbols should be normalized before standalone QC.
+
+The detailed report separates directly observed stop information from `Audited_terminal_stop` and `Audited_internal_stop`, so a masked source event is not misrepresented as a stop that still exists in the final alignment.
+
+In the complete `phyloprep.py -st codon` workflow the merged `reports/sequence_changes.tsv` is supplied automatically. The same audited internal-stop decision is applied to both codon and protein representations. Pseudogene mode is different by design: MACSE stop/frameshift events are masked and reported, but those events do not by themselves reject the pseudogene pair.
 
 ### `get_supergenes.py` — supermatrix and partitions
 
@@ -349,7 +368,24 @@ These are imported by workflow scripts. They implement normalization, MACSE prov
 
 ## QC and tree building
 
-PIS (Parsimony-Informative-Sites) counts only resolved states. `N`, `X`, gaps, stops, and other unknown states do not contribute. A zero-PIS matrix can be read by IQ-TREE but does not inform topology; use `--min-parsimony-informative-sites` to enforce a project-specific threshold.
+### Paired codon/protein QC
+
+For `-st codon`, the protein alignment and its back-translated codon alignment are two representations of the same locus, not independent datasets. Their structural correspondence is established upstream when `AA2Codon.py` back-translates the protein alignment and when paired trimming writes codon/protein outputs from one shared site mask. `phyloprep.py` therefore does not repeat those construction checks during downstream paired QC.
+
+Paired QC operates only on filtering policy: all non-PIS QC requirements must pass for both representations, while PIS is calculated separately for codon and protein because synonymous substitutions can make the two values differ legitimately.
+
+The user decides how PIS controls pair retention with `--paired-pis-policy`:
+
+- `both` (default): codon PIS **and** protein PIS must each reach their threshold;
+- `either`: codon PIS **or** protein PIS may reach its threshold;
+- `codon`: only codon PIS controls the pair;
+- `protein`: only protein PIS controls the pair.
+
+By default both thresholds inherit `--min-parsimony-informative-sites`. Use `--min-codon-pis` and/or `--min-protein-pis` when the nucleotide-column and amino-acid-column PIS scales should be filtered differently. A zero threshold disables filtering for that representation. Regardless of policy, a retained locus is written to both final codon and protein matrices; a rejected locus is written to neither. The shared decision is reported in `qc/paired/<raw|trimmed>/loci.details.tsv`, including codon PIS, protein PIS, both thresholds, selected policy, PIS status, and final paired status. Representation-specific `alignment.pass.tsv`, `alignment.fail.tsv`, and `alignment.details.tsv` remain untouched and describe each representation on its own. Final matrix construction uses `qc/paired/<raw|trimmed>/codon.retained.tsv` and `prot.retained.tsv`, so paired filtering never rewrites the representation-specific QC history.
+
+Internal-stop provenance is also pair-level. An internal stop recorded by codon preprocessing causes both representations to fail unless `--allow-internal-stop` is supplied. Allowing it changes only the retention policy; the standardized `NNN/X` state and the audit record are preserved. Protein-only PhyloPrep workflows retain their historical clean-and-audit behavior; standalone `alignment_qc.py -st prot --sequence-changes ...` can still apply provenance-aware internal-stop QC explicitly. Nucleotide (`nucl`) QC ignores stop provenance.
+
+PIS (Parsimony-Informative-Sites) counts only resolved states. `N`, `X`, gaps, stops, and other unknown states do not contribute. Codon PIS counts nucleotide alignment columns whereas protein PIS counts amino-acid columns, so their absolute values and appropriate thresholds need not be equal. A zero-PIS matrix can be read by IQ-TREE but does not inform topology; use `--min-parsimony-informative-sites` to enforce a project-specific threshold.
 
 There is no universal minimum PIS for taxa. Evaluate PIS with alignment length, missing data, bootstrap support, gene concordance, and the biological divergence of the sample. Use the same NCBI genetic code in downstream codon analyses.
 
@@ -403,7 +439,7 @@ Browser alignment uses MUSCLE 5.1.0 as the recommended default and also offers M
 
 The browser interface includes tool search/category grouping, context-aware parameter display, basic input preflight checks, local output-folder support where the browser allows it, cancellable MAFFT/MUSCLE execution, and direct workflow handoff for common upstream chains such as Proteinortho/OMA/OrthoMCL/SonicParanoid → orthogroup extraction → PhyloPrep. Every successful browser run also writes `phyloprep-run.json`, containing the selected module, parameters, equivalent CLI command, runtime provenance, and SHA256 hashes for browser inputs and outputs.
 
-The browser implementation distinguishes original-script execution from browser-adapted orchestration. Standalone Python utilities run their repository source directly in Pyodide. Higher-level workflows use a compatibility layer to replace Linux child-process/concurrency behavior while keeping the underlying PhyloPrep sequence-processing modules unchanged.
+The browser implementation distinguishes original-script execution from browser-adapted orchestration. Standalone Python utilities run their repository source directly in Pyodide. Higher-level workflows use a compatibility layer to replace Linux child-process/concurrency behavior while keeping the underlying PhyloPrep sequence-processing modules unchanged. Browser `phyloprep.py` uses the same provenance-aware paired codon/protein QC as the CLI, and browser `alignment_qc.py` accepts an optional `sequence_changes.tsv` file for the same audited-stop logic.
 
 ## Testing and troubleshooting
 

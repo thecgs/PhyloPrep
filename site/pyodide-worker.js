@@ -185,8 +185,10 @@ function originalArguments(request, stage) {
   switch (request.script) {
     case "AA2Codon.py":
       return ["-c", inputFile(stage, 0), "-p", inputFile(stage, 1), "-o", output, "-g", option(values.genetic_code, "1")];
-    case "alignment_qc.py":
-      return ["-i", ...listInputs(stage), "-p", outputPath(stage, request.outputName, "phyloprep-qc"), "-st", option(values.seqtype, "nucl"), "-g", option(values.genetic_code, "1"), "--min-length", option(values.min_length, "1"), "--max-n-ratio", option(values.max_n_ratio, "1"), "--max-x-ratio", option(values.max_x_ratio, "1"), "--max-gap-ratio", option(values.max_gap_ratio, "1"), "--min-parsimony-informative-sites", option(values.min_parsimony_informative_sites, "0"), ...(values.allow_terminal_stop ? ["--allow-terminal-stop"] : []), ...(values.allow_internal_stop ? ["--allow-internal-stop"] : [])];
+    case "alignment_qc.py": {
+      const changes = stage.files.find((file) => file.inputKey === "sequence_changes");
+      return ["-i", ...listInputs(stage), "-p", outputPath(stage, request.outputName, "phyloprep-qc"), "-st", option(values.seqtype, "nucl"), "-g", option(values.genetic_code, "1"), ...(changes ? ["--sequence-changes", changes.path] : []), "--min-length", option(values.min_length, "1"), "--max-n-ratio", option(values.max_n_ratio, "1"), "--max-x-ratio", option(values.max_x_ratio, "1"), "--max-gap-ratio", option(values.max_gap_ratio, "1"), "--min-parsimony-informative-sites", option(values.min_parsimony_informative_sites, "0"), ...(values.allow_terminal_stop ? ["--allow-terminal-stop"] : []), ...(values.allow_internal_stop ? ["--allow-internal-stop"] : [])];
+    }
     case "calulate_4dtv_and_correction.py":
       return ["-i", ...listInputs(stage), "-o", output, "-g", option(values.genetic_code, "1")];
     case "extract_4-fold_degenerated_sites.py":

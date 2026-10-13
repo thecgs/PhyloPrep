@@ -175,6 +175,53 @@ def trim_alignment(
     read_fasta_alignment(outfile, codon=(seqtype == "codon"))
 
 
+def trim_codon_protein_pair(protein_file, codon_file, protein_output, codon_output,
+                            gap_ratio, n_ratio, x_ratio):
+    """Trim paired protein/codon alignments with one shared site mask."""
+    proteins = read_fasta_alignment(protein_file)
+    codons = read_fasta_alignment(codon_file, codon=True)
+    protein_map = {record.id: str(record.seq).upper() for record in proteins}
+    codon_map = {record.id: str(record.seq).upper() for record in codons}
+    if list(protein_map) != list(codon_map):
+        raise ValueError("Protein/codon alignment IDs or order do not match for paired trimming")
+    if not protein_map:
+        raise ValueError("No sequences found for paired codon/protein trimming")
+    aa_length = len(next(iter(protein_map.values())))
+    if any(len(seq) != aa_length for seq in protein_map.values()):
+        raise ValueError("Protein alignment length mismatch during paired trimming")
+    if any(len(codon_map[name]) != 3 * aa_length for name in protein_map):
+        raise ValueError("Protein/codon alignment dimensions do not match for paired trimming")
+
+    keep = []
+    count = len(protein_map)
+    for index in range(aa_length):
+        aa_column = [protein_map[name][index] for name in protein_map]
+        codon_column = [codon_map[name][3 * index:3 * index + 3] for name in protein_map]
+        gap_fraction = sum(
+            residue == "-" or "-" in codon
+            for residue, codon in zip(aa_column, codon_column)
+        ) / count
+        n_fraction = sum("N" in codon for codon in codon_column) / count
+        x_fraction = sum(residue == "X" for residue in aa_column) / count
+        if gap_fraction > gap_ratio or n_fraction > n_ratio or x_fraction > x_ratio:
+            continue
+        keep.append(index)
+
+    if not keep:
+        raise ValueError("No paired codon/protein alignment sites remain after trimming")
+
+    with atomic_output(codon_output, inputs=[protein_file, codon_file]) as out:
+        for name in protein_map:
+            seq = "".join(codon_map[name][3 * i:3 * i + 3] for i in keep)
+            out.write(f">{name}\n{seq}\n")
+    with atomic_output(protein_output, inputs=[protein_file, codon_file]) as out:
+        for name in protein_map:
+            seq = "".join(protein_map[name][i] for i in keep)
+            out.write(f">{name}\n{seq}\n")
+    read_fasta_alignment(codon_output, codon=True)
+    read_fasta_alignment(protein_output)
+
+
 def trim_codon_with_trimal(trimal_path, trimal_args, protein_file, codon_file,
                           protein_output, codon_output):
     """Apply trimAl's original protein column indices to whole codons."""
@@ -260,24 +307,10 @@ def run_pseudogene(args, infile, prefix, tools):
     if args.trim_software == 'trimal':
         trim_codon_with_trimal(tools['trimal'], args.trimal_args, aa, nt, out_aa, out_nt)
         return
-    nucleotides = read_fasta_alignment(nt, codon=True)
-    proteins = {r.id: str(r.seq).upper() for r in read_fasta_alignment(aa)}
-    length = len(nucleotides[0].seq) // 3
-    count = len(nucleotides)
-    keep = []
-    for i in range(length):
-        codons = [str(r.seq[3*i:3*i+3]).upper() for r in nucleotides]
-        residues = [proteins[r.id][i] for r in nucleotides]
-        if (sum('-' in c for c in codons) / count <= args.G and
-                sum('N' in c for c in codons) / count <= args.N and
-                residues.count('X') / count <= args.X):
-            keep.append(i)
-    if not keep:
-        raise ValueError('No codons remain after paired pseudogene trimming')
-    with atomic_output(out_nt) as handle_nt, atomic_output(out_aa) as handle_aa:
-        for r in nucleotides:
-            handle_nt.write(f'>{r.id}\n' + ''.join(str(r.seq[3*i:3*i+3]) for i in keep) + '\n')
-            handle_aa.write(f'>{r.id}\n' + ''.join(proteins[r.id][i] for i in keep) + '\n')
+    trim_codon_protein_pair(
+        aa, nt, out_aa, out_nt,
+        args.G, args.N, args.X,
+    )
 
 
 if __name__ == '__main__':
@@ -286,7 +319,7 @@ if __name__ == '__main__':
 
 Workflows:
   codon  Remove terminal stops, mask internal stops as NNN, translate and align,
-         back-translate to codons, then optionally trim both alignments.
+         back-translate to codons, then trim protein/codon sites with one shared mask.
   pseudogene  MACSE alignment allowing frameshifts/stops; audited export and paired trimming.
   prot   Align protein sequences, then optionally trim the alignment.
   nucl   Align nucleotide sequences, then optionally trim the alignment.""",
@@ -497,17 +530,12 @@ Notes:
                 f"{prefix}.{align_software}.codon.trimal.aln",
             )
         elif not notrim:
-            trim_alignment(
-                trim_software, software_path.get("trimal"), trimal_args,
-                f"{prefix}.{align_software}.codon.aln",
-                f"{prefix}.{align_software}.codon.trimal.aln",
-                "codon", args.G, args.N, args.X,
-            )
-            trim_alignment(
-                trim_software, software_path.get("trimal"), trimal_args,
+            trim_codon_protein_pair(
                 f"{prefix}.{align_software}.prot.aln",
+                f"{prefix}.{align_software}.codon.aln",
                 f"{prefix}.{align_software}.prot.trimal.aln",
-                "prot", args.G, args.N, args.X,
+                f"{prefix}.{align_software}.codon.trimal.aln",
+                args.G, args.N, args.X,
             )
     else:
         ## run trimAlnSeq.py
