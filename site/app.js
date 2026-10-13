@@ -94,7 +94,7 @@ const modules = [
     summary: "Aligns multiple loci with browser MUSCLE, applies PhyloPrep QC and optional taxon renaming, builds supermatrices, and exports downstream matrices.",
     inputs: ["One or more input FASTA files", "Optional two-column taxon mapping table"],
     inputFields: [
-      { key: "inputs", label: "Input FASTA files", flag: "-i, --input", multiple: true },
+      { key: "inputs", label: "Input FASTA files", flag: "-i, --input", multiple: true, pathList: true },
       { key: "mapping", label: "Taxon mapping table", flag: "-m, --mapping", accept: ".tsv,.txt,.csv", required: false },
     ],
     outputs: ["Per-locus alignments and audit reports", "QC reports", "Optional renamed alignments", "Raw/trimmed supermatrices", "Codon-position and four-fold matrices", "FASTA/PHYLIP/NEXUS exports"],
@@ -126,7 +126,7 @@ const modules = [
     script: "MSAP_batch.py", title: "Batch alignment workflow", category: "Batch", browser: true, browserWorkflow: "batch", inputListKey: "inputs", cliOutputDir: "msap-results",
     summary: "Runs the MSAP workflow over multiple FASTA loci in the browser using Biowasm MUSCLE and aggregates path lists and sequence-change reports.",
     inputs: ["One or more input FASTA files"],
-    inputFields: [{ key: "inputs", label: "Input FASTA files", flag: "-i, --input", multiple: true }],
+    inputFields: [{ key: "inputs", label: "Input FASTA files", flag: "-i, --input", multiple: true, pathList: true }],
     outputs: ["Per-locus preprocessing and audit files", "MUSCLE alignments", "Optional trimmed alignments", "Batch path lists", "Merged sequence-change report"],
     outputLabel: "Batch output", outputHelp: "Browser output is collected as downloadable files or written into the selected local folder.", defaultOutput: "", hideOutputName: true,
     parameters: [
@@ -1281,6 +1281,10 @@ function mergeTsvContents(files) {
   return header ? `${header}\n${rows.join("\n")}${rows.length ? "\n" : ""}` : "";
 }
 
+function selectedInputPathList(inputs) {
+  return `${inputs.map((file) => virtualInputPath(file.name)).join("\n")}\n`;
+}
+
 function batchPathLists(files) {
   const suffixes = ["nucl.aln", "prot.aln", "codon.aln", "nucl.trimal.aln", "prot.trimal.aln", "codon.trimal.aln"];
   const outputs = [];
@@ -1296,6 +1300,12 @@ async function runMsapBatchBrowserWorkflow(request) {
   if (!inputs.length) throw new Error("Select at least one FASTA input.");
   requireUniqueStems(inputs);
   const outputs = [];
+  if (inputs.length > 1) {
+    outputs.push({
+      name: "path-lists/inputs.pathlist",
+      content: selectedInputPathList(inputs),
+    });
+  }
   for (let index = 0; index < inputs.length; index += 1) {
     const input = inputs[index];
     setRunStage(2, `Aligning locus ${index + 1}/${inputs.length}: ${input.name}`);
@@ -1336,7 +1346,7 @@ async function runPhyloPrepBrowserWorkflow(request) {
   ];
   setRunStage(2, "Running PhyloPrep QC and matrix construction");
   elements.runtimeStatus.textContent = "PhyloPrep matrix construction";
-  return runInWorker({
+  const result = await runInWorker({
     type: "phyloprep-finalize",
     script: "phyloprep.py",
     files: finalFiles,
@@ -1344,6 +1354,13 @@ async function runPhyloPrepBrowserWorkflow(request) {
     outputName: "",
     usesPathList: false,
   });
+  if (sources.length > 1) {
+    result.files.push({
+      name: "inputs.pathlist",
+      content: selectedInputPathList(sources),
+    });
+  }
+  return result;
 }
 
 async function sha256Text(text) {
