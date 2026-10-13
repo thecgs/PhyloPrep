@@ -102,7 +102,7 @@ const modules = [
     parameters: [
       { flag: "-st", label: "Sequence type", description: "Browser pipeline supports codon, protein, and nucleotide modes. Pseudogene/MACSE remains CLI-only.", type: "select", value: "codon", options: [["codon", "Codon / CDS"], ["prot", "Protein"], ["nucl", "Nucleotide"]], token: "seqtype" },
       geneticCodeParameter(),
-      { flag: "--missing-taxa", label: "Missing taxa policy", description: "Skip genes missing taxa, or pad missing taxa with gaps during concatenation.", type: "select", value: "skip-gene", options: [["skip-gene", "Skip gene"], ["pad-gaps", "Pad gaps"]], token: "missing_taxa" },
+      { flag: "--missing-taxa", label: "Missing taxa policy", description: "Skip genes missing taxa, or pad missing taxa with gaps during concatenation.", type: "select", value: "skip-gene", options: [["skip-gene", "skip-gene"], ["pad-gaps", "pad-gaps"]], token: "missing_taxa" },
       { flag: "-s", label: "Alignment software", description: "Runs locally through Biowasm/WebAssembly. MUSCLE is the recommended browser default. MAFFT is optional E-INS-i through Biowasm's compiled tbfast + dvtditr pipeline; CLI -s mafft continues to use upstream mafft --auto and can differ.", type: "select", value: "muscle", options: [["muscle", "MUSCLE 5.1.0 (recommended)"], ["mafft", "MAFFT E-INS-i 7.520 (Biowasm)"]], token: "align_software" },
       { flag: "-t", label: "Threads per locus", description: "Browser fixed to one thread for GitHub Pages/WebAssembly compatibility.", type: "select", value: "1", options: [["1", "1 (browser fixed)"]], token: "thread" },
       { flag: "-j", label: "Concurrent loci", description: "Browser edition processes loci sequentially to keep memory predictable.", type: "select", value: "1", options: [["1", "1 (browser sequential)"]], token: "jobs" },
@@ -276,7 +276,7 @@ const modules = [
     inputs: ["One or more alignment FASTA files (-i, --input)"], outputs: ["PREFIX.supergene.fasta", "Partition information and occupancy reports"],
     inputFields: [{ key: "inputs", label: "Alignment input files", flag: "-i, --input", multiple: true, pathList: true }],
     outputLabel: "Matrix prefix", outputHelp: "The command-line script derives supermatrix files from this prefix.", defaultOutput: "supergene",
-    parameters: [{ flag: "--missing-taxa", label: "Missing taxa policy", description: "How records absent from a gene alignment are handled.", type: "select", value: "skip-gene", options: [["skip-gene", "Skip gene"], ["pad-gaps", "Pad with gaps"]], token: "missing_taxa" }],
+    parameters: [{ flag: "--missing-taxa", label: "Missing taxa policy", description: "How records absent from a gene alignment are handled.", type: "select", value: "skip-gene", options: [["skip-gene", "skip-gene"], ["pad-gaps", "pad-gaps"]], token: "missing_taxa" }],
     command: "python get_supergenes.py -i {inputs} -p {prefix} --missing-taxa {missing_taxa}",
   },
   {
