@@ -41,7 +41,7 @@ def check_report(path):
 def test_rna_pipeline_raw_trimmed_and_conversions(tmp_path, fake_aligner, mode):
     _, env = fake_aligner
     source = tmp_path / 'rna.fa'
-    text = '>a\nguggcuugagcuuaa\n>b\nGUGGCCUGAGCCUAA\n'
+    text = '>a\nguggcuugggcuuaa\n>b\nGUGGCCUGGGCCUAA\n'
     source.write_text(text)
     out = tmp_path / 'out'
     result = cli('phyloprep.py', '-i', source, '-st', mode, '-t', 1, '-o', out, cwd=tmp_path, env=env)

@@ -273,9 +273,9 @@ def test_alignment_qc_restores_masked_internal_stop_provenance(tmp_path):
             '--sequence-changes', report, cwd=tmp_path
         )
         assert result.returncode == 0, result.stderr
-        assert not prefix.with_suffix('.pass.tsv').read_text().strip()
-        assert str(alignment.resolve()) in prefix.with_suffix('.fail.tsv').read_text()
-        details = prefix.with_suffix('.details.tsv').read_text()
+        assert not Path(str(prefix) + '.pass.tsv').read_text().strip()
+        assert str(alignment.resolve()) in Path(str(prefix) + '.fail.tsv').read_text()
+        details = Path(str(prefix) + '.details.tsv').read_text()
         assert 'Audited_internal_stop' in details
         assert '4-6-TGA' in details
         assert 'internal_stop' in details
@@ -286,7 +286,7 @@ def test_alignment_qc_restores_masked_internal_stop_provenance(tmp_path):
             '--sequence-changes', report, '--allow-internal-stop', cwd=tmp_path
         )
         assert result.returncode == 0, result.stderr
-        assert str(alignment.resolve()) in allowed.with_suffix('.pass.tsv').read_text()
+        assert str(alignment.resolve()) in Path(str(allowed) + '.pass.tsv').read_text()
 
 
 def test_alignment_qc_reports_removed_terminal_stop_without_failing(tmp_path):
@@ -305,8 +305,8 @@ def test_alignment_qc_reports_removed_terminal_stop_without_failing(tmp_path):
         '--sequence-changes', report, cwd=tmp_path
     )
     assert result.returncode == 0, result.stderr
-    assert str(alignment.resolve()) in prefix.with_suffix('.pass.tsv').read_text()
-    details = prefix.with_suffix('.details.tsv').read_text()
+    assert str(alignment.resolve()) in Path(str(prefix) + '.pass.tsv').read_text()
+    details = Path(str(prefix) + '.details.tsv').read_text()
     assert 'Audited_terminal_stop' in details
     assert '7-9-TAA' in details
 
@@ -325,8 +325,8 @@ def test_alignment_qc_nucl_ignores_stop_provenance(tmp_path):
         "--sequence-changes", report, cwd=tmp_path
     )
     assert result.returncode == 0, result.stderr
-    assert str(source.resolve()) in prefix.with_suffix(".pass.tsv").read_text()
-    assert "internal_stop" not in prefix.with_suffix(".details.tsv").read_text().splitlines()[-1].split("\t")[-1]
+    assert str(source.resolve()) in Path(str(prefix) + ".pass.tsv").read_text()
+    assert "internal_stop" not in Path(str(prefix) + ".details.tsv").read_text().splitlines()[-1].split("\t")[-1]
 
 
 def test_alignment_qc_rejects_ambiguous_audit_source_keys(tmp_path):
@@ -373,7 +373,7 @@ def test_alignment_qc_allows_raw_and_trimmed_same_audit_locus(tmp_path):
         "--sequence-changes", report, "--allow-internal-stop", cwd=tmp_path
     )
     assert result.returncode == 0, result.stderr
-    passed = prefix.with_suffix(".pass.tsv").read_text()
+    passed = Path(str(prefix) + ".pass.tsv").read_text()
     assert str(raw.resolve()) in passed and str(trimmed.resolve()) in passed
 
 

@@ -32,7 +32,10 @@ jobs:
       - name: Validate Python syntax
         run: python -m py_compile phyloprep.py MSAP.py MSAP_batch.py alignment_qc.py sequence_audit.py site/browser_runner.py
       - name: Install test dependencies
-        run: python -m pip install --upgrade pytest biopython
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mafft
+          python -m pip install --upgrade pytest biopython
       - name: Run Python test suite
         run: python -m pytest -q
       - name: Run browser bundle smoke checks
