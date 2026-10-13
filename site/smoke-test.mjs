@@ -54,3 +54,10 @@ if (!app.includes("phyloprep-run.json")) throw new Error("Run provenance manifes
 if (!app.includes('new Worker("muscle-worker.js")')) throw new Error("Dedicated cancellable MUSCLE worker is missing.");
 
 console.log(`PhyloPrep Web smoke checks passed for ${visibleModules.length} visible modules.`);
+
+
+if (!app.includes("function rawParameterValues()")) throw new Error("Raw runtime parameter collection is missing.");
+if (!app.includes("const optionValues = rawParameterValues();")) throw new Error("Browser runtime must use raw UI parameter values.");
+if (app.includes("protein_stop_symbol: cliQuote(")) throw new Error("Protein stop symbol must not be CLI-quoted in runtime options.");
+if (!app.includes("protein_stop_symbol_cli: cliQuote(")) throw new Error("Protein stop symbol CLI quoting is missing.");
+if (!app.includes("taxon_separator_cli: cliQuote(")) throw new Error("Taxon separator CLI quoting is missing.");

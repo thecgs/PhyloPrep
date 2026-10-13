@@ -120,7 +120,7 @@ const modules = [
       { flag: "--allow-terminal-stop", label: "Allow terminal stop codons", description: "Permit terminal stop codons in codon-mode QC.", type: "checkbox", value: false, token: "allow_terminal_stop" },
       { flag: "--allow-internal-stop", label: "Allow internal stop codons", description: "Permit internal stop codons in codon-mode QC.", type: "checkbox", value: false, token: "allow_internal_stop" },
     ],
-    command: "python phyloprep.py -i {inputs} -o phyloprep-results{mapping_option} -st {seqtype} -s muscle -t 1 -j 1 -g {genetic_code} -ts trimAlnSeq -G {gap_ratio} -N {n_ratio} -X {x_ratio} --missing-taxa {missing_taxa} --min-length {min_length} --max-n-ratio {max_n_ratio} --max-x-ratio {max_x_ratio} --max-gap-ratio {max_gap_ratio} --min-parsimony-informative-sites {min_parsimony_informative_sites} --protein-stop-symbol {protein_stop_symbol}{allow_terminal_stop}{allow_internal_stop}{notrim_option}",
+    command: "python phyloprep.py -i {inputs} -o phyloprep-results{mapping_option} -st {seqtype} -s muscle -t 1 -j 1 -g {genetic_code} -ts trimAlnSeq -G {gap_ratio} -N {n_ratio} -X {x_ratio} --missing-taxa {missing_taxa} --min-length {min_length} --max-n-ratio {max_n_ratio} --max-x-ratio {max_x_ratio} --max-gap-ratio {max_gap_ratio} --min-parsimony-informative-sites {min_parsimony_informative_sites} --protein-stop-symbol {protein_stop_symbol_cli}{allow_terminal_stop}{allow_internal_stop}{notrim_option}",
   },
   {
     script: "MSAP_batch.py", title: "Batch alignment workflow", category: "Batch", browser: true, browserWorkflow: "batch", inputListKey: "inputs", cliOutputDir: "msap-results",
@@ -142,7 +142,7 @@ const modules = [
       { flag: "-N", label: "Maximum N proportion", description: "Maximum N ratio per site during nucleotide/codon trimming. Range: 0–1.", type: "number", value: "0.2", step: "0.01", token: "n_ratio" },
       { flag: "-X", label: "Maximum X proportion", description: "Maximum X ratio per site during protein trimming. Range: 0–1.", type: "number", value: "0.2", step: "0.01", token: "x_ratio" },
     ],
-    command: "python MSAP_batch.py -i {inputs} -o msap-results -st {seqtype} -s muscle -t 1 -j 1 -g {genetic_code} -ts trimAlnSeq -G {gap_ratio} -N {n_ratio} -X {x_ratio} --protein-stop-symbol {protein_stop_symbol}{notrim_option}",
+    command: "python MSAP_batch.py -i {inputs} -o msap-results -st {seqtype} -s muscle -t 1 -j 1 -g {genetic_code} -ts trimAlnSeq -G {gap_ratio} -N {n_ratio} -X {x_ratio} --protein-stop-symbol {protein_stop_symbol_cli}{notrim_option}",
   },
   {
     script: "extract_orthofinder_orthogroups.py", title: "Extract OrthoFinder orthogroups", category: "Orthology", browser: true, browserWorkflow: "orthofinder-extract",
@@ -177,7 +177,7 @@ const modules = [
       { flag: "--taxon-separator", label: "Taxon separator", description: "Genome/gene separator used by OMA members.", type: "text", value: "|", token: "taxon_separator" },
       { flag: "--strip-taxon-prefix", label: "Strip taxon prefix", description: "Write gene IDs without the leading genome and separator.", type: "checkbox", value: false, token: "strip_taxon_prefix" },
     ],
-    command: "python oma_to_orthogroups.py -i {input} -o {output} --taxon-separator {taxon_separator}{strip_taxon_prefix_option}",
+    command: "python oma_to_orthogroups.py -i {input} -o {output} --taxon-separator {taxon_separator_cli}{strip_taxon_prefix_option}",
   },
   {
     script: "orthomcl_to_orthogroups.py", title: "Convert OrthoMCL orthogroups", category: "Orthology", browser: true,
@@ -190,7 +190,7 @@ const modules = [
       { flag: "--taxon-separator", label: "Taxon separator", description: "Taxon/gene separator used by OrthoMCL members.", type: "text", value: "|", token: "taxon_separator" },
       { flag: "--strip-taxon-prefix", label: "Strip taxon prefix", description: "Write gene IDs without the leading taxon and separator.", type: "checkbox", value: false, token: "strip_taxon_prefix" },
     ],
-    command: "python orthomcl_to_orthogroups.py -i {input} -o {output} --taxon-separator {taxon_separator}{strip_taxon_prefix_option}",
+    command: "python orthomcl_to_orthogroups.py -i {input} -o {output} --taxon-separator {taxon_separator_cli}{strip_taxon_prefix_option}",
   },
   {
     script: "proteinortho_to_orthogroups.py", title: "Convert Proteinortho groups", category: "Orthology", browser: true,
@@ -672,15 +672,8 @@ function cliQuote(value) {
   return /^[A-Za-z0-9_./:=+,-]+$/u.test(text) ? text : JSON.stringify(text);
 }
 
-function valuesForCommand() {
+function rawParameterValues() {
   const module = activeModule();
-  const allInputNames = selectedInputNames();
-  const listControl = module.inputListKey
-    ? inputControls().find((control) => control.dataset.inputKey === module.inputListKey)
-    : undefined;
-  const commandInputNames = listControl
-    ? filesForInput(listControl).map((file) => file.name)
-    : allInputNames;
   const parameterValues = {};
   module.parameters.forEach((parameter) => {
     const control = elements.parameterList.querySelector(`[data-parameter="${parameterToken(parameter)}"]`);
@@ -690,6 +683,19 @@ function valuesForCommand() {
         ? [...control.selectedOptions].map((option) => option.value)
         : (control?.value || parameter.value || "");
   });
+  return parameterValues;
+}
+
+function valuesForCommand() {
+  const module = activeModule();
+  const allInputNames = selectedInputNames();
+  const listControl = module.inputListKey
+    ? inputControls().find((control) => control.dataset.inputKey === module.inputListKey)
+    : undefined;
+  const commandInputNames = listControl
+    ? filesForInput(listControl).map((file) => file.name)
+    : allInputNames;
+  const parameterValues = rawParameterValues();
   const rawOutput = elements.outputName.value.trim() || module.defaultOutput;
   const outputPath = outputDirectoryHandle ? `${outputDirectoryHandle.name}/${rawOutput}` : rawOutput;
   const usePathList = module.inputFields.some((field) => field.pathList) && commandInputNames.length > 1;
@@ -710,7 +716,9 @@ function valuesForCommand() {
     prefix: cliQuote(outputPath),
     seqtype: parameterValues.seqtype || "nucl",
     genetic_code: parameterValues.genetic_code || "1",
-    protein_stop_symbol: cliQuote(parameterValues.protein_stop_symbol || "*"),
+    protein_stop_symbol: parameterValues.protein_stop_symbol || "*",
+    protein_stop_symbol_cli: cliQuote(parameterValues.protein_stop_symbol || "*"),
+    taxon_separator_cli: cliQuote(parameterValues.taxon_separator || "|"),
     allow_terminal_stop: parameterValues.allow_terminal_stop ? " --allow-terminal-stop" : "",
     allow_internal_stop: parameterValues.allow_internal_stop ? " --allow-internal-stop" : "",
     removeall: parameterValues.removeall ? " -ra" : "",
@@ -923,7 +931,7 @@ async function updatePreflight() {
     const ids = text.split(/\r?\n/).filter((line) => line.startsWith(">")).map((line) => line.slice(1).trim().split(/\s+/, 1)[0]).filter(Boolean);
     sequences += ids.length;
     duplicateIds += ids.length - new Set(ids).size;
-    if (valuesForCommand().seqtype === "codon") {
+    if ((rawParameterValues().seqtype || "nucl") === "codon") {
       const chunks = text.split(/^>/m).slice(1);
       malformedCodon += chunks.filter((chunk) => {
         const lines = chunk.split(/\r?\n/);
@@ -1431,7 +1439,7 @@ async function runBrowserModule() {
         inputKey: control.dataset.inputKey,
       }))
     ));
-    const optionValues = valuesForCommand();
+    const optionValues = rawParameterValues();
     setRunStage(stage, "Loading local workflow");
     elements.cancelRun.hidden = false;
     const request = {
