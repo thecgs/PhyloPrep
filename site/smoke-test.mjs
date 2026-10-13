@@ -158,3 +158,16 @@ const browserRunner = contents["site/browser_runner.py"];
 if (!browserRunner.includes("phyloprep.prepare_variant(args, sources, root, matrix_root, variant)")) {
   throw new Error("Browser PhyloPrep must use paired prepare_variant orchestration.");
 }
+
+if (!app.includes('flag: "--paired-pis-policy"') ||
+    !app.includes('["both", "both — codon AND protein must pass"]') ||
+    !app.includes('["either", "either — codon OR protein may pass"]')) {
+  throw new Error("Browser PhyloPrep must expose the four paired PIS policies.");
+}
+if (!app.includes('hide("paired_pis_policy", seqtype !== "codon")')) {
+  throw new Error("Paired PIS policy must be contextual to codon workflow in the browser.");
+}
+if (!app.includes('hide("x_ratio", seqtype === "nucl"') ||
+    !app.includes('hide("max_x_ratio", seqtype === "nucl"')) {
+  throw new Error("Codon workflow must expose protein X trimming/QC thresholds for paired processing.");
+}

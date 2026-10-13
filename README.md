@@ -115,9 +115,10 @@ flowchart LR
 | `-st` | `codon`, `nucl`, `prot`, or `pseudogene`. |
 | `-t N`, `-j N` | MAFFT/MUSCLE threads and concurrent jobs. |
 | `--missing-taxa` | `skip-gene` or `pad-gaps` during concatenation. |
-| `--min-length`, `--max-*-ratio`, `--min-parsimony-informative-sites` | Representation-specific QC thresholds; codon/protein workflows retain the intersection of passing loci. |
+| `--min-length`, `--max-*-ratio`, `--min-parsimony-informative-sites` | Representation-specific QC thresholds. In paired codon/protein workflows, non-PIS QC must pass on both sides; PIS retention is controlled separately by `--paired-pis-policy`. |
 | `--allow-internal-stop` | Retain a paired codon/protein locus when an internal stop is observed directly or recorded by preprocessing as masked to `NNN/X`. The masked state is not restored. |
 | `--allow-terminal-stop` | Allow a terminal stop that remains directly observable in a final codon alignment. Normal terminal stops removed by MSAP preprocessing are provenance only and do not fail QC. |
+| `--paired-pis-policy` | `both` (default), `either`, `codon`, or `protein`; controls how the minimum PIS threshold is applied to a paired codon/protein locus while keeping the final locus set identical in both matrices. |
 | `-g TABLE` | NCBI genetic-code table; default 1. |
 | `--macse-jar`, `--macse-memory` | Pseudogene MACSE settings. |
 
@@ -367,13 +368,21 @@ These are imported by workflow scripts. They implement normalization, MACSE prov
 
 ### Paired codon/protein QC
 
-For `-st codon`, the protein alignment and its back-translated codon alignment are two representations of the same locus, not independent datasets. PhyloPrep therefore enforces three paired invariants before matrix construction:
+For `-st codon`, the protein alignment and its back-translated codon alignment are two representations of the same locus, not independent datasets. PhyloPrep therefore enforces paired structural QC before matrix construction:
 
 1. the taxon IDs must be identical;
 2. every codon sequence must be exactly three times the corresponding protein length, with codon gaps and protein gaps occupying the same paired sites;
-3. after representation-specific QC, only the **intersection** of codon-passing and protein-passing loci is retained in either supermatrix.
+3. all non-PIS QC requirements must pass for both representations;
+4. PIS is calculated separately for codon and protein because synonymous substitutions can make the two values differ legitimately.
 
-The shared decision is written to `qc/paired/<raw|trimmed>/loci.details.tsv`. A locus that fails only one representation is excluded from both final supermatrices, while the original codon and protein `alignment.details.tsv` reports retain the representation-specific reason. This keeps matrix membership paired without pretending that nucleotide and amino-acid statistics such as PIS must be numerically identical.
+The user decides how PIS controls pair retention with `--paired-pis-policy`:
+
+- `both` (default): codon PIS **and** protein PIS must each reach `--min-parsimony-informative-sites`;
+- `either`: codon PIS **or** protein PIS may reach the threshold;
+- `codon`: only codon PIS controls the pair;
+- `protein`: only protein PIS controls the pair.
+
+`--min-parsimony-informative-sites 0` disables PIS filtering, so the policy has no practical effect. Regardless of policy, a retained locus is written to both final codon and protein matrices; a rejected locus is written to neither. The shared decision is reported in `qc/paired/<raw|trimmed>/loci.details.tsv`, including codon PIS, protein PIS, threshold, selected policy, PIS status, and final paired status. Representation-specific `alignment.details.tsv` files still report their own statistics.
 
 Internal-stop provenance is also pair-level. An internal stop recorded by preprocessing causes both representations to fail unless `--allow-internal-stop` is supplied. Allowing it changes only the retention policy; the standardized `NNN/X` state and the audit record are preserved.
 

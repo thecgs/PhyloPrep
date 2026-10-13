@@ -20,6 +20,7 @@ from Bio.Data import CodonTable
 from sequence_audit import normalize_workflow, merge_reports
 from MSAP_batch import build_parser as batch_parser
 from msap_io import atomic_output, expand_input_paths, read_fasta_alignment
+from alignment_qc import alignment_stats
 from rename_taxa import rename_fasta, read_mapping, normalized_taxon_id
 
 SCRIPTS = Path(__file__).resolve().parent
@@ -81,6 +82,9 @@ matrices are published only after all requested conversions succeed.
                     help="Allow terminal stop codons that remain directly observable in a final codon alignment. Terminal stops removed by MSAP preprocessing are recorded but do not fail QC.")
     qc.add_argument("--allow-internal-stop", action="store_true",
                     help="Retain codon/protein locus pairs with internal stops detected directly or recorded as masked by MSAP preprocessing. The stop remains masked as NNN/X.")
+    qc.add_argument("--paired-pis-policy", choices=["both", "either", "codon", "protein"],
+                    default="both",
+                    help="For paired codon/protein workflows, decide how --min-parsimony-informative-sites is applied: both representations must pass (both; default), either may pass, or only codon/protein PIS controls pair retention.")
     return parser
 
 
@@ -416,7 +420,12 @@ def run_group_qc(args, inputs, root, stage, seqtype, variant):
     prefix = qc_dir / "alignment"
     qc_args = ["-i", qc_inputs, "-st", seqtype, "-g", args.genetic_code, "-p", prefix]
     for name in QC_VALUES:
-        qc_args.extend(["--" + name.replace("_", "-"), getattr(args, name)])
+        value = getattr(args, name)
+        if name == "min_parsimony_informative_sites" and args.seqtype in {"codon", "pseudogene"}:
+            # PIS is representation-specific. Paired workflows apply the user-selected
+            # codon/protein policy after all non-PIS QC has been evaluated.
+            value = 0
+        qc_args.extend(["--" + name.replace("_", "-"), value])
 
     changes = root / "reports" / "sequence_changes.tsv"
     if args.seqtype in {"codon", "pseudogene"} and changes.is_file():
@@ -492,37 +501,87 @@ def validate_paired_alignments(args, codon_context, protein_context):
                     )
 
 
+def _pis_map(context, args):
+    return {
+        locus: alignment_stats(path, context["seqtype"])[0]["parsimony_informative_sites"]
+        for locus, path in _context_map(context, args).items()
+    }
+
+
+def _paired_pis_decision(policy, codon_pis, protein_pis, threshold):
+    if threshold <= 0:
+        return True
+    codon_ok = codon_pis >= threshold
+    protein_ok = protein_pis >= threshold
+    if policy == "both":
+        return codon_ok and protein_ok
+    if policy == "either":
+        return codon_ok or protein_ok
+    if policy == "codon":
+        return codon_ok
+    if policy == "protein":
+        return protein_ok
+    raise ValueError(f"Unknown paired PIS policy: {policy}")
+
+
 def synchronize_paired_qc(args, root, variant, codon_context, protein_context):
-    """Use the same QC-passing locus set for paired codon and protein matrices."""
+    """Keep one locus set while applying non-PIS QC and a user-selected paired PIS policy."""
     validate_paired_alignments(args, codon_context, protein_context)
     codon_all = _context_map(codon_context, args)
     protein_all = _context_map(protein_context, args)
     codon_pass = _pass_map(codon_context, args)
     protein_pass = _pass_map(protein_context, args)
-    common = sorted(set(codon_pass) & set(protein_pass))
+    codon_pis = _pis_map(codon_context, args)
+    protein_pis = _pis_map(protein_context, args)
+    threshold = args.min_parsimony_informative_sites
+    policy = args.paired_pis_policy
+
+    non_pis_common = set(codon_pass) & set(protein_pass)
+    common = sorted(
+        locus for locus in non_pis_common
+        if _paired_pis_decision(policy, codon_pis[locus], protein_pis[locus], threshold)
+    )
 
     paired_dir = root / "qc" / ("pseudogene" if args.seqtype == "pseudogene" else "") / "paired" / variant
     paired_dir.mkdir(parents=True, exist_ok=True)
     report = paired_dir / "loci.details.tsv"
     with atomic_output(report) as handle:
         writer = csv.writer(handle, delimiter="\t")
-        writer.writerow(["Locus", "Codon_file", "Protein_file", "Codon_QC", "Protein_QC",
-                         "Paired_status", "Reasons"])
+        writer.writerow([
+            "Locus", "Codon_file", "Protein_file",
+            "Codon_nonPIS_QC", "Protein_nonPIS_QC",
+            "Codon_PIS", "Protein_PIS", "Minimum_PIS", "PIS_policy", "PIS_status",
+            "Paired_status", "Reasons",
+        ])
         for locus in sorted(set(codon_all) | set(protein_all)):
             cp = locus in codon_pass
             pp = locus in protein_pass
+            cp_pis = codon_pis.get(locus, "NA")
+            pp_pis = protein_pis.get(locus, "NA")
+            pis_ok = (
+                cp_pis != "NA" and pp_pis != "NA" and
+                _paired_pis_decision(policy, cp_pis, pp_pis, threshold)
+            )
             reasons = []
             if not cp:
                 reasons.append("codon_qc_failed")
             if not pp:
                 reasons.append("protein_qc_failed")
+            if not pis_ok:
+                reasons.append("pis_policy_failed")
+            paired_ok = cp and pp and pis_ok
             writer.writerow([
                 locus,
                 str(codon_all.get(locus, "NA")),
                 str(protein_all.get(locus, "NA")),
                 "pass" if cp else "fail",
                 "pass" if pp else "fail",
-                "pass" if cp and pp else "fail",
+                cp_pis,
+                pp_pis,
+                threshold,
+                policy,
+                "pass" if pis_ok else "fail",
+                "pass" if paired_ok else "fail",
                 ";".join(reasons) or "NA",
             ])
 
@@ -534,9 +593,14 @@ def synchronize_paired_qc(args, root, variant, codon_context, protein_context):
     if not common:
         raise ValueError(
             f"No paired codon/protein alignments passed QC for {variant}; "
-            f"see {report} and the representation-specific alignment.details.tsv reports."
+            f"paired PIS policy={policy}, minimum PIS={threshold}. "
+            f"See {report} and the representation-specific alignment.details.tsv reports."
         )
-    print(f"[phyloprep] Paired QC {variant}: retained {len(common)} locus/loci in both codon and protein matrices", flush=True)
+    print(
+        f"[phyloprep] Paired QC {variant}: retained {len(common)} locus/loci "
+        f"(PIS policy={policy}, minimum={threshold}) in both codon and protein matrices",
+        flush=True,
+    )
 
 
 def _require_passing_group(args, context):

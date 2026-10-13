@@ -383,6 +383,7 @@ def run_phyloprep_finalize(file_manifest, options, output_root, engine_root="/en
             max_x_ratio=number("max_x_ratio", 1.0),
             max_gap_ratio=number("max_gap_ratio", 1.0),
             min_parsimony_informative_sites=number("min_parsimony_informative_sites", 0, int),
+            paired_pis_policy=str(options.get("paired_pis_policy", "both")),
             allow_terminal_stop=bool(options.get("allow_terminal_stop", False)),
             allow_internal_stop=bool(options.get("allow_internal_stop", False)),
         )
@@ -391,6 +392,8 @@ def run_phyloprep_finalize(file_manifest, options, output_root, engine_root="/en
             raise ValueError("Trimming and QC ratios must be between 0 and 1.")
         if args.min_length < 0 or args.min_parsimony_informative_sites < 0:
             raise ValueError("QC length/site thresholds must be non-negative.")
+        if args.paired_pis_policy not in {"both", "either", "codon", "protein"}:
+            raise ValueError("Invalid paired PIS policy.")
 
         original_run = phyloprep.run
 

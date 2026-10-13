@@ -300,3 +300,38 @@ def test_codon_default_trimming_uses_one_shared_site_mask(tmp_path, fake_aligner
     assert {r.id: str(r.seq) for r in codon} == {'a': 'GGT', 'b': 'GGA'}
     assert {r.id: str(r.seq) for r in protein} == {'a': 'G', 'b': 'G'}
     assert len(codon[0].seq) == 3 * len(protein[0].seq)
+
+
+@pytest.mark.parametrize(
+    "policy,should_pass",
+    [("both", False), ("either", True), ("codon", True), ("protein", False)],
+)
+def test_paired_pis_policy_is_user_selectable(tmp_path, fake_aligner, policy, should_pass):
+    _, env = fake_aligner
+    source = tmp_path / "gene.fa"
+    # Codon PIS = 1 at the third position (GCT/GCC); protein PIS = 0 (all Ala).
+    source.write_text(">a\nGCT\n>b\nGCT\n>c\nGCC\n>d\nGCC\n")
+    output = tmp_path / f"results-{policy}"
+    result = invoke(
+        tmp_path, env,
+        "-i", source,
+        "-o", output,
+        "--notrim",
+        "-t", "1",
+        "--min-parsimony-informative-sites", "1",
+        "--paired-pis-policy", policy,
+    )
+    if should_pass:
+        assert result.returncode == 0, result.stdout + result.stderr
+        paired = (output / "qc/paired/raw/loci.details.tsv").read_text()
+        assert "\t1\t0\t1\t" + policy + "\tpass\tpass\tNA\n" in paired
+        check_formats(output / "matrices/codon/raw", "supermatrix",
+                      {"a": "GCT", "b": "GCT", "c": "GCC", "d": "GCC"})
+        check_formats(output / "matrices/prot/raw", "supermatrix",
+                      {"a": "A", "b": "A", "c": "A", "d": "A"})
+    else:
+        assert result.returncode == 2
+        paired = (output / "qc/paired/raw/loci.details.tsv").read_text()
+        assert "pis_policy_failed" in paired
+        assert "\t1\t0\t1\t" + policy + "\tfail\tfail\t" in paired
+        assert not (output / "matrices").exists()
