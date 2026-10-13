@@ -155,7 +155,7 @@ if (!worker.includes('...(changes ? ["--sequence-changes", changes.path] : [])')
   throw new Error("Browser worker must forward sequence_changes.tsv to alignment_qc.py.");
 }
 const browserRunner = contents["site/browser_runner.py"];
-if (!browserRunner.includes("phyloprep.prepare_variant(args, sources, root, matrix_root, variant)")) {
+if (!browserRunner.includes("phyloprep.prepare_variant(args, root, matrix_root, variant)")) {
   throw new Error("Browser PhyloPrep must use paired prepare_variant orchestration.");
 }
 

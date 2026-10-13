@@ -404,7 +404,7 @@ def prepare(args, inputs, root):
     with tempfile.TemporaryDirectory(prefix=".matrices-", dir=root) as temporary:
         stage_root = Path(temporary)
         for variant in variants:
-            prepare_variant(args, inputs, root, stage_root, variant)
+            prepare_variant(args, root, stage_root, variant)
         publish_matrices(stage_root, root, variants)
 
     print(f"[phyloprep] Complete: {root / 'matrices'}", flush=True)
@@ -424,22 +424,28 @@ def _alignment_locus_key(path, args, seqtype, variant):
     return name[:-len(suffix)] if name.endswith(suffix) else Path(name).stem
 
 
-def run_group_qc(args, root, stage, seqtype, variant):
+def run_group_qc(args, root, stage, seqtype, variant, selected=None):
     """Run one representation-specific QC pass and return its pairing context."""
     print(f"[phyloprep] QC {seqtype}/{variant}", flush=True)
-    list_suffix = f"{seqtype}.aln" if variant == "raw" else f"{seqtype}.trimal.aln"
-    batch_list = root / "alignments" / "path-lists" / f"all.{list_suffix}.pathlist"
-    if not batch_list.is_file():
-        raise ValueError(
-            f"Validated MSAP batch path list is missing for {seqtype}/{variant}: {batch_list}"
-        )
-    selected = [
-        Path(line.strip()).resolve()
-        for line in batch_list.read_text(encoding="utf-8").splitlines()
-        if line.strip() and not line.lstrip().startswith(("#", ";"))
-    ]
-    if not selected:
-        raise ValueError(f"No validated completed alignments are available for {seqtype}/{variant}")
+    if selected is None:
+        list_suffix = f"{seqtype}.aln" if variant == "raw" else f"{seqtype}.trimal.aln"
+        batch_list = root / "alignments" / "path-lists" / f"all.{list_suffix}.pathlist"
+        if not batch_list.is_file():
+            raise ValueError(
+                f"Validated MSAP batch path list is missing for {seqtype}/{variant}: {batch_list}"
+            )
+        selected = [
+            Path(line.strip()).resolve()
+            for line in batch_list.read_text(encoding="utf-8").splitlines()
+            if line.strip() and not line.lstrip().startswith(("#", ";"))
+        ]
+        if not selected:
+            raise ValueError(f"No validated completed alignments are available for {seqtype}/{variant}")
+    else:
+        selected = [Path(path).resolve() for path in selected]
+        missing = [str(path) for path in selected if not path.is_file()]
+        if missing:
+            raise ValueError("Compatibility QC input alignment(s) do not exist: " + ", ".join(missing))
 
     qc_dir = root / "qc" / ("pseudogene" if args.seqtype == "pseudogene" else "") / seqtype / variant
     qc_paths = selected
@@ -708,7 +714,7 @@ def build_group_matrices(args, root, context):
             "-st", "protein" if seqtype == "prot" else "DNA")
 
 
-def prepare_variant(args, inputs, root, stage_root, variant):
+def prepare_variant(args, root, stage_root, variant):
     """Prepare one raw/trimmed variant, pairing codon and protein when applicable."""
     if args.seqtype in {"codon", "pseudogene"}:
         contexts = {}
@@ -728,7 +734,10 @@ def prepare_variant(args, inputs, root, stage_root, variant):
 
 def prepare_group(args, inputs, root, stage, seqtype, variant):
     """Backward-compatible single-representation helper used by external callers."""
-    context = run_group_qc(args, root, stage, seqtype, variant)
+    suffix = f".{args.align_software}.{seqtype}"
+    suffix += ".aln" if variant == "raw" else ".trimal.aln"
+    selected = [Path(root) / "alignments" / (Path(source).stem + suffix) for source in inputs]
+    context = run_group_qc(args, root, stage, seqtype, variant, selected=selected)
     _require_passing_group(args, context)
     build_group_matrices(args, root, context)
 

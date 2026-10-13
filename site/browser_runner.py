@@ -421,7 +421,7 @@ def run_phyloprep_finalize(file_manifest, options, output_root, engine_root="/en
             matrix_root = root / "matrices"
             with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
                 for variant in variants:
-                    phyloprep.prepare_variant(args, sources, root, matrix_root, variant)
+                    phyloprep.prepare_variant(args, root, matrix_root, variant)
         finally:
             phyloprep.run = original_run
 
