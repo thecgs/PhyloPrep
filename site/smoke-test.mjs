@@ -63,7 +63,7 @@ if (!app.includes("protein_stop_symbol_cli: cliQuote(")) throw new Error("Protei
 if (!app.includes("taxon_separator_cli: cliQuote(")) throw new Error("Taxon separator CLI quoting is missing.");
 
 
-const muscleWorker = contents["site/alignment-worker.js"];
+const alignmentWorker = contents["site/alignment-worker.js"];
 if (!alignmentWorker.includes("await cli.cat(outputPath)")) throw new Error("MUSCLE output must be read directly from the Aioli filesystem.");
 if (alignmentWorker.includes("cli.download(outputPath)")) throw new Error("Worker-scoped Aioli blob URLs must not be used for MUSCLE output.");
 
