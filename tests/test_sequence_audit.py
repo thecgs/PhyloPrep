@@ -251,3 +251,61 @@ def test_help_includes_pseudogene_example_without_optional_switches(tmp_path, sc
     assert '-st pseudogene --macse-jar macse_v2.07.jar' in result.stdout
     assert '--split-codons' not in result.stdout
     assert '--extract-fourfold' not in result.stdout
+
+
+def test_alignment_qc_restores_masked_internal_stop_provenance(tmp_path):
+    source = tmp_path / 'gene.fa'
+    source.write_text('>a\nATGTGAGCT\n>b\nATGGCTGCT\n')
+    report = tmp_path / 'sequence_changes.tsv'
+    write_report(report, [event(
+        source, 'a', 'internal_stop', 1,
+        source_nt_positions='4-6', original='TGA', replacement='NNN', action='replace'
+    )])
+    codon = tmp_path / 'gene.mafft.codon.aln'
+    protein = tmp_path / 'gene.mafft.prot.aln'
+    codon.write_text('>a\nATGNNNGCT\n>b\nATGGCTGCT\n')
+    protein.write_text('>a\nMXA\n>b\nMAA\n')
+
+    for seqtype, alignment in [('codon', codon), ('prot', protein)]:
+        prefix = tmp_path / f'{seqtype}.qc'
+        result = cli(
+            'alignment_qc.py', '-i', alignment, '-st', seqtype, '-p', prefix,
+            '--sequence-changes', report, cwd=tmp_path
+        )
+        assert result.returncode == 0, result.stderr
+        assert not prefix.with_suffix('.pass.tsv').read_text().strip()
+        assert str(alignment.resolve()) in prefix.with_suffix('.fail.tsv').read_text()
+        details = prefix.with_suffix('.details.tsv').read_text()
+        assert 'Audited_internal_stop' in details
+        assert '4-6-TGA' in details
+        assert 'internal_stop' in details
+
+        allowed = tmp_path / f'{seqtype}.allowed'
+        result = cli(
+            'alignment_qc.py', '-i', alignment, '-st', seqtype, '-p', allowed,
+            '--sequence-changes', report, '--allow-internal-stop', cwd=tmp_path
+        )
+        assert result.returncode == 0, result.stderr
+        assert str(alignment.resolve()) in allowed.with_suffix('.pass.tsv').read_text()
+
+
+def test_alignment_qc_reports_removed_terminal_stop_without_failing(tmp_path):
+    source = tmp_path / 'gene.fa'
+    source.write_text('>a\nATGGCTTAA\n>b\nATGGCTTAA\n')
+    report = tmp_path / 'sequence_changes.tsv'
+    write_report(report, [event(
+        source, 'a', 'terminal_stop', 1,
+        source_nt_positions='7-9', original='TAA', replacement='-', action='delete'
+    )])
+    alignment = tmp_path / 'gene.mafft.codon.aln'
+    alignment.write_text('>a\nATGGCT\n>b\nATGGCT\n')
+    prefix = tmp_path / 'terminal.qc'
+    result = cli(
+        'alignment_qc.py', '-i', alignment, '-st', 'codon', '-p', prefix,
+        '--sequence-changes', report, cwd=tmp_path
+    )
+    assert result.returncode == 0, result.stderr
+    assert str(alignment.resolve()) in prefix.with_suffix('.pass.tsv').read_text()
+    details = prefix.with_suffix('.details.tsv').read_text()
+    assert 'Audited_terminal_stop' in details
+    assert '7-9-TAA' in details

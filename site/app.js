@@ -114,12 +114,12 @@ const modules = [
       { flag: "-N", label: "Maximum N proportion", description: "Maximum N ratio per site during nucleotide/codon trimming. Range: 0–1.", type: "number", value: "0.2", step: "0.01", token: "n_ratio" },
       { flag: "-X", label: "Maximum X proportion", description: "Maximum X ratio per site during protein trimming. Range: 0–1.", type: "number", value: "0.2", step: "0.01", token: "x_ratio" },
       { flag: "--min-length", label: "Minimum QC length", description: "Minimum sequence/alignment length; codon mode uses complete codons.", type: "number", value: "1", token: "min_length" },
-      { flag: "--max-n-ratio", label: "Maximum QC N ratio", description: "Maximum N ratio allowed by alignment QC. Range: 0–1.", type: "number", value: "1", step: "0.01", token: "max_n_ratio" },
-      { flag: "--max-x-ratio", label: "Maximum QC X ratio", description: "Maximum X ratio allowed by protein alignment QC. Range: 0–1.", type: "number", value: "1", step: "0.01", token: "max_x_ratio" },
+      { flag: "--max-n-ratio", label: "Maximum QC N ratio", description: "Maximum N-containing-codon ratio for codon QC (or N-base ratio for nucleotide QC). Codon/protein loci are retained as pairs.", type: "number", value: "1", step: "0.01", token: "max_n_ratio" },
+      { flag: "--max-x-ratio", label: "Maximum QC X ratio", description: "Maximum X ratio for protein QC. In codon workflow the final retained locus set is synchronized with codon QC.", type: "number", value: "1", step: "0.01", token: "max_x_ratio" },
       { flag: "--max-gap-ratio", label: "Maximum QC gap ratio", description: "Maximum gap ratio allowed by alignment QC. Range: 0–1.", type: "number", value: "1", step: "0.01", token: "max_gap_ratio" },
       { flag: "--min-parsimony-informative-sites", label: "Minimum parsimony-informative sites", description: "Minimum number of parsimony-informative sites required for QC.", type: "number", value: "0", token: "min_parsimony_informative_sites" },
-      { flag: "--allow-terminal-stop", label: "Allow terminal stop codons", description: "Permit terminal stop codons in codon-mode QC.", type: "checkbox", value: false, token: "allow_terminal_stop" },
-      { flag: "--allow-internal-stop", label: "Allow internal stop codons", description: "Permit internal stop codons in codon-mode QC.", type: "checkbox", value: false, token: "allow_internal_stop" },
+      { flag: "--allow-terminal-stop", label: "Allow observed terminal stop", description: "Allow a terminal stop that remains directly observable in the final codon alignment. Terminal stops normally removed by MSAP are reported as provenance and do not fail QC.", type: "checkbox", value: false, token: "allow_terminal_stop" },
+      { flag: "--allow-internal-stop", label: "Allow internal stop", description: "Retain a codon/protein locus pair when an internal stop is observed directly or recorded by MSAP as masked to NNN/X. The masked NNN/X is never restored.", type: "checkbox", value: false, token: "allow_internal_stop" },
     ],
     command: "python phyloprep.py -i {inputs} -o phyloprep-results{mapping_option} -st {seqtype} -s {align_software} -t 1 -j 1 -g {genetic_code} -ts trimAlnSeq -G {gap_ratio} -N {n_ratio} -X {x_ratio} --missing-taxa {missing_taxa} --min-length {min_length} --max-n-ratio {max_n_ratio} --max-x-ratio {max_x_ratio} --max-gap-ratio {max_gap_ratio} --min-parsimony-informative-sites {min_parsimony_informative_sites} --protein-stop-symbol {protein_stop_symbol_cli}{allow_terminal_stop}{allow_internal_stop}{notrim_option}",
   },
@@ -235,9 +235,12 @@ const modules = [
   },
   {
     script: "alignment_qc.py", title: "Alignment quality control", category: "QC", browser: true,
-    summary: "Checks FASTA alignments locally and creates pass, fail, and detailed QC reports.",
-    inputs: ["FASTA files and/or pathlist files (one FASTA path per line) (-i, --input)", "Required report prefix (-p, --prefix)", "Sequence type (-st, --seqtype)"],
-    inputFields: [{ key: "inputs", label: "Alignment input files", flag: "-i, --input", multiple: true, pathList: true }],
+    summary: "Checks FASTA alignments locally and can combine observed alignment features with PhyloPrep sequence-change provenance, including masked internal stops.",
+    inputs: ["FASTA files and/or pathlist files (one FASTA path per line) (-i, --input)", "Optional PhyloPrep sequence_changes.tsv provenance", "Required report prefix (-p, --prefix)", "Sequence type (-st, --seqtype)"],
+    inputFields: [
+      { key: "inputs", label: "Alignment input files", flag: "-i, --input", multiple: true, pathList: true },
+      { key: "sequence_changes", label: "Sequence changes report", flag: "--sequence-changes", accept: ".tsv,.txt", required: false },
+    ],
     outputs: ["PREFIX.pass.tsv", "PREFIX.fail.tsv", "PREFIX.details.tsv"],
     outputLabel: "Report prefix", outputHelp: "The command-line script creates its QC reports from this prefix.", defaultOutput: "phyloprep-qc",
     parameters: [
@@ -248,10 +251,10 @@ const modules = [
       { flag: "--max-x-ratio", label: "Maximum X ratio", description: "Maximum X ratio for protein matrices. Range: 0–1.", type: "number", value: "1", step: "0.01", token: "max_x_ratio" },
       { flag: "--max-gap-ratio", label: "Maximum gap ratio", description: "Proportion allowed before the alignment is rejected. Default: 1.", type: "number", value: "1", step: "0.01" },
       { flag: "--min-parsimony-informative-sites", label: "Minimum parsimony-informative sites", description: "Minimum count required in the complete alignment matrix. Default: 0.", type: "number", value: "0", token: "min_parsimony_informative_sites" },
-      { flag: "--allow-terminal-stop", label: "Allow terminal stop codons", description: "Permit terminal stop codons in codon-mode QC.", type: "checkbox", value: false, token: "allow_terminal_stop" },
-      { flag: "--allow-internal-stop", label: "Allow internal stop codons", description: "Permit internal stop codons in codon-mode QC.", type: "checkbox", value: false, token: "allow_internal_stop" },
+      { flag: "--allow-terminal-stop", label: "Allow observed terminal stop", description: "Allow a terminal stop still directly present in a codon alignment. Terminal stops recorded as removed in sequence_changes.tsv remain provenance only.", type: "checkbox", value: false, token: "allow_terminal_stop" },
+      { flag: "--allow-internal-stop", label: "Allow internal stop", description: "Allow an internal stop observed in a codon alignment or recorded as masked in sequence_changes.tsv. Audited internal stops can also control paired protein QC; masking is preserved.", type: "checkbox", value: false, token: "allow_internal_stop" },
     ],
-    command: "python alignment_qc.py -i {inputs} -p {prefix} -st {seqtype} -g {genetic_code} --min-length {min_length} --max-n-ratio {max_n_ratio} --max-x-ratio {max_x_ratio} --max-gap-ratio {max_gap_ratio} --min-parsimony-informative-sites {min_parsimony_informative_sites}{allow_terminal_stop}{allow_internal_stop}",
+    command: "python alignment_qc.py -i {inputs} -p {prefix} -st {seqtype} -g {genetic_code}{sequence_changes_option} --min-length {min_length} --max-n-ratio {max_n_ratio} --max-x-ratio {max_x_ratio} --max-gap-ratio {max_gap_ratio} --min-parsimony-informative-sites {min_parsimony_informative_sites}{allow_terminal_stop}{allow_internal_stop}",
   },
   {
     script: "calulate_4dtv_and_correction.py", title: "4DTV calculation and correction", category: "Divergence", browser: true,
@@ -372,7 +375,7 @@ function implementationProfile(module) {
     return {
       key: "compatible",
       label: "Browser PhyloPrep pipeline",
-      note: "The browser orchestrates the repository's original preparation modules locally: MSAP preprocessing/back-translation/trimming in Pyodide, MUSCLE 5.1.0 or optional MAFFT E-INS-i 7.520 in Biowasm, then the original QC, renaming, concatenation, codon splitting, four-fold extraction and format-conversion code. Linux process-management features are replaced by a browser-safe sequential adapter.",
+      note: "The browser orchestrates the repository's original preparation modules locally: MSAP preprocessing/back-translation/trimming in Pyodide, MUSCLE 5.1.0 or optional MAFFT E-INS-i 7.520 in Biowasm, then provenance-aware paired codon/protein QC, renaming, concatenation, codon splitting, four-fold extraction and format-conversion code. Linux process-management features are replaced by a browser-safe sequential adapter.",
     };
   }
   if (module.browserWorkflow === "batch") {
@@ -605,7 +608,7 @@ function updateContextualParameters() {
   hide("max_n_ratio", seqtype === "prot");
   hide("max_x_ratio", seqtype !== "prot");
   hide("allow_terminal_stop", seqtype !== "codon");
-  hide("allow_internal_stop", seqtype !== "codon");
+  hide("allow_internal_stop", seqtype === "nucl");
 }
 
 function inputControls() {
@@ -760,6 +763,9 @@ function valuesForCommand() {
     keep_taxa_option: parameterValues.keep_taxa?.length ? " --keep-taxa /work/path-lists/filter_sequences.keep-taxa.txt" : "",
     remove_taxa_option: parameterValues.remove_taxa?.length ? " --remove-taxa /work/path-lists/filter_sequences.remove-taxa.txt" : "",
     mapping_option: mappingFile ? ` -m ${cliQuote(virtualInputPath(mappingName))}` : "",
+    sequence_changes_option: selectedInputFiles.get("sequence_changes")?.[0]
+      ? ` --sequence-changes ${cliQuote(virtualInputPath(selectedInputFiles.get("sequence_changes")[0].name))}`
+      : "",
     map_output_option: parameterValues.map_output ? ` --map-output ${cliQuote(mapOutputPath)}` : "",
     allow_duplicate_ids_option: parameterValues.allow_duplicate_ids ? " --allow-duplicate-ids" : "",
     keep_special_option: parameterValues.keep_special ? " --keep-special" : "",

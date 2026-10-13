@@ -233,3 +233,70 @@ def test_codon_min_length_uses_codon_units_and_does_not_publish_matrices(tmp_pat
     assert "No alignments passed QC for codon/raw" in result.stderr
     assert not (output / "qc/codon/raw/alignment.pass.tsv").read_text().strip()
     assert not (output / "matrices").exists()
+
+
+def test_internal_stop_policy_is_shared_by_codon_and_protein_pair(tmp_path, fake_aligner):
+    _, env = fake_aligner
+    source = tmp_path / 'gene.fa'
+    source.write_text('>a\nATGTGAGCT\n>b\nATGGCTGCT\n')
+
+    rejected = tmp_path / 'rejected'
+    result = invoke(tmp_path, env, '-i', source, '-o', rejected, '--notrim', '-t', '1')
+    assert result.returncode == 2
+    assert 'No paired codon/protein alignments passed QC' in result.stderr
+    for seqtype in ('codon', 'prot'):
+        details = (rejected / 'qc' / seqtype / 'raw' / 'alignment.details.tsv').read_text()
+        assert 'Audited_internal_stop' in details
+        assert 'internal_stop' in details
+
+    allowed = tmp_path / 'allowed'
+    result = invoke(
+        tmp_path, env, '-i', source, '-o', allowed, '--notrim', '-t', '1',
+        '--allow-internal-stop'
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    check_formats(allowed / 'matrices/codon/raw', 'supermatrix',
+                  {'a': 'ATGNNNGCT', 'b': 'ATGGCTGCT'})
+    check_formats(allowed / 'matrices/prot/raw', 'supermatrix',
+                  {'a': 'MXA', 'b': 'MAA'})
+    paired = (allowed / 'qc/paired/raw/loci.details.tsv').read_text()
+    assert '\tpass\tNA\n' in paired
+
+
+def test_paired_qc_uses_intersection_of_codon_and_protein_loci(tmp_path, fake_aligner):
+    _, env = fake_aligner
+    good = tmp_path / 'good.fa'
+    ambiguous = tmp_path / 'ambiguous.fa'
+    good.write_text('>a\nGCTGGT\n>b\nGCCGGA\n')
+    ambiguous.write_text('>a\nGCNGGT\n>b\nGCCGGA\n')
+    output = tmp_path / 'results'
+    result = invoke(
+        tmp_path, env, '-i', good, ambiguous, '-o', output, '--notrim', '-t', '1',
+        '--max-n-ratio', '0', '--max-x-ratio', '1'
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    check_formats(output / 'matrices/codon/raw', 'supermatrix',
+                  {'a': 'GCTGGT', 'b': 'GCCGGA'})
+    check_formats(output / 'matrices/prot/raw', 'supermatrix',
+                  {'a': 'AG', 'b': 'AG'})
+    paired = (output / 'qc/paired/raw/loci.details.tsv').read_text()
+    assert 'ambiguous' in paired
+    assert 'codon_qc_failed' in paired
+    assert 'ambiguous.mafft.prot.aln' not in (output / 'qc/prot/raw/alignment.pass.tsv').read_text()
+
+
+def test_codon_default_trimming_uses_one_shared_site_mask(tmp_path, fake_aligner):
+    _, env = fake_aligner
+    source = tmp_path / 'gene.fa'
+    source.write_text('>a\nGCNGGT\n>b\nGCCGGA\n')
+    output = tmp_path / 'results'
+    result = invoke(
+        tmp_path, env, '-i', source, '-o', output, '-t', '1',
+        '-N', '0', '-X', '1'
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    codon = AlignIO.read(output / 'alignments/gene.mafft.codon.trimal.aln', 'fasta')
+    protein = AlignIO.read(output / 'alignments/gene.mafft.prot.trimal.aln', 'fasta')
+    assert {r.id: str(r.seq) for r in codon} == {'a': 'GGT', 'b': 'GGA'}
+    assert {r.id: str(r.seq) for r in protein} == {'a': 'G', 'b': 'G'}
+    assert len(codon[0].seq) == 3 * len(protein[0].seq)

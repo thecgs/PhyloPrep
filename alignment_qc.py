@@ -7,7 +7,7 @@ import argparse
 import csv
 import html
 import sys
-from collections import Counter
+from collections import Counter, defaultdict
 from pathlib import Path
 
 from Bio import SeqIO
@@ -75,13 +75,61 @@ def _records(path: str):
     return records
 
 
+def _audit_locus_key(path: str) -> str:
+    """Map source/audit/alignment filenames from one locus to a stable key."""
+    name = Path(path).name
+    for suffix in (".macse_original.NT.fasta", ".macse_original.AA.fasta",
+                   ".macse_original.NT.fa", ".macse_original.AA.fa"):
+        if name.endswith(suffix):
+            return name[:-len(suffix)]
+    for marker in (".mafft.", ".muscle.", ".prank.", ".clustalw2.", ".macse."):
+        if marker in name:
+            return name.split(marker, 1)[0]
+    return Path(name).stem
+
+
+def load_sequence_changes(paths):
+    """Index sequence-change provenance by locus and final taxon ID."""
+    indexed = defaultdict(lambda: defaultdict(lambda: {"terminal": [], "internal": []}))
+    for path in paths or []:
+        source = Path(path)
+        if not source.is_file():
+            raise ValueError(f"Sequence-change report does not exist: {path}")
+        with source.open(newline="") as handle:
+            reader = csv.DictReader(handle, delimiter="\t")
+            required = {"input_file", "taxa_id", "event", "source_nt_positions", "original"}
+            if not required <= set(reader.fieldnames or []):
+                raise ValueError(f"{path}: not a PhyloPrep sequence_changes.tsv report")
+            for row in reader:
+                event_name = row.get("event", "")
+                if event_name not in {"terminal_stop", "internal_stop",
+                                     "protein_terminal_stop", "protein_internal_stop"}:
+                    continue
+                locus = _audit_locus_key(row.get("input_file", ""))
+                taxon = row.get("mapped_taxa_id")
+                if not taxon or taxon == "NA":
+                    taxon = row.get("taxa_id", "NA")
+                category = "internal" if "internal_stop" in event_name else "terminal"
+                position = row.get("source_nt_positions", "NA")
+                if position in {"", "NA"}:
+                    position = row.get("source_aa_positions", "NA")
+                original = row.get("original", "NA")
+                indexed[locus][taxon][category].append(f"{position}-{original}")
+    return indexed
+
+
+def _audit_for_alignment(path, audit_index):
+    return audit_index.get(_audit_locus_key(path), {}) if audit_index else {}
+
+
 def alignment_qc(path: str, seqtype: str, genetic_code: int = 1,
-                    min_length: int = 1) -> dict:
+                    min_length: int = 1, audit_index=None) -> dict:
     """Return summary, sequence and column findings for one FASTA file."""
     source = Path(path)
     if not source.is_file():
         raise ValueError(f"Input FASTA file does not exist: {path}")
     records = _records(path)
+    audit_rows = _audit_for_alignment(path, audit_index)
     actual_type = seqtype
     allowed = DNA_CHARS if actual_type in {"nucl", "codon"} else PROTEIN_CHARS
     ids = [record.id for record in records]
@@ -108,6 +156,8 @@ def alignment_qc(path: str, seqtype: str, genetic_code: int = 1,
             # In codon mode a threshold of N means N complete codons, so it
             # has the same biological unit as the translated protein matrix.
             "short": length_units(len(sequence), actual_type) < min_length,
+            "audited_terminal_stop": ";".join(audit_rows.get(record.id, {}).get("terminal", [])) or "NA",
+            "audited_internal_stop": ";".join(audit_rows.get(record.id, {}).get("internal", [])) or "NA",
         }
         if actual_type == "codon":
             codons = [sequence[i:i + 3] for i in range(0, len(sequence), 3)]
@@ -118,7 +168,7 @@ def alignment_qc(path: str, seqtype: str, genetic_code: int = 1,
             if len(sequence) % 3 == 0 and sequence:
                 occupied = [i for i, codon in enumerate(codons) if codon != '---']
                 last = occupied[-1] if occupied else -1
-                row["terminal_stop"] = codons[last] if last >= 0 and is_stop_codon(codons[last], genetic_code) else "NA"
+                row["terminal_stop"] = codons[last] if last >= 0 and is_stop_codon(codons[last], genetic_code, terminal=True) else "NA"
                 hits = [f"{i + 1}-{codon}" for i, codon in enumerate(codons) if i != last and is_stop_codon(codon, genetic_code)]
                 row["internal_stop_count"] = ";".join(hits) if hits else "NA"
         sequence_rows.append(row)
@@ -164,6 +214,8 @@ def alignment_qc(path: str, seqtype: str, genetic_code: int = 1,
         "valid_sites": valid_sites, "full_gap_columns": full_gap_columns,
         "max_gap_ratio": max(column_gap_ratios, default=0.0),
         "issues": issues, "sequences": sequence_rows,
+        "audited_terminal_stop": any(row["audited_terminal_stop"] != "NA" for row in sequence_rows),
+        "audited_internal_stop": any(row["audited_internal_stop"] != "NA" for row in sequence_rows),
     }
 
 
@@ -240,7 +292,7 @@ def write_qc_reports(results, passed, failed, prefix, seqtype, allow_terminal, a
     for suffix, items in ((".pass.tsv", passed), (".fail.tsv", failed)):
         with atomic_output(str(prefix) + suffix) as handle:
             w = csv.writer(handle, delimiter="\t"); w.writerows(([row[0]] for row in rows(items)))
-    detail = summary + (["Terminal_stop", "Internal_stop_count"] if seqtype == "codon" else []) + ["Issues"]
+    detail = summary + (["Terminal_stop", "Internal_stop_count"] if seqtype == "codon" else []) + ["Audited_terminal_stop", "Audited_internal_stop", "Issues"]
     with atomic_output(str(prefix) + ".details.tsv") as handle:
         w = csv.writer(handle, delimiter="\t"); w.writerow(detail)
         for r in results:
@@ -250,6 +302,12 @@ def write_qc_reports(results, passed, failed, prefix, seqtype, allow_terminal, a
                     stops = [(x["id"], x["terminal_stop"]) for x in r["sequences"] if x["terminal_stop"] != "NA"]
                     internal = [(x["id"], x["internal_stop_count"]) for x in r["sequences"] if x["internal_stop_count"] != "NA"]
                     extra = [";".join(f"{a}-{b}" for a,b in stops) or "NA", ";".join(f"{a}-inter-{b}" for a,b in internal) or "NA"]
+                audited_terminal = [(x["id"], x["audited_terminal_stop"]) for x in r["sequences"] if x["audited_terminal_stop"] != "NA"]
+                audited_internal = [(x["id"], x["audited_internal_stop"]) for x in r["sequences"] if x["audited_internal_stop"] != "NA"]
+                extra += [
+                    ";".join(f"{a}-{b}" for a, b in audited_terminal) or "NA",
+                    ";".join(f"{a}-{b}" for a, b in audited_internal) or "NA",
+                ]
                 w.writerow(row + extra + [";".join(r["reasons"])])
 
 
@@ -289,8 +347,13 @@ Notes:
     possible expansion is a stop in the selected genetic code (e.g. TAR in 1).
     Dual-coding codons also encoding amino acids are not definite stops in an
     alignment, even at its end; complete-CDS preprocessing handles terminal stops.
-  * In codon mode, terminal and internal stop codons fail QC by default.
-    --allow-terminal-stop and --allow-internal-stop independently permit them.
+  * In codon mode, stop codons observed directly in the final alignment fail QC
+    by default. --allow-terminal-stop permits an observed terminal stop.
+  * --sequence-changes accepts one or more PhyloPrep sequence_changes.tsv reports.
+    Masked internal stops recorded by preprocessing are restored as QC provenance
+    for both codon and paired protein alignments. They fail QC by default and are
+    permitted only by --allow-internal-stop. Terminal stops that MSAP removed from
+    complete CDS inputs are reported as audited provenance but do not fail QC.
   * Output files are PREFIX.pass.tsv, PREFIX.fail.tsv and PREFIX.details.tsv.
     The first two contain absolute input paths without headers; details.tsv
     contains the complete statistics table.
@@ -317,10 +380,12 @@ Notes:
                           help="Maximum gap ratio for the complete matrix (default: 1).")
     optional.add_argument("--min-parsimony-informative-sites", type=int, default=0, metavar="N",
                           help="Minimum parsimony-informative sites in the matrix (default: 0).")
+    optional.add_argument("--sequence-changes", nargs="+", metavar="TSV",
+                          help="Optional PhyloPrep sequence_changes.tsv report(s). Masked internal stops are restored as QC provenance for codon/protein alignments.")
     optional.add_argument("--allow-terminal-stop", action="store_true",
-                          help="Allow terminal stop codons in codon mode.")
+                          help="Allow terminal stop codons observed directly in a codon alignment. MSAP-removed terminal stops are provenance only.")
     optional.add_argument("--allow-internal-stop", action="store_true",
-                          help="Allow internal stop codons in codon mode.")
+                          help="Allow internal stops observed directly in codon alignments or recorded as masked in --sequence-changes; audited events also apply to paired protein QC.")
     optional.add_argument("-h", "--help", action="help", help="Show this help message and exit.")
     optional.add_argument("-v", "--version", action="version", version="v1.0.0",
                           help="Show program's version number and exit.")
@@ -330,18 +395,24 @@ Notes:
         parser.error("length thresholds must be non-negative and ratios must be between 0 and 1")
     try:
         paths = expand_input_paths(args.input)
-        validate_report_paths(args.prefix, [*args.input, *paths])
+        audit_index = load_sequence_changes(args.sequence_changes)
+        validate_report_paths(args.prefix, [*args.input, *paths, *(args.sequence_changes or [])])
         results, passed, failed = [], [], []
         for path in paths:
-            result = alignment_qc(path, args.seqtype, args.genetic_code, args.min_length)
+            result = alignment_qc(path, args.seqtype, args.genetic_code, args.min_length, audit_index)
             stat, aligned = alignment_stats(path, args.seqtype)
             result["alignment_stats"] = stat
             reasons = [x for x in result["issues"] if x != "stop_codon"]
-            if args.seqtype == "codon":
-                has_terminal = any(x["terminal_stop"] != "NA" for x in result["sequences"])
-                has_internal = any(x["internal_stop_count"] != "NA" for x in result["sequences"])
-                if (has_terminal and not args.allow_terminal_stop) or (has_internal and not args.allow_internal_stop):
-                    reasons.append("stop_codon")
+            observed_terminal = args.seqtype == "codon" and any(
+                x["terminal_stop"] != "NA" for x in result["sequences"])
+            observed_internal = args.seqtype == "codon" and any(
+                x["internal_stop_count"] != "NA" for x in result["sequences"])
+            audited_internal = any(
+                x["audited_internal_stop"] != "NA" for x in result["sequences"])
+            if observed_terminal and not args.allow_terminal_stop:
+                reasons.append("terminal_stop")
+            if (observed_internal or audited_internal) and not args.allow_internal_stop:
+                reasons.append("internal_stop")
             if not aligned: reasons.append("length_mismatch")
             if length_units(stat["alignment_length"], args.seqtype) < args.min_length:
                 reasons.append("short_alignment")

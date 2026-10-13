@@ -175,6 +175,50 @@ def trim_alignment(
     read_fasta_alignment(outfile, codon=(seqtype == "codon"))
 
 
+def trim_codon_protein_pair(protein_file, codon_file, protein_output, codon_output,
+                            gap_ratio, n_ratio, x_ratio):
+    """Trim paired protein/codon alignments with one shared site mask."""
+    proteins = read_fasta_alignment(protein_file)
+    codons = read_fasta_alignment(codon_file, codon=True)
+    protein_map = {record.id: str(record.seq).upper() for record in proteins}
+    codon_map = {record.id: str(record.seq).upper() for record in codons}
+    if list(protein_map) != list(codon_map):
+        raise ValueError("Protein/codon alignment IDs or order do not match for paired trimming")
+    if not protein_map:
+        raise ValueError("No sequences found for paired codon/protein trimming")
+    aa_length = len(next(iter(protein_map.values())))
+    if any(len(seq) != aa_length for seq in protein_map.values()):
+        raise ValueError("Protein alignment length mismatch during paired trimming")
+    if any(len(codon_map[name]) != 3 * aa_length for name in protein_map):
+        raise ValueError("Protein/codon alignment dimensions do not match for paired trimming")
+
+    keep = []
+    count = len(protein_map)
+    for index in range(aa_length):
+        aa_column = [protein_map[name][index] for name in protein_map]
+        codon_column = [codon_map[name][3 * index:3 * index + 3] for name in protein_map]
+        gap_fraction = sum(residue == "-" for residue in aa_column) / count
+        n_fraction = sum("N" in codon for codon in codon_column) / count
+        x_fraction = sum(residue == "X" for residue in aa_column) / count
+        if gap_fraction > gap_ratio or n_fraction > n_ratio or x_fraction > x_ratio:
+            continue
+        keep.append(index)
+
+    if not keep:
+        raise ValueError("No paired codon/protein alignment sites remain after trimming")
+
+    with atomic_output(codon_output, inputs=[protein_file, codon_file]) as out:
+        for name in protein_map:
+            seq = "".join(codon_map[name][3 * i:3 * i + 3] for i in keep)
+            out.write(f">{name}\n{seq}\n")
+    with atomic_output(protein_output, inputs=[protein_file, codon_file]) as out:
+        for name in protein_map:
+            seq = "".join(protein_map[name][i] for i in keep)
+            out.write(f">{name}\n{seq}\n")
+    read_fasta_alignment(codon_output, codon=True)
+    read_fasta_alignment(protein_output)
+
+
 def trim_codon_with_trimal(trimal_path, trimal_args, protein_file, codon_file,
                           protein_output, codon_output):
     """Apply trimAl's original protein column indices to whole codons."""
@@ -497,17 +541,12 @@ Notes:
                 f"{prefix}.{align_software}.codon.trimal.aln",
             )
         elif not notrim:
-            trim_alignment(
-                trim_software, software_path.get("trimal"), trimal_args,
-                f"{prefix}.{align_software}.codon.aln",
-                f"{prefix}.{align_software}.codon.trimal.aln",
-                "codon", args.G, args.N, args.X,
-            )
-            trim_alignment(
-                trim_software, software_path.get("trimal"), trimal_args,
+            trim_codon_protein_pair(
                 f"{prefix}.{align_software}.prot.aln",
+                f"{prefix}.{align_software}.codon.aln",
                 f"{prefix}.{align_software}.prot.trimal.aln",
-                "prot", args.G, args.N, args.X,
+                f"{prefix}.{align_software}.codon.trimal.aln",
+                args.G, args.N, args.X,
             )
     else:
         ## run trimAlnSeq.py

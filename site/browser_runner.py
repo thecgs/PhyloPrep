@@ -400,14 +400,11 @@ def run_phyloprep_finalize(file_manifest, options, output_root, engine_root="/en
 
         phyloprep.run = browser_run
         try:
-            seqtypes = ("codon", "prot") if args.seqtype == "codon" else (args.seqtype,)
             variants = ("raw",) if args.notrim else ("raw", "trimmed")
+            matrix_root = root / "matrices"
             with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
-                for seqtype in seqtypes:
-                    for variant in variants:
-                        stage = root / "matrices" / seqtype / variant
-                        stage.mkdir(parents=True, exist_ok=True)
-                        phyloprep.prepare_group(args, sources, root, stage, seqtype, variant)
+                for variant in variants:
+                    phyloprep.prepare_variant(args, sources, root, matrix_root, variant)
         finally:
             phyloprep.run = original_run
 
