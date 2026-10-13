@@ -254,8 +254,8 @@ const modules = [
       { flag: "--max-x-ratio", label: "Maximum X ratio", description: "Maximum X ratio for protein matrices. Range: 0–1.", type: "number", value: "1", step: "0.01", token: "max_x_ratio" },
       { flag: "--max-gap-ratio", label: "Maximum gap ratio", description: "Proportion allowed before the alignment is rejected. Default: 1.", type: "number", value: "1", step: "0.01" },
       { flag: "--min-parsimony-informative-sites", label: "Minimum parsimony-informative sites", description: "Minimum count required in the complete alignment matrix. Default: 0.", type: "number", value: "0", token: "min_parsimony_informative_sites" },
-      { flag: "--allow-terminal-stop", label: "Allow observed terminal stop", description: "Allow a terminal stop still directly present in a codon alignment. Terminal stops recorded as removed in sequence_changes.tsv remain provenance only.", type: "checkbox", value: false, token: "allow_terminal_stop" },
-      { flag: "--allow-internal-stop", label: "Allow internal stop", description: "Allow an internal stop observed in a codon alignment or recorded as masked in sequence_changes.tsv. Audited internal stops can also control paired protein QC; masking is preserved.", type: "checkbox", value: false, token: "allow_internal_stop" },
+      { flag: "--allow-terminal-stop", label: "Allow observed terminal stop", description: "Allow a terminal stop directly present in a codon alignment or a terminal * in a protein alignment. Stops recorded as removed in sequence_changes.tsv remain provenance only.", type: "checkbox", value: false, token: "allow_terminal_stop" },
+      { flag: "--allow-internal-stop", label: "Allow internal stop", description: "Allow an internal stop observed in a codon/protein alignment or recorded as masked in sequence_changes.tsv. Protein direct-stop detection uses *; masking is preserved.", type: "checkbox", value: false, token: "allow_internal_stop" },
     ],
     command: "python alignment_qc.py -i {inputs} -p {prefix} -st {seqtype} -g {genetic_code}{sequence_changes_option} --min-length {min_length} --max-n-ratio {max_n_ratio} --max-x-ratio {max_x_ratio} --max-gap-ratio {max_gap_ratio} --min-parsimony-informative-sites {min_parsimony_informative_sites}{allow_terminal_stop}{allow_internal_stop}",
   },
@@ -611,7 +611,7 @@ function updateContextualParameters() {
   hide("gap_ratio", Boolean(notrim));
   hide("max_n_ratio", seqtype === "prot");
   hide("max_x_ratio", seqtype === "nucl" || (script === "alignment_qc.py" && seqtype === "codon"));
-  hide("allow_terminal_stop", seqtype !== "codon");
+  hide("allow_terminal_stop", !(seqtype === "codon" || (script === "alignment_qc.py" && seqtype === "prot")));
   hide("allow_internal_stop", seqtype === "nucl" || (script === "phyloprep.py" && seqtype === "prot"));
   const pairedPis = script === "phyloprep.py" && seqtype === "codon";
   hide("paired_pis_policy", !pairedPis);

@@ -513,8 +513,17 @@ def validate_paired_alignments(args, codon_context, protein_context):
                 normalized_codon = codon_triplet.replace("U", "T")
                 if "N" not in normalized_codon and "?" not in normalized_codon:
                     translated = str(Seq(normalized_codon).translate(table=args.genetic_code))
-                    expected = "M" if coding_index == 0 and normalized_codon in table.start_codons else translated
-                    if expected != residue:
+                    allowed_residues = {translated}
+                    if codon_context["variant"] == "raw":
+                        if coding_index == 0 and normalized_codon in table.start_codons:
+                            allowed_residues = {"M"}
+                    elif normalized_codon in table.start_codons:
+                        # Trimming can remove the biological first codon, so a retained
+                        # start-capable codon may legitimately encode either its normal
+                        # amino acid or the initiator M inherited from the raw translation.
+                        allowed_residues.add("M")
+                    if residue not in allowed_residues:
+                        expected = "/".join(sorted(allowed_residues))
                         raise ValueError(
                             f"{locus}/{taxon}: paired codon/protein translation mismatch at site {index + 1} "
                             f"({codon_triplet}->{expected}, protein={residue})"

@@ -207,11 +207,11 @@ python alignment_qc.py -i alignments.pathlist -st codon -p qc/codon \
   --sequence-changes reports/sequence_changes.tsv
 ```
 
-Codon gaps must be complete triplets (`---`). Without `--sequence-changes`, stop control is based only on stop codons that are still directly observable in the supplied codon alignment. With one or more `--sequence-changes TSV` reports, QC also recovers stop events that MSAP already standardized before alignment:
+Codon gaps must be complete triplets (`---`). Without `--sequence-changes`, stop control is based on stops directly observable in the supplied alignment: genetic-code-aware stop codons for `codon`, and `*` for `prot`. With one or more `--sequence-changes TSV` reports, QC also recovers stop events that MSAP already standardized before alignment:
 
 - **Internal stop:** MSAP replaces the codon with `NNN`; the paired protein representation carries the corresponding standardized uncertainty. The audit row remains an `internal_stop` event. `alignment_qc.py` therefore marks both the codon representation and the paired protein representation as containing an audited internal stop. The locus fails by default. `--allow-internal-stop` permits the locus, but the sequence remains masked; it never restores the original stop codon or `*`.
 - **Terminal stop removed by MSAP:** a normal complete-CDS terminal stop is deleted before translation and recorded as `terminal_stop`. This is reported in the audited-stop columns but **does not fail QC**.
-- **Terminal stop still present in a final codon alignment:** this is an observed alignment feature and fails by default. `--allow-terminal-stop` permits it.
+- **Stop still present in a supplied alignment:** a definite codon stop or protein `*` is an observed alignment feature and fails by default. `--allow-terminal-stop` permits a terminal stop and `--allow-internal-stop` permits internal stops. Custom protein stop symbols should be normalized before standalone QC.
 
 The detailed report separates directly observed stop information from `Audited_terminal_stop` and `Audited_internal_stop`, so a masked source event is not misrepresented as a stop that still exists in the final alignment.
 

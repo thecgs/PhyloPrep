@@ -391,3 +391,23 @@ def test_partial_mapping_audit_fallback_uses_normalized_id(tmp_path, fake_aligne
     assert result.returncode == 0, result.stdout + result.stderr
     details = (output / "qc/codon/raw/alignment.details.tsv").read_text()
     assert "a_1-4-6-TGA" in details
+
+
+def test_alignment_qc_detects_observed_protein_stops(tmp_path):
+    alignment = tmp_path / "protein.aln"
+    alignment.write_text(">a\nMA*G\n>b\nMAAG\n")
+    prefix = tmp_path / "protein.qc"
+    result = cli("alignment_qc.py", "-i", alignment, "-st", "prot", "-p", prefix, cwd=tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert str(alignment.resolve()) in Path(str(prefix) + ".fail.tsv").read_text()
+    details = Path(str(prefix) + ".details.tsv").read_text()
+    assert "Internal_stop_count" in details
+    assert "internal_stop" in details
+
+    allowed = tmp_path / "protein.allowed"
+    result = cli(
+        "alignment_qc.py", "-i", alignment, "-st", "prot", "-p", allowed,
+        "--allow-internal-stop", cwd=tmp_path
+    )
+    assert result.returncode == 0, result.stderr
+    assert str(alignment.resolve()) in Path(str(allowed) + ".pass.tsv").read_text()
