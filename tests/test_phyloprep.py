@@ -2,11 +2,14 @@
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from Bio import AlignIO
 
 REPO = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO))
+import phyloprep
 
 
 def invoke(tmp_path, env, *args):
@@ -169,7 +172,7 @@ def test_failure_does_not_publish_matrices(tmp_path, fake_aligner, failure):
     if failure == "alignment":
         assert not (output / "qc").exists()
     elif failure == "qc":
-        assert "No alignments passed QC" in result.stderr
+        assert "passed QC" in result.stderr
     else:
         assert "four-fold" in result.stderr
 
@@ -230,7 +233,7 @@ def test_codon_min_length_uses_codon_units_and_does_not_publish_matrices(tmp_pat
     result = invoke(tmp_path, env, "-i", source, "-o", output, "-t", "1",
                     "--notrim", "--min-length", "3")
     assert result.returncode != 0
-    assert "No alignments passed QC for codon/raw" in result.stderr
+    assert "No paired codon/protein alignments passed QC" in result.stderr
     assert not (output / "qc/codon/raw/alignment.pass.tsv").read_text().strip()
     assert not (output / "matrices").exists()
 
@@ -260,10 +263,10 @@ def test_internal_stop_policy_is_shared_by_codon_and_protein_pair(tmp_path, fake
     check_formats(allowed / 'matrices/prot/raw', 'supermatrix',
                   {'a': 'MXA', 'b': 'MAA'})
     paired = (allowed / 'qc/paired/raw/loci.details.tsv').read_text()
-    assert '\tpass\tNA\n' in paired
+    assert '\tpass\tNA\n' in paired or '\tpass\tpass\tNA\n' in paired
 
 
-def test_paired_qc_uses_intersection_of_codon_and_protein_loci(tmp_path, fake_aligner):
+def test_paired_qc_keeps_representation_reports_and_uses_retained_manifests(tmp_path, fake_aligner):
     _, env = fake_aligner
     good = tmp_path / 'good.fa'
     ambiguous = tmp_path / 'ambiguous.fa'
@@ -282,7 +285,9 @@ def test_paired_qc_uses_intersection_of_codon_and_protein_loci(tmp_path, fake_al
     paired = (output / 'qc/paired/raw/loci.details.tsv').read_text()
     assert 'ambiguous' in paired
     assert 'codon_qc_failed' in paired
-    assert 'ambiguous.mafft.prot.aln' not in (output / 'qc/prot/raw/alignment.pass.tsv').read_text()
+    assert 'ambiguous.mafft.prot.aln' in (output / 'qc/prot/raw/alignment.pass.tsv').read_text()
+    assert 'ambiguous.mafft.prot.aln' not in (output / 'qc/paired/raw/prot.retained.tsv').read_text()
+    assert 'ambiguous.mafft.codon.aln' not in (output / 'qc/paired/raw/codon.retained.tsv').read_text()
 
 
 def test_codon_default_trimming_uses_one_shared_site_mask(tmp_path, fake_aligner):
@@ -324,7 +329,7 @@ def test_paired_pis_policy_is_user_selectable(tmp_path, fake_aligner, policy, sh
     if should_pass:
         assert result.returncode == 0, result.stdout + result.stderr
         paired = (output / "qc/paired/raw/loci.details.tsv").read_text()
-        assert "\t1\t0\t1\t" + policy + "\tpass\tpass\tNA\n" in paired
+        assert "\t1\t0\t1\t1\t" + policy + "\tpass\tpass\tNA\n" in paired
         check_formats(output / "matrices/codon/raw", "supermatrix",
                       {"a": "GCT", "b": "GCT", "c": "GCC", "d": "GCC"})
         check_formats(output / "matrices/prot/raw", "supermatrix",
@@ -333,5 +338,34 @@ def test_paired_pis_policy_is_user_selectable(tmp_path, fake_aligner, policy, sh
         assert result.returncode == 2
         paired = (output / "qc/paired/raw/loci.details.tsv").read_text()
         assert "pis_policy_failed" in paired
-        assert "\t1\t0\t1\t" + policy + "\tfail\tfail\t" in paired
+        assert "\t1\t0\t1\t1\t" + policy + "\tfail\tfail\t" in paired
         assert not (output / "matrices").exists()
+
+
+def test_paired_pis_thresholds_can_differ(tmp_path, fake_aligner):
+    _, env = fake_aligner
+    source = tmp_path / "gene.fa"
+    source.write_text(">a\nGCT\n>b\nGCT\n>c\nGCC\n>d\nGCC\n")
+    output = tmp_path / "pis-thresholds"
+    result = invoke(
+        tmp_path, env, "-i", source, "-o", output, "--notrim", "-t", "1",
+        "--min-parsimony-informative-sites", "99",
+        "--min-codon-pis", "1",
+        "--min-protein-pis", "0",
+        "--paired-pis-policy", "both",
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    paired = (output / "qc/paired/raw/loci.details.tsv").read_text()
+    assert "\t1\t0\t1\t0\tboth\tpass\tpass\tNA\n" in paired
+
+
+def test_paired_validation_rejects_translation_mismatch(tmp_path):
+    codon = tmp_path / "gene.mafft.codon.aln"
+    protein = tmp_path / "gene.mafft.prot.aln"
+    codon.write_text(">a\nGCT\n>b\nGCT\n")
+    protein.write_text(">a\nV\n>b\nV\n")
+    args = SimpleNamespace(align_software="mafft", genetic_code=1)
+    codon_context = {"qc_paths": [codon], "seqtype": "codon", "variant": "raw"}
+    protein_context = {"qc_paths": [protein], "seqtype": "prot", "variant": "raw"}
+    with pytest.raises(ValueError, match="translation mismatch"):
+        phyloprep.validate_paired_alignments(args, codon_context, protein_context)

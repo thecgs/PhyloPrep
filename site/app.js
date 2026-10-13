@@ -118,11 +118,13 @@ const modules = [
       { flag: "--max-x-ratio", label: "Maximum QC X ratio", description: "Maximum X ratio for protein QC. In codon workflow the final retained locus set is synchronized with codon QC.", type: "number", value: "1", step: "0.01", token: "max_x_ratio" },
       { flag: "--max-gap-ratio", label: "Maximum QC gap ratio", description: "Maximum gap ratio allowed by alignment QC. Range: 0–1.", type: "number", value: "1", step: "0.01", token: "max_gap_ratio" },
       { flag: "--min-parsimony-informative-sites", label: "Minimum parsimony-informative sites", description: "Minimum number of parsimony-informative sites required for QC.", type: "number", value: "0", token: "min_parsimony_informative_sites" },
+      { flag: "--min-codon-pis", label: "Minimum codon PIS", description: "Optional paired-codon threshold. If blank, uses Minimum parsimony-informative sites.", type: "number", value: "", token: "min_codon_pis" },
+      { flag: "--min-protein-pis", label: "Minimum protein PIS", description: "Optional paired-protein threshold. If blank, uses Minimum parsimony-informative sites.", type: "number", value: "", token: "min_protein_pis" },
       { flag: "--paired-pis-policy", label: "Paired PIS policy", description: "Codon workflow only. Decide how the minimum PIS threshold is applied to the paired codon/protein locus: both must pass, either may pass, or only codon/protein PIS controls retention. Final codon and protein matrices still use the same locus set.", type: "select", value: "both", options: [["both", "both — codon AND protein must pass"], ["either", "either — codon OR protein may pass"], ["codon", "codon — use codon PIS only"], ["protein", "protein — use protein PIS only"]], token: "paired_pis_policy" },
       { flag: "--allow-terminal-stop", label: "Allow observed terminal stop", description: "Allow a terminal stop that remains directly observable in the final codon alignment. Terminal stops normally removed by MSAP are reported as provenance and do not fail QC.", type: "checkbox", value: false, token: "allow_terminal_stop" },
       { flag: "--allow-internal-stop", label: "Allow internal stop", description: "Retain a codon/protein locus pair when an internal stop is observed directly or recorded by MSAP as masked to NNN/X. The masked NNN/X is never restored.", type: "checkbox", value: false, token: "allow_internal_stop" },
     ],
-    command: "python phyloprep.py -i {inputs} -o phyloprep-results{mapping_option} -st {seqtype} -s {align_software} -t 1 -j 1 -g {genetic_code} -ts trimAlnSeq -G {gap_ratio} -N {n_ratio} -X {x_ratio} --missing-taxa {missing_taxa} --min-length {min_length} --max-n-ratio {max_n_ratio} --max-x-ratio {max_x_ratio} --max-gap-ratio {max_gap_ratio} --min-parsimony-informative-sites {min_parsimony_informative_sites} --paired-pis-policy {paired_pis_policy} --protein-stop-symbol {protein_stop_symbol_cli}{allow_terminal_stop}{allow_internal_stop}{notrim_option}",
+    command: "python phyloprep.py -i {inputs} -o phyloprep-results{mapping_option} -st {seqtype} -s {align_software} -t 1 -j 1 -g {genetic_code} -ts trimAlnSeq -G {gap_ratio} -N {n_ratio} -X {x_ratio} --missing-taxa {missing_taxa} --min-length {min_length} --max-n-ratio {max_n_ratio} --max-x-ratio {max_x_ratio} --max-gap-ratio {max_gap_ratio} --min-parsimony-informative-sites {min_parsimony_informative_sites}{min_codon_pis_option}{min_protein_pis_option} --paired-pis-policy {paired_pis_policy} --protein-stop-symbol {protein_stop_symbol_cli}{allow_terminal_stop}{allow_internal_stop}{notrim_option}",
   },
   {
     script: "MSAP_batch.py", title: "Batch alignment workflow", category: "Batch", browser: true, browserWorkflow: "batch", inputListKey: "inputs", cliOutputDir: "msap-results",
@@ -597,6 +599,7 @@ function renderParameters(module) {
 function updateContextualParameters() {
   const seqtype = elements.parameterList.querySelector('[data-parameter="seqtype"]')?.value;
   const notrim = elements.parameterList.querySelector('[data-parameter="notrim"]')?.checked;
+  const script = activeModule().script;
   const hide = (token, hidden) => {
     const card = elements.parameterList.querySelector(`[data-parameter-token="${token}"]`);
     if (card) card.dataset.contextHidden = String(Boolean(hidden));
@@ -607,10 +610,13 @@ function updateContextualParameters() {
   hide("x_ratio", seqtype === "nucl" || Boolean(notrim));
   hide("gap_ratio", Boolean(notrim));
   hide("max_n_ratio", seqtype === "prot");
-  hide("max_x_ratio", seqtype === "nucl");
+  hide("max_x_ratio", seqtype === "nucl" || (script === "alignment_qc.py" && seqtype === "codon"));
   hide("allow_terminal_stop", seqtype !== "codon");
-  hide("allow_internal_stop", seqtype === "nucl");
-  hide("paired_pis_policy", seqtype !== "codon");
+  hide("allow_internal_stop", seqtype === "nucl" || (script === "phyloprep.py" && seqtype === "prot"));
+  const pairedPis = script === "phyloprep.py" && seqtype === "codon";
+  hide("paired_pis_policy", !pairedPis);
+  hide("min_codon_pis", !pairedPis);
+  hide("min_protein_pis", !pairedPis);
 }
 
 function inputControls() {
@@ -767,6 +773,12 @@ function valuesForCommand() {
     mapping_option: mappingFile ? ` -m ${cliQuote(virtualInputPath(mappingName))}` : "",
     sequence_changes_option: selectedInputFiles.get("sequence_changes")?.[0]
       ? ` --sequence-changes ${cliQuote(virtualInputPath(selectedInputFiles.get("sequence_changes")[0].name))}`
+      : "",
+    min_codon_pis_option: parameterValues.min_codon_pis !== undefined && parameterValues.min_codon_pis !== ""
+      ? ` --min-codon-pis ${parameterValues.min_codon_pis}`
+      : "",
+    min_protein_pis_option: parameterValues.min_protein_pis !== undefined && parameterValues.min_protein_pis !== ""
+      ? ` --min-protein-pis ${parameterValues.min_protein_pis}`
       : "",
     map_output_option: parameterValues.map_output ? ` --map-output ${cliQuote(mapOutputPath)}` : "",
     allow_duplicate_ids_option: parameterValues.allow_duplicate_ids ? " --allow-duplicate-ids" : "",

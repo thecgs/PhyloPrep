@@ -16,6 +16,7 @@ import subprocess
 import sys
 import tempfile
 
+from Bio.Seq import Seq
 from Bio.Data import CodonTable
 from sequence_audit import normalize_workflow, merge_reports
 from MSAP_batch import build_parser as batch_parser
@@ -53,8 +54,9 @@ Raw and trimmed alignments are QC-checked with provenance-aware paired codon/pro
 --notrim processes raw alignments only. Codon mode also exports protein
 supermatrices. Codon matrices additionally undergo position splitting and
 four-fold extraction. FASTA, PHYLIP and NEXUS outputs are written under
-matrices/<seqtype>/<raw|trimmed>/. QC thresholds apply independently to each
-group; length and site counts use nucleotides for codon and amino acids for prot.
+matrices/<seqtype>/<raw|trimmed>/. Non-PIS QC is evaluated separately for codon
+and protein and both sides must pass; paired PIS retention is then controlled by
+--paired-pis-policy with independent codon/protein thresholds when requested.
 Pseudogene mode selects MACSE and writes matrices/pseudogene/<codon|prot>/<raw|trimmed>/.
 It preserves native alignments and change reports, and automatically generates
 codon-position and four-fold matrices from inferred coding positions. These do
@@ -85,6 +87,10 @@ matrices are published only after all requested conversions succeed.
     qc.add_argument("--paired-pis-policy", choices=["both", "either", "codon", "protein"],
                     default="both",
                     help="For paired codon/protein workflows, decide how --min-parsimony-informative-sites is applied: both representations must pass (both; default), either may pass, or only codon/protein PIS controls pair retention.")
+    qc.add_argument("--min-codon-pis", type=int, default=None, metavar="N",
+                    help="Paired codon workflow: minimum codon-alignment PIS. Defaults to --min-parsimony-informative-sites when omitted.")
+    qc.add_argument("--min-protein-pis", type=int, default=None, metavar="N",
+                    help="Paired codon workflow: minimum protein-alignment PIS. Defaults to --min-parsimony-informative-sites when omitted.")
     return parser
 
 
@@ -343,7 +349,8 @@ def annotate_change_report(path, mapping):
     if "mapped_taxa_id" not in fields:
         fields.append("mapped_taxa_id")
     for row in rows:
-        row["mapped_taxa_id"] = mapping.get(normalized_taxon_id(row["taxa_id"]), row["taxa_id"])
+        normalized = normalized_taxon_id(row["taxa_id"])
+        row["mapped_taxa_id"] = mapping.get(normalized, normalized)
     with atomic_output(path) as handle:
         writer = csv.DictWriter(handle, fieldnames=fields, delimiter="\t", restval="NA")
         writer.writeheader()
@@ -493,12 +500,26 @@ def validate_paired_alignments(args, codon_context, protein_context):
                     f"{locus}/{taxon}: paired codon/protein lengths are not 3:1 "
                     f"({len(nt)} nt vs {len(aa)} aa)"
                 )
+            table = CodonTable.unambiguous_dna_by_id[args.genetic_code]
+            coding_index = 0
             for index, residue in enumerate(aa):
                 codon_triplet = nt[3 * index:3 * index + 3]
                 if (codon_triplet == "---") != (residue == "-"):
                     raise ValueError(
                         f"{locus}/{taxon}: codon/protein gap correspondence is broken at paired site {index + 1}"
                     )
+                if codon_triplet == "---" or residue == "-":
+                    continue
+                normalized_codon = codon_triplet.replace("U", "T")
+                if "N" not in normalized_codon and "?" not in normalized_codon:
+                    translated = str(Seq(normalized_codon).translate(table=args.genetic_code))
+                    expected = "M" if coding_index == 0 and normalized_codon in table.start_codons else translated
+                    if expected != residue:
+                        raise ValueError(
+                            f"{locus}/{taxon}: paired codon/protein translation mismatch at site {index + 1} "
+                            f"({codon_triplet}->{expected}, protein={residue})"
+                        )
+                coding_index += 1
 
 
 def _pis_map(context, args):
@@ -508,11 +529,17 @@ def _pis_map(context, args):
     }
 
 
-def _paired_pis_decision(policy, codon_pis, protein_pis, threshold):
-    if threshold <= 0:
-        return True
-    codon_ok = codon_pis >= threshold
-    protein_ok = protein_pis >= threshold
+def _paired_pis_thresholds(args):
+    fallback = args.min_parsimony_informative_sites
+    return (
+        fallback if args.min_codon_pis is None else args.min_codon_pis,
+        fallback if args.min_protein_pis is None else args.min_protein_pis,
+    )
+
+
+def _paired_pis_decision(policy, codon_pis, protein_pis, codon_threshold, protein_threshold):
+    codon_ok = codon_pis >= codon_threshold
+    protein_ok = protein_pis >= protein_threshold
     if policy == "both":
         return codon_ok and protein_ok
     if policy == "either":
@@ -533,13 +560,16 @@ def synchronize_paired_qc(args, root, variant, codon_context, protein_context):
     protein_pass = _pass_map(protein_context, args)
     codon_pis = _pis_map(codon_context, args)
     protein_pis = _pis_map(protein_context, args)
-    threshold = args.min_parsimony_informative_sites
+    codon_threshold, protein_threshold = _paired_pis_thresholds(args)
     policy = args.paired_pis_policy
 
     non_pis_common = set(codon_pass) & set(protein_pass)
     common = sorted(
         locus for locus in non_pis_common
-        if _paired_pis_decision(policy, codon_pis[locus], protein_pis[locus], threshold)
+        if _paired_pis_decision(
+            policy, codon_pis[locus], protein_pis[locus],
+            codon_threshold, protein_threshold
+        )
     )
 
     paired_dir = root / "qc" / ("pseudogene" if args.seqtype == "pseudogene" else "") / "paired" / variant
@@ -550,7 +580,8 @@ def synchronize_paired_qc(args, root, variant, codon_context, protein_context):
         writer.writerow([
             "Locus", "Codon_file", "Protein_file",
             "Codon_nonPIS_QC", "Protein_nonPIS_QC",
-            "Codon_PIS", "Protein_PIS", "Minimum_PIS", "PIS_policy", "PIS_status",
+            "Codon_PIS", "Protein_PIS", "Minimum_codon_PIS", "Minimum_protein_PIS",
+            "PIS_policy", "PIS_status",
             "Paired_status", "Reasons",
         ])
         for locus in sorted(set(codon_all) | set(protein_all)):
@@ -560,7 +591,9 @@ def synchronize_paired_qc(args, root, variant, codon_context, protein_context):
             pp_pis = protein_pis.get(locus, "NA")
             pis_ok = (
                 cp_pis != "NA" and pp_pis != "NA" and
-                _paired_pis_decision(policy, cp_pis, pp_pis, threshold)
+                _paired_pis_decision(
+                    policy, cp_pis, pp_pis, codon_threshold, protein_threshold
+                )
             )
             reasons = []
             if not cp:
@@ -578,27 +611,34 @@ def synchronize_paired_qc(args, root, variant, codon_context, protein_context):
                 "pass" if pp else "fail",
                 cp_pis,
                 pp_pis,
-                threshold,
+                codon_threshold,
+                protein_threshold,
                 policy,
                 "pass" if pis_ok else "fail",
                 "pass" if paired_ok else "fail",
                 ";".join(reasons) or "NA",
             ])
 
+    retained = {}
     for context, passing in ((codon_context, codon_pass), (protein_context, protein_pass)):
-        with atomic_output(context["passed"]) as handle:
+        retained_path = paired_dir / f"{context['seqtype']}.retained.tsv"
+        with atomic_output(retained_path) as handle:
             for locus in common:
                 handle.write(str(passing[locus].resolve()) + "\n")
+        retained[context["seqtype"]] = retained_path
+        context["retained"] = retained_path
 
     if not common:
         raise ValueError(
             f"No paired codon/protein alignments passed QC for {variant}; "
-            f"paired PIS policy={policy}, minimum PIS={threshold}. "
+            f"paired PIS policy={policy}, minimum codon PIS={codon_threshold}, "
+            f"minimum protein PIS={protein_threshold}. "
             f"See {report} and the representation-specific alignment.details.tsv reports."
         )
     print(
         f"[phyloprep] Paired QC {variant}: retained {len(common)} locus/loci "
-        f"(PIS policy={policy}, minimum={threshold}) in both codon and protein matrices",
+        f"(PIS policy={policy}, codon minimum={codon_threshold}, "
+        f"protein minimum={protein_threshold}) in both codon and protein matrices",
         flush=True,
     )
 
@@ -622,7 +662,7 @@ def build_group_matrices(args, root, context):
     stage = context["stage"]
     seqtype = context["seqtype"]
     variant = context["variant"]
-    passed = context["passed"]
+    passed = context.get("retained", context["passed"])
     stage.mkdir(parents=True, exist_ok=True)
 
     supermatrix = stage / "supermatrix.fasta"
@@ -708,7 +748,9 @@ def main(argv=None):
         ratios = [args.G, args.N, args.X, args.max_n_ratio, args.max_x_ratio, args.max_gap_ratio]
         if any(not 0 <= value <= 1 for value in ratios):
             raise ValueError("Trimming and QC ratios must be between 0 and 1")
-        if args.min_length < 0 or args.min_parsimony_informative_sites < 0:
+        if (args.min_length < 0 or args.min_parsimony_informative_sites < 0 or
+                (args.min_codon_pis is not None and args.min_codon_pis < 0) or
+                (args.min_protein_pis is not None and args.min_protein_pis < 0)):
             raise ValueError("QC length/site thresholds must be non-negative")
         if not args.notrim and args.trimal_args and args.trim_software != "trimal":
             raise ValueError("--trimal-args requires --trim-software trimal")

@@ -171,3 +171,13 @@ if (!app.includes('hide("x_ratio", seqtype === "nucl"') ||
     !app.includes('hide("max_x_ratio", seqtype === "nucl"')) {
   throw new Error("Codon workflow must expose protein X trimming/QC thresholds for paired processing.");
 }
+
+if (!app.includes('script: "alignment_qc.py", title: "Alignment QC", category: "QC", browser: true, inputListKey: "inputs"')) {
+  throw new Error("alignment_qc.py command preview must scope -i inputs to alignment files only.");
+}
+if (!app.includes('flag: "--min-codon-pis"') || !app.includes('flag: "--min-protein-pis"')) {
+  throw new Error("Browser PhyloPrep must expose independent codon/protein PIS thresholds.");
+}
+if (!app.includes('script === "alignment_qc.py" && seqtype === "codon"')) {
+  throw new Error("Browser QC visibility must hide protein-X threshold for standalone codon alignment_qc.");
+}

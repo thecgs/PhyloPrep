@@ -98,11 +98,12 @@ also useful as a reference when running any component independently.
 
 ```mermaid
 flowchart LR
-  A[FASTA inputs: unique gene IDs] --> B[MSAP_batch.py] --> C[alignment_qc.py]
-  C --> D{Mapping TSV}
+  A[FASTA inputs: unique gene IDs] --> B[MSAP_batch.py]
+  B --> D{Mapping TSV}
   D -->|yes| E[rename_taxa.py]
-  D -->|no| F[get_supergenes.py]
-  E --> F
+  D -->|no| C[alignment_qc.py]
+  E --> C
+  C --> F[get_supergenes.py]
   F --> G[FASTA / PHY / NEX]
   F --> |is codon and pesudogene model| H[Codon positions and four-fold sites]
 ```
@@ -118,7 +119,8 @@ flowchart LR
 | `--min-length`, `--max-*-ratio`, `--min-parsimony-informative-sites` | Representation-specific QC thresholds. In paired codon/protein workflows, non-PIS QC must pass on both sides; PIS retention is controlled separately by `--paired-pis-policy`. |
 | `--allow-internal-stop` | Retain a paired codon/protein locus when an internal stop is observed directly or recorded by preprocessing as masked to `NNN/X`. The masked state is not restored. |
 | `--allow-terminal-stop` | Allow a terminal stop that remains directly observable in a final codon alignment. Normal terminal stops removed by MSAP preprocessing are provenance only and do not fail QC. |
-| `--paired-pis-policy` | `both` (default), `either`, `codon`, or `protein`; controls how the minimum PIS threshold is applied to a paired codon/protein locus while keeping the final locus set identical in both matrices. |
+| `--paired-pis-policy` | `both` (default), `either`, `codon`, or `protein`; controls how paired codon/protein PIS decisions are combined while keeping the final locus set identical in both matrices. |
+| `--min-codon-pis`, `--min-protein-pis` | Optional representation-specific PIS thresholds for paired codon workflows. Each falls back to `--min-parsimony-informative-sites` when omitted. |
 | `-g TABLE` | NCBI genetic-code table; default 1. |
 | `--macse-jar`, `--macse-memory` | Pseudogene MACSE settings. |
 
@@ -132,7 +134,7 @@ results/
   alignments/                      # batch products and checkpoints
   reports/sequence_changes.tsv     # merged provenance report
   qc/<type>/<raw|trimmed>/          # representation-specific pass, fail, and details TSVs
-  qc/paired/<raw|trimmed>/           # shared codon/protein locus decisions
+  qc/paired/<raw|trimmed>/           # paired decisions + codon/prot.retained.tsv manifests
   matrices/
     codon/<raw|trimmed>/            # supermatrix, codon1st/2nd/3rd, fourfold
     prot/<raw|trimmed>/             # protein supermatrix
@@ -377,16 +379,16 @@ For `-st codon`, the protein alignment and its back-translated codon alignment a
 
 The user decides how PIS controls pair retention with `--paired-pis-policy`:
 
-- `both` (default): codon PIS **and** protein PIS must each reach `--min-parsimony-informative-sites`;
-- `either`: codon PIS **or** protein PIS may reach the threshold;
+- `both` (default): codon PIS **and** protein PIS must each reach their threshold;
+- `either`: codon PIS **or** protein PIS may reach its threshold;
 - `codon`: only codon PIS controls the pair;
 - `protein`: only protein PIS controls the pair.
 
-`--min-parsimony-informative-sites 0` disables PIS filtering, so the policy has no practical effect. Regardless of policy, a retained locus is written to both final codon and protein matrices; a rejected locus is written to neither. The shared decision is reported in `qc/paired/<raw|trimmed>/loci.details.tsv`, including codon PIS, protein PIS, threshold, selected policy, PIS status, and final paired status. Representation-specific `alignment.details.tsv` files still report their own statistics.
+By default both thresholds inherit `--min-parsimony-informative-sites`. Use `--min-codon-pis` and/or `--min-protein-pis` when the nucleotide-column and amino-acid-column PIS scales should be filtered differently. A zero threshold disables filtering for that representation. Regardless of policy, a retained locus is written to both final codon and protein matrices; a rejected locus is written to neither. The shared decision is reported in `qc/paired/<raw|trimmed>/loci.details.tsv`, including codon PIS, protein PIS, both thresholds, selected policy, PIS status, and final paired status. Representation-specific `alignment.pass.tsv`, `alignment.fail.tsv`, and `alignment.details.tsv` remain untouched and describe each representation on its own. Final matrix construction uses `qc/paired/<raw|trimmed>/codon.retained.tsv` and `prot.retained.tsv`, so paired filtering never rewrites the representation-specific QC history.
 
-Internal-stop provenance is also pair-level. An internal stop recorded by preprocessing causes both representations to fail unless `--allow-internal-stop` is supplied. Allowing it changes only the retention policy; the standardized `NNN/X` state and the audit record are preserved.
+Internal-stop provenance is also pair-level. An internal stop recorded by codon preprocessing causes both representations to fail unless `--allow-internal-stop` is supplied. Allowing it changes only the retention policy; the standardized `NNN/X` state and the audit record are preserved. Protein-only PhyloPrep workflows retain their historical clean-and-audit behavior; standalone `alignment_qc.py -st prot --sequence-changes ...` can still apply provenance-aware internal-stop QC explicitly. Nucleotide (`nucl`) QC ignores stop provenance.
 
-PIS (Parsimony-Informative-Sites) counts only resolved states. `N`, `X`, gaps, stops, and other unknown states do not contribute. A zero-PIS matrix can be read by IQ-TREE but does not inform topology; use `--min-parsimony-informative-sites` to enforce a project-specific threshold.
+PIS (Parsimony-Informative-Sites) counts only resolved states. `N`, `X`, gaps, stops, and other unknown states do not contribute. Codon PIS counts nucleotide alignment columns whereas protein PIS counts amino-acid columns, so their absolute values and appropriate thresholds need not be equal. A zero-PIS matrix can be read by IQ-TREE but does not inform topology; use `--min-parsimony-informative-sites` to enforce a project-specific threshold.
 
 There is no universal minimum PIS for taxa. Evaluate PIS with alignment length, missing data, bootstrap support, gene concordance, and the biological divergence of the sample. Use the same NCBI genetic code in downstream codon analyses.
 

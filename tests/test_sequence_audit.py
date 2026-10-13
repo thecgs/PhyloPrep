@@ -309,3 +309,56 @@ def test_alignment_qc_reports_removed_terminal_stop_without_failing(tmp_path):
     details = prefix.with_suffix('.details.tsv').read_text()
     assert 'Audited_terminal_stop' in details
     assert '7-9-TAA' in details
+
+
+def test_alignment_qc_nucl_ignores_stop_provenance(tmp_path):
+    source = tmp_path / "gene.fa"
+    source.write_text(">a\nACGT\n>b\nACGT\n")
+    report = tmp_path / "sequence_changes.tsv"
+    write_report(report, [event(
+        source, "a", "internal_stop", 1,
+        source_nt_positions="1-3", original="TGA", replacement="NNN", action="replace"
+    )])
+    prefix = tmp_path / "nucl.qc"
+    result = cli(
+        "alignment_qc.py", "-i", source, "-st", "nucl", "-p", prefix,
+        "--sequence-changes", report, cwd=tmp_path
+    )
+    assert result.returncode == 0, result.stderr
+    assert str(source.resolve()) in prefix.with_suffix(".pass.tsv").read_text()
+    assert "internal_stop" not in prefix.with_suffix(".details.tsv").read_text().splitlines()[-1].split("\t")[-1]
+
+
+def test_alignment_qc_rejects_ambiguous_audit_locus_keys(tmp_path):
+    left = tmp_path / "left"
+    right = tmp_path / "right"
+    left.mkdir(); right.mkdir()
+    a = left / "gene.mafft.codon.aln"
+    b = right / "gene.mafft.codon.aln"
+    for path in (a, b):
+        path.write_text(">a\nATGGCT\n>b\nATGGCT\n")
+    report = tmp_path / "sequence_changes.tsv"
+    write_report(report, [])
+    prefix = tmp_path / "collision.qc"
+    result = cli(
+        "alignment_qc.py", "-i", a, b, "-st", "codon", "-p", prefix,
+        "--sequence-changes", report, cwd=tmp_path
+    )
+    assert result.returncode == 2
+    assert "share the same locus key" in result.stderr
+
+
+def test_partial_mapping_audit_fallback_uses_normalized_id(tmp_path, fake_aligner):
+    _, env = fake_aligner
+    source = tmp_path / "gene.fa"
+    source.write_text(">a:1\nATGTGAGCT\n>b\nATGGCTGCT\n")
+    mapping = tmp_path / "map.tsv"
+    mapping.write_text("b\tSpecies_B\n")
+    output = tmp_path / "mapped"
+    result = cli(
+        "phyloprep.py", "-i", source, "-o", output, "-m", mapping,
+        "--notrim", "-t", "1", "--allow-internal-stop", cwd=tmp_path, env=env
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    details = (output / "qc/codon/raw/alignment.details.tsv").read_text()
+    assert "a_1-4-6-TGA" in details

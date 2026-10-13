@@ -366,6 +366,12 @@ def run_phyloprep_finalize(file_manifest, options, output_root, engine_root="/en
             value = options.get(name, default)
             return kind(value)
 
+        def optional_number(name, kind=int):
+            value = options.get(name)
+            if value in (None, ""):
+                return None
+            return kind(value)
+
         args = types.SimpleNamespace(
             seqtype=str(options.get("seqtype", "codon")),
             align_software=str(options.get("align_software", "muscle")),
@@ -383,6 +389,8 @@ def run_phyloprep_finalize(file_manifest, options, output_root, engine_root="/en
             max_x_ratio=number("max_x_ratio", 1.0),
             max_gap_ratio=number("max_gap_ratio", 1.0),
             min_parsimony_informative_sites=number("min_parsimony_informative_sites", 0, int),
+            min_codon_pis=optional_number("min_codon_pis", int),
+            min_protein_pis=optional_number("min_protein_pis", int),
             paired_pis_policy=str(options.get("paired_pis_policy", "both")),
             allow_terminal_stop=bool(options.get("allow_terminal_stop", False)),
             allow_internal_stop=bool(options.get("allow_internal_stop", False)),
@@ -390,7 +398,9 @@ def run_phyloprep_finalize(file_manifest, options, output_root, engine_root="/en
         ratios = [args.G, args.N, args.X, args.max_n_ratio, args.max_x_ratio, args.max_gap_ratio]
         if any(value < 0 or value > 1 for value in ratios):
             raise ValueError("Trimming and QC ratios must be between 0 and 1.")
-        if args.min_length < 0 or args.min_parsimony_informative_sites < 0:
+        if (args.min_length < 0 or args.min_parsimony_informative_sites < 0 or
+                (args.min_codon_pis is not None and args.min_codon_pis < 0) or
+                (args.min_protein_pis is not None and args.min_protein_pis < 0)):
             raise ValueError("QC length/site thresholds must be non-negative.")
         if args.paired_pis_policy not in {"both", "either", "codon", "protein"}:
             raise ValueError("Invalid paired PIS policy.")

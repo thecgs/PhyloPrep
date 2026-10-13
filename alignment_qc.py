@@ -30,9 +30,10 @@ def alignment_stats(path, seqtype="nucl"):
     nchar = lengths[0] if aligned else 0
     ambiguity = "X" if seqtype == "prot" else "N"
     if seqtype == "codon":
-        # A codon containing N translates to one ambiguous protein residue.
-        # Count it once, rather than counting its individual N bases, so the
-        # codon --max-n-ratio threshold corresponds to the protein X ratio.
+        # Count each N-containing codon once rather than counting individual N
+        # bases. This keeps the threshold in codon units. It is intentionally
+        # independent of protein X: ambiguous codons such as GCN can translate
+        # deterministically and therefore need not produce X.
         ambiguity_count = sum(
             "N" in sequence[start:start + 3]
             for sequence in seqs
@@ -122,6 +123,20 @@ def _audit_for_alignment(path, audit_index):
     return audit_index.get(_audit_locus_key(path), {}) if audit_index else {}
 
 
+def validate_audit_alignment_keys(paths):
+    """Reject ambiguous standalone provenance matching by basename-derived locus key."""
+    by_key = defaultdict(list)
+    for path in paths:
+        by_key[_audit_locus_key(path)].append(str(Path(path).resolve()))
+    collisions = {key: values for key, values in by_key.items() if len(values) > 1}
+    if collisions:
+        details = "; ".join(f"{key}: {', '.join(values)}" for key, values in sorted(collisions.items()))
+        raise ValueError(
+            "Cannot match --sequence-changes unambiguously because multiple input alignments "
+            f"share the same locus key ({details}). Run them separately or use unique locus basenames."
+        )
+
+
 def alignment_qc(path: str, seqtype: str, genetic_code: int = 1,
                     min_length: int = 1, audit_index=None) -> dict:
     """Return summary, sequence and column findings for one FASTA file."""
@@ -129,8 +144,8 @@ def alignment_qc(path: str, seqtype: str, genetic_code: int = 1,
     if not source.is_file():
         raise ValueError(f"Input FASTA file does not exist: {path}")
     records = _records(path)
-    audit_rows = _audit_for_alignment(path, audit_index)
     actual_type = seqtype
+    audit_rows = _audit_for_alignment(path, audit_index) if actual_type in {"codon", "prot"} else {}
     allowed = DNA_CHARS if actual_type in {"nucl", "codon"} else PROTEIN_CHARS
     ids = [record.id for record in records]
     duplicate_ids = sorted(identifier for identifier, count in Counter(ids).items() if count > 1)
@@ -168,7 +183,7 @@ def alignment_qc(path: str, seqtype: str, genetic_code: int = 1,
             if len(sequence) % 3 == 0 and sequence:
                 occupied = [i for i, codon in enumerate(codons) if codon != '---']
                 last = occupied[-1] if occupied else -1
-                row["terminal_stop"] = codons[last] if last >= 0 and is_stop_codon(codons[last], genetic_code, terminal=True) else "NA"
+                row["terminal_stop"] = codons[last] if last >= 0 and is_stop_codon(codons[last], genetic_code) else "NA"
                 hits = [f"{i + 1}-{codon}" for i, codon in enumerate(codons) if i != last and is_stop_codon(codon, genetic_code)]
                 row["internal_stop_count"] = ";".join(hits) if hits else "NA"
         sequence_rows.append(row)
@@ -332,8 +347,8 @@ Notes:
     paired codon and protein matrices in phyloprep.
   * --max-n-ratio applies to nucl/codon matrices; --max-x-ratio applies to prot.
     In nucl mode it is the fraction of N bases. In codon mode it is the
-    fraction of complete codons containing at least one N, matching the
-    fraction of X residues in the translated protein matrix.
+    fraction of complete codons containing at least one N. This need not equal
+    the protein X ratio because some ambiguous codons translate deterministically.
     Ratios are calculated over the complete matrix: characters for nucl/prot,
     and complete codons for codon ambiguity; --max-gap-ratio is always the
     corresponding character-level gap ratio.
@@ -345,8 +360,9 @@ Notes:
     with frame_error. This check cannot be disabled by stop-codon options.
   * Stop checks normalize U to T and recognize IUPAC codons only when every
     possible expansion is a stop in the selected genetic code (e.g. TAR in 1).
-    Dual-coding codons also encoding amino acids are not definite stops in an
-    alignment, even at its end; complete-CDS preprocessing handles terminal stops.
+    Dual-coding codons also encoding amino acids are not definite stops in a
+    final alignment, even when they occupy its last non-gap position. Source-CDS
+    preprocessing uses terminal context and records removed terminal stops.
   * In codon mode, stop codons observed directly in the final alignment fail QC
     by default. --allow-terminal-stop permits an observed terminal stop.
   * --sequence-changes accepts one or more PhyloPrep sequence_changes.tsv reports.
@@ -395,6 +411,8 @@ Notes:
         parser.error("length thresholds must be non-negative and ratios must be between 0 and 1")
     try:
         paths = expand_input_paths(args.input)
+        if args.sequence_changes:
+            validate_audit_alignment_keys(paths)
         audit_index = load_sequence_changes(args.sequence_changes)
         validate_report_paths(args.prefix, [*args.input, *paths, *(args.sequence_changes or [])])
         results, passed, failed = [], [], []
@@ -407,7 +425,7 @@ Notes:
                 x["terminal_stop"] != "NA" for x in result["sequences"])
             observed_internal = args.seqtype == "codon" and any(
                 x["internal_stop_count"] != "NA" for x in result["sequences"])
-            audited_internal = any(
+            audited_internal = args.seqtype in {"codon", "prot"} and any(
                 x["audited_internal_stop"] != "NA" for x in result["sequences"])
             if observed_terminal and not args.allow_terminal_stop:
                 reasons.append("terminal_stop")
