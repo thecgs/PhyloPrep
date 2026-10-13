@@ -92,6 +92,7 @@ def _audit_locus_key(path: str) -> str:
 def load_sequence_changes(paths):
     """Index sequence-change provenance by locus and final taxon ID."""
     indexed = defaultdict(lambda: defaultdict(lambda: {"terminal": [], "internal": []}))
+    sources_by_locus = defaultdict(set)
     for path in paths or []:
         source = Path(path)
         if not source.is_file():
@@ -106,7 +107,10 @@ def load_sequence_changes(paths):
                 if event_name not in {"terminal_stop", "internal_stop",
                                      "protein_terminal_stop", "protein_internal_stop"}:
                     continue
-                locus = _audit_locus_key(row.get("input_file", ""))
+                input_file = row.get("input_file", "")
+                locus = _audit_locus_key(input_file)
+                if input_file:
+                    sources_by_locus[locus].add(str(Path(input_file).resolve()))
                 taxon = row.get("mapped_taxa_id")
                 if not taxon or taxon == "NA":
                     taxon = row.get("taxa_id", "NA")
@@ -116,25 +120,20 @@ def load_sequence_changes(paths):
                     position = row.get("source_aa_positions", "NA")
                 original = row.get("original", "NA")
                 indexed[locus][taxon][category].append(f"{position}-{original}")
+    collisions = {key: values for key, values in sources_by_locus.items() if len(values) > 1}
+    if collisions:
+        details = "; ".join(
+            f"{key}: {', '.join(sorted(values))}" for key, values in sorted(collisions.items())
+        )
+        raise ValueError(
+            "Cannot match --sequence-changes unambiguously because multiple source loci "
+            f"share the same basename-derived locus key ({details}). Use unique locus basenames."
+        )
     return indexed
 
 
 def _audit_for_alignment(path, audit_index):
     return audit_index.get(_audit_locus_key(path), {}) if audit_index else {}
-
-
-def validate_audit_alignment_keys(paths):
-    """Reject ambiguous standalone provenance matching by basename-derived locus key."""
-    by_key = defaultdict(list)
-    for path in paths:
-        by_key[_audit_locus_key(path)].append(str(Path(path).resolve()))
-    collisions = {key: values for key, values in by_key.items() if len(values) > 1}
-    if collisions:
-        details = "; ".join(f"{key}: {', '.join(values)}" for key, values in sorted(collisions.items()))
-        raise ValueError(
-            "Cannot match --sequence-changes unambiguously because multiple input alignments "
-            f"share the same locus key ({details}). Run them separately or use unique locus basenames."
-        )
 
 
 def alignment_qc(path: str, seqtype: str, genetic_code: int = 1,
@@ -411,8 +410,6 @@ Notes:
         parser.error("length thresholds must be non-negative and ratios must be between 0 and 1")
     try:
         paths = expand_input_paths(args.input)
-        if args.sequence_changes:
-            validate_audit_alignment_keys(paths)
         audit_index = load_sequence_changes(args.sequence_changes)
         validate_report_paths(args.prefix, [*args.input, *paths, *(args.sequence_changes or [])])
         results, passed, failed = [], [], []

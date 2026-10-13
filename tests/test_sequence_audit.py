@@ -329,23 +329,52 @@ def test_alignment_qc_nucl_ignores_stop_provenance(tmp_path):
     assert "internal_stop" not in prefix.with_suffix(".details.tsv").read_text().splitlines()[-1].split("\t")[-1]
 
 
-def test_alignment_qc_rejects_ambiguous_audit_locus_keys(tmp_path):
+def test_alignment_qc_rejects_ambiguous_audit_source_keys(tmp_path):
     left = tmp_path / "left"
     right = tmp_path / "right"
     left.mkdir(); right.mkdir()
-    a = left / "gene.mafft.codon.aln"
-    b = right / "gene.mafft.codon.aln"
-    for path in (a, b):
-        path.write_text(">a\nATGGCT\n>b\nATGGCT\n")
+    source_a = left / "gene.fa"
+    source_b = right / "gene.fa"
+    source_a.write_text(">a\nATGTGA\n>b\nATGGCT\n")
+    source_b.write_text(">a\nATGTGA\n>b\nATGGCT\n")
+    alignment = tmp_path / "gene.mafft.codon.aln"
+    alignment.write_text(">a\nATGNNN\n>b\nATGGCT\n")
     report = tmp_path / "sequence_changes.tsv"
-    write_report(report, [])
+    write_report(report, [
+        event(source_a, "a", "internal_stop", 1, source_nt_positions="4-6",
+              original="TGA", replacement="NNN", action="replace"),
+        event(source_b, "a", "internal_stop", 1, source_nt_positions="4-6",
+              original="TGA", replacement="NNN", action="replace"),
+    ])
     prefix = tmp_path / "collision.qc"
     result = cli(
-        "alignment_qc.py", "-i", a, b, "-st", "codon", "-p", prefix,
+        "alignment_qc.py", "-i", alignment, "-st", "codon", "-p", prefix,
         "--sequence-changes", report, cwd=tmp_path
     )
     assert result.returncode == 2
-    assert "share the same locus key" in result.stderr
+    assert "multiple source loci" in result.stderr
+
+
+def test_alignment_qc_allows_raw_and_trimmed_same_audit_locus(tmp_path):
+    source = tmp_path / "gene.fa"
+    source.write_text(">a\nATGTGA\n>b\nATGGCT\n")
+    raw = tmp_path / "gene.mafft.codon.aln"
+    trimmed = tmp_path / "gene.mafft.codon.trimal.aln"
+    for path in (raw, trimmed):
+        path.write_text(">a\nATGNNN\n>b\nATGGCT\n")
+    report = tmp_path / "sequence_changes.tsv"
+    write_report(report, [event(
+        source, "a", "internal_stop", 1, source_nt_positions="4-6",
+        original="TGA", replacement="NNN", action="replace"
+    )])
+    prefix = tmp_path / "variants.qc"
+    result = cli(
+        "alignment_qc.py", "-i", raw, trimmed, "-st", "codon", "-p", prefix,
+        "--sequence-changes", report, "--allow-internal-stop", cwd=tmp_path
+    )
+    assert result.returncode == 0, result.stderr
+    passed = prefix.with_suffix(".pass.tsv").read_text()
+    assert str(raw.resolve()) in passed and str(trimmed.resolve()) in passed
 
 
 def test_partial_mapping_audit_fallback_uses_normalized_id(tmp_path, fake_aligner):

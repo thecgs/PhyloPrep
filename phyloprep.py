@@ -752,6 +752,11 @@ def main(argv=None):
                 (args.min_codon_pis is not None and args.min_codon_pis < 0) or
                 (args.min_protein_pis is not None and args.min_protein_pis < 0)):
             raise ValueError("QC length/site thresholds must be non-negative")
+        if args.seqtype not in {"codon", "pseudogene"}:
+            if args.min_codon_pis is not None or args.min_protein_pis is not None:
+                raise ValueError("--min-codon-pis and --min-protein-pis require a paired codon/protein workflow")
+            if args.paired_pis_policy != "both":
+                raise ValueError("--paired-pis-policy requires a paired codon/protein workflow")
         if not args.notrim and args.trimal_args and args.trim_software != "trimal":
             raise ValueError("--trimal-args requires --trim-software trimal")
         if args.genetic_code not in CodonTable.unambiguous_dna_by_id:

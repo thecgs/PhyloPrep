@@ -330,7 +330,7 @@ if __name__ == '__main__':
 
 Workflows:
   codon  Remove terminal stops, mask internal stops as NNN, translate and align,
-         back-translate to codons, then optionally trim both alignments.
+         back-translate to codons, then trim protein/codon sites with one shared mask.
   pseudogene  MACSE alignment allowing frameshifts/stops; audited export and paired trimming.
   prot   Align protein sequences, then optionally trim the alignment.
   nucl   Align nucleotide sequences, then optionally trim the alignment.""",

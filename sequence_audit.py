@@ -258,7 +258,7 @@ def macse_align(args, infile, prefix, java):
             codon = seq[i:i+3]
             if '!' in codon:
                 kind = 'external_frameshift' if i in (occupied[0], occupied[-1]) else 'internal_frameshift'
-            elif is_stop_codon(codon, args.genetic_code):
+            elif is_stop_codon(codon, args.genetic_code, terminal=(i == occupied[-1])):
                 kind = 'terminal_stop' if i == occupied[-1] else 'internal_stop'
             else:
                 continue
