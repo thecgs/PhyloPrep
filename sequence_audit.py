@@ -15,7 +15,7 @@ from Bio.Data import CodonTable
 from msap_io import atomic_output, read_fasta_alignment, is_stop_codon, normalize_dna
 
 FIELDS = ['input_file', 'taxa_id', 'event', 'source_nt_positions',
-          'original', 'replacement', 'action', 'genetic_code']
+          'original', 'replacement', 'action', 'genetic_code', 'input_kind']
 
 
 class EmptyCodonLocusError(ValueError):
@@ -34,7 +34,7 @@ def write_report(path, rows, protein=False):
 def event(infile, taxon, kind, code, **values):
     row = dict.fromkeys(FIELDS, 'NA')
     row.update(input_file=str(Path(infile).resolve()), taxa_id=taxon,
-               event=kind, genetic_code=code)
+               event=kind, genetic_code=code, input_kind='source')
     row.update(values)
     return row
 
@@ -287,7 +287,7 @@ def macse_align(args, infile, prefix, java):
                 changes.append(event(original_nt, record.id, 'protein_unsupported_residue', args.genetic_code,
                                      source_nt_positions=f'{start+1}-{start+3}', original=residue,
                                      replacement='X', action='replace',
-                                     source_aa_positions=f'{aa_index+1}-{aa_index+1}'))
+                                     source_aa_positions=f'{aa_index+1}-{aa_index+1}', input_kind='macse_alignment'))
         exported[record.id] = after
         canonical_proteins[record.id] = ''.join(protein)
         if len(before) != len(after) or len(after) != 3 * len(proteins[record.id]):
@@ -299,7 +299,7 @@ def macse_align(args, infile, prefix, java):
                 changes.append(event(original_nt, record.id, kinds.get((record.id, i), 'export_change'), args.genetic_code,
                                      source_nt_positions=f'{i+1}-{i+3}',
                                      original=before[i:i+3],
-                                     replacement=after[i:i+3], action='replace'))
+                                     replacement=after[i:i+3], action='replace', input_kind='macse_alignment'))
     # Replace MACSE exports only after their dimensions and symbols have been
     # checked, keeping the public matrices canonical and paired.
     with atomic_output(nt, inputs=[original_nt]) as handle:

@@ -19,8 +19,8 @@ import tempfile
 from sequence_audit import normalize_workflow, merge_reports
 from MSAP_batch import build_parser as batch_parser
 from msap_io import (atomic_output, expand_input_paths, read_fasta_alignment,
-                     file_digest, file_signature, read_json)
-from rename_taxa import rename_fasta, read_mapping, normalized_taxon_id
+                     file_digest, file_signature, read_json, NoGenesIncludedError)
+from rename_taxa import rename_fasta, read_mapping_snapshot, normalized_taxon_id
 
 SCRIPTS = Path(__file__).resolve().parent
 QC_VALUES = {
@@ -224,7 +224,7 @@ def recover_matrix_publication(root):
             os.replace(backup, destination)
 
 
-def publish_matrices(stage_root, root, variants):
+def publish_matrices(stage_root, root, variants, block_signals=True):
     """Build a complete replacement tree, then switch it with rollback.
 
     Old groups and unmanaged files are preserved. The backup lives outside the
@@ -264,7 +264,8 @@ def publish_matrices(stage_root, root, variants):
                 json.dump(names, handle)
 
         # Defer Ctrl-C/SIGTERM until the tree is either committed or restored.
-        old_mask = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT, signal.SIGTERM})
+        old_mask = (signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT, signal.SIGTERM})
+                    if block_signals else None)
         moved_old = False
         try:
             if destination.exists():
@@ -277,7 +278,8 @@ def publish_matrices(stage_root, root, variants):
                     os.replace(backup, destination)
                 raise
         finally:
-            signal.pthread_sigmask(signal.SIG_SETMASK, old_mask)
+            if block_signals:
+                signal.pthread_sigmask(signal.SIG_SETMASK, old_mask)
         if moved_old:
             # Cleanup failure must not turn a successful commit into a failed run.
             try:
@@ -292,7 +294,12 @@ def rename_alignment_matrices(args, paths, root, seqtype, variant):
     renamed_dir = root / "renamed" / seqtype / variant
     renamed_dir.mkdir(parents=True, exist_ok=True)
     renamed = []
-    mapping_signature = file_signature(args.mapping)
+    mapping_signature = getattr(args, "mapping_signature", None)
+    if mapping_signature is None:
+        args.taxon_mapping, mapping_signature = read_mapping_snapshot(args.mapping)
+        args.mapping_signature = mapping_signature
+    if file_signature(args.mapping) != mapping_signature:
+        raise ValueError("Mapping changed after it was read; rerun before renaming alignments")
     script_digest = file_digest(SCRIPTS / "rename_taxa.py")
     for source in paths:
         target = renamed_dir / source.name
@@ -644,17 +651,22 @@ def build_group_matrices(args, root, context):
         run("get_supergenes.py", "-i", passed, "-p", stage / "supermatrix",
             "--missing-taxa", args.missing_taxa, "--no-phylip")
     except subprocess.CalledProcessError as error:
+        if error.returncode != 3:
+            raise ValueError(
+                f"Concatenation failed for {seqtype}/{variant} (exit {error.returncode}); "
+                "see the original get_supergenes error above."
+            ) from error
         label = "renamed" if args.mapping else "original_ids"
         report = preserve_concat_report(stage, root, seqtype, variant, label)
         if not args.mapping:
             location = f" See {report}." if report else ""
-            raise ValueError(
+            raise NoGenesIncludedError(
                 f"No {seqtype}/{variant} genes can be concatenated with the original gene IDs.{location} "
                 "If these IDs represent the same taxa across loci, provide phyloprep.py -m TAXA.tsv "
                 "to rename all alignment matrices before QC and concatenation."
             ) from error
         location = f" See {report}." if report else ""
-        raise ValueError(
+        raise NoGenesIncludedError(
             f"No {seqtype}/{variant} genes can be concatenated after ID mapping.{location} "
             "Check that every intended gene ID is mapped and that each alignment has one unique ID per taxon. "
             "Multi-copy orthogroups with several genes mapped to one taxon require gene-tree methods such as ASTRAL-Pro3, not a species supermatrix."
@@ -720,7 +732,7 @@ def main(argv=None):
             args.mapping = Path(args.mapping).resolve()
             if not args.mapping.is_file():
                 raise ValueError(f"Mapping table does not exist: {args.mapping}")
-            args.taxon_mapping = read_mapping(args.mapping)
+            args.taxon_mapping, args.mapping_signature = read_mapping_snapshot(args.mapping)
         else:
             args.taxon_mapping = None
         root = Path(args.output_dir).resolve()

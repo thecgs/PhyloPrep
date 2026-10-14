@@ -131,7 +131,7 @@ def test_codon_iupac_is_masked_before_translation_and_export(tmp_path, fake_alig
     assert 'ATGNTAGCTGGT' in codon.read_text()
     assert 'MXAG' in protein.read_text()
     report = (output / 'reports/sequence_changes.tsv').read_text()
-    assert '\tnucleotide_ambiguity\t4-4\tW\tN\treplace\t1\n' in report
+    assert '\tnucleotide_ambiguity\t4-4\tW\tN\treplace\t1\tsource\n' in report
 
 
 @pytest.mark.parametrize("seqtype,good,bad", [("nucl", "ACGT", "NNNN"), ("prot", "ACDE", "XXXX")])

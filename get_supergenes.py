@@ -6,7 +6,7 @@ import sys
 import argparse
 import re
 from Bio import SeqIO
-from msap_io import atomic_output, expand_input_paths, check_output_path
+from msap_io import atomic_output, expand_input_paths, check_output_path, NoGenesIncludedError
 
 def tidy_name(file):
     # Strip only the current PhyloPrep alignment suffix.
@@ -101,7 +101,7 @@ def get_supergenes(infiles, prefix, missing_taxa="skip-gene", input_lists=(), wr
             print(f"{file}\t{status}\t{details}", file=report)
 
     if not selected_alignments:
-        raise ValueError(
+        raise NoGenesIncludedError(
             "No genes were included in the supermatrix. "
             f"See {report_file}; use --missing-taxa pad-gaps to retain genes "
             "with missing taxa."
@@ -210,5 +210,9 @@ if __name__ == '__main__':
     optional.add_argument('-v', '--version', action='version', version='v1.0.0',
                           help="Show program's version number and exit.")
     args = parser.parse_args()
-    get_supergenes(infiles=expand_input_paths(args.input), prefix=args.prefix, missing_taxa=args.missing_taxa, input_lists=args.input, write_phylip=not args.no_phylip)
+    try:
+        get_supergenes(infiles=expand_input_paths(args.input), prefix=args.prefix, missing_taxa=args.missing_taxa, input_lists=args.input, write_phylip=not args.no_phylip)
+    except (OSError, ValueError) as error:
+        print(f"get_supergenes: {error}", file=sys.stderr)
+        sys.exit(3 if isinstance(error, NoGenesIncludedError) else 2)
     

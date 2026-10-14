@@ -140,3 +140,7 @@ def read_json(path):
         return value if isinstance(value, dict) else {}
     except (OSError, json.JSONDecodeError):
         return {}
+
+
+class NoGenesIncludedError(ValueError):
+    """Concatenation retained no loci under the requested missing-taxon policy."""

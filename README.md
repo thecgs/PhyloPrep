@@ -144,6 +144,8 @@ results/
 
 Every final matrix has `.fasta`, `.phy`, and `.nex` products. Concatenation also creates gene-inclusion reports and partition files for PartitionFinder and IQ-TREE. The complete workflow defers PHYLIP export until the format-conversion stage (`get_supergenes.py --no-phylip`), avoiding duplicate supermatrix conversion. Standalone concatenation still writes PHYLIP by default. Publication is staged, so failed processing does not publish partial matrices.
 
+Sequence-change reports include `input_kind` to distinguish source sequences from native MACSE alignments even when a source filename resembles an intermediate product. Browser and CLI matrix groups are staged and published only after every requested raw/trimmed representation succeeds.
+
 ## Script reference
 
 ### `phyloprep.py` — complete workflow
@@ -157,6 +159,7 @@ python phyloprep.py -i genes.pathlist -m taxa.tsv -st codon -t 4 -j 2 -o results
 `-m/--mapping` is deliberately applied **after** MSA and **before** QC. This
 lets each orthogroup contain unique gene IDs during alignment, then assesses
 the renamed taxon matrices during QC before species-supermatrix construction.
+The mapping contents and file signature are captured together before alignment; a changed mapping aborts renaming rather than publishing or checkpointing stale IDs.
 Renaming is resumable: an unchanged source alignment, mapping file,
 `rename_taxa.py`, and renamed FASTA are skipped on a later run.
 Use `--no-resume` to force this step as well as MSAP batch alignment to rerun.

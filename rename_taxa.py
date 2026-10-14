@@ -4,7 +4,7 @@ from __future__ import annotations
 import argparse, csv, re, sys
 from pathlib import Path
 from Bio import SeqIO
-from msap_io import atomic_output, check_output_path
+from msap_io import atomic_output, check_output_path, file_signature
 
 def normalized_taxon_id(identifier):
     return identifier.replace(":", "_").replace(",", "_").replace("(", "_").replace(")", "_")
@@ -23,6 +23,15 @@ def read_mapping(mapping_file):
                 raise ValueError(f"Conflicting mapping after OrthoFinder normalization: {row[0]}")
             mapping[old_id] = new_id
     return mapping
+
+
+def read_mapping_snapshot(mapping_file):
+    """Bind parsed IDs to the exact mapping version used by the workflow."""
+    signature = file_signature(mapping_file)
+    mapping = read_mapping(mapping_file)
+    if file_signature(mapping_file) != signature:
+        raise ValueError("Mapping changed while being read; rerun with a stable mapping file")
+    return mapping, signature
 
 
 def rename_fasta(infile, outfile, mapping_file=None, map_output=None, allow_duplicate_ids=False,

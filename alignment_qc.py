@@ -78,12 +78,12 @@ def _records(path: str):
 def _audit_locus_key(path: str, source_input=False) -> str:
     """Map source/audit/alignment filenames from one locus to a stable key."""
     name = Path(path).name
+    if source_input:
+        return Path(name).stem
     for suffix in (".macse_original.NT.fasta", ".macse_original.AA.fasta",
                    ".macse_original.NT.fa", ".macse_original.AA.fa"):
         if name.endswith(suffix):
             return name[:-len(suffix)]
-    if source_input:
-        return Path(name).stem
     match = re.fullmatch(
         r"(.+)\.(?:mafft|muscle|prank|clustalw2|macse)\.(?:nucl|codon|prot)(?:\.trimmed)?\.aln",
         name,
@@ -110,7 +110,7 @@ def load_sequence_changes(paths):
                                      "protein_terminal_stop", "protein_internal_stop"}:
                     continue
                 input_file = row.get("input_file", "")
-                locus = _audit_locus_key(input_file, source_input=True)
+                locus = _audit_locus_key(input_file, source_input=row.get("input_kind") != "macse_alignment")
                 if input_file:
                     sources_by_locus[locus].add(str(Path(input_file).resolve()))
                 taxon = row.get("mapped_taxa_id")
@@ -365,7 +365,7 @@ Notes:
                           help="Show program's version number and exit.")
     args = parser.parse_args(argv)
     if args.min_length < 0 or args.min_parsimony_informative_sites < 0 or any(
-            value < 0 or value > 1 for value in (args.max_n_ratio, args.max_x_ratio, args.max_gap_ratio)):
+            not 0 <= value <= 1 for value in (args.max_n_ratio, args.max_x_ratio, args.max_gap_ratio)):
         parser.error("length thresholds must be non-negative and ratios must be between 0 and 1")
     try:
         paths = expand_input_paths(args.input)
