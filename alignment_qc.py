@@ -5,12 +5,12 @@ from __future__ import annotations
 
 import argparse
 import csv
+import re
 import sys
 from collections import Counter, defaultdict
 from pathlib import Path
 
 from Bio import SeqIO
-from Bio.Data import CodonTable
 from msap_io import atomic_output, check_output_path, is_stop_codon
 from msap_io import expand_input_paths
 
@@ -75,17 +75,20 @@ def _records(path: str):
     return records
 
 
-def _audit_locus_key(path: str) -> str:
+def _audit_locus_key(path: str, source_input=False) -> str:
     """Map source/audit/alignment filenames from one locus to a stable key."""
     name = Path(path).name
+    if source_input:
+        return Path(name).stem
     for suffix in (".macse_original.NT.fasta", ".macse_original.AA.fasta",
                    ".macse_original.NT.fa", ".macse_original.AA.fa"):
         if name.endswith(suffix):
             return name[:-len(suffix)]
-    for marker in (".mafft.", ".muscle.", ".prank.", ".clustalw2.", ".macse."):
-        if marker in name:
-            return name.split(marker, 1)[0]
-    return Path(name).stem
+    match = re.fullmatch(
+        r"(.+)\.(?:mafft|muscle|prank|clustalw2|macse)\.(?:nucl|codon|prot)(?:\.trimmed)?\.aln",
+        name,
+    )
+    return match.group(1) if match else Path(name).stem
 
 
 def load_sequence_changes(paths):
@@ -107,7 +110,7 @@ def load_sequence_changes(paths):
                                      "protein_terminal_stop", "protein_internal_stop"}:
                     continue
                 input_file = row.get("input_file", "")
-                locus = _audit_locus_key(input_file)
+                locus = _audit_locus_key(input_file, source_input=row.get("input_kind") != "macse_alignment")
                 if input_file:
                     sources_by_locus[locus].add(str(Path(input_file).resolve()))
                 taxon = row.get("mapped_taxa_id")
@@ -205,7 +208,7 @@ def alignment_qc(path: str, seqtype: str, genetic_code: int = 1,
     if actual_type == "codon" and aligned and alignment_length % 3 == 0:
         valid_sites = sum(
             1 for start in range(0, alignment_length - 2, 3)
-            if "-" not in "".join(str(record.seq).upper()[start:start + 3] for record in records)
+            if all("-" not in sequence[start:start + 3] for sequence in columns)
         )
     issues = []
     if duplicate_ids:
@@ -244,7 +247,7 @@ def validate_report_paths(prefix, inputs):
         check_output_path(output, list(inputs) + outputs[:i])
 
 
-def write_qc_reports(results, passed, failed, prefix, seqtype, allow_terminal, allow_internal):
+def write_qc_reports(results, passed, failed, prefix, seqtype):
     validate_report_paths(prefix, [result["file"] for result in results])
     summary = ["File", "Seqtype", "Sequence_count", "Alignment_length",
                "N_ratio" if seqtype != "prot" else "X_ratio", "Gap_ratio",
@@ -362,7 +365,7 @@ Notes:
                           help="Show program's version number and exit.")
     args = parser.parse_args(argv)
     if args.min_length < 0 or args.min_parsimony_informative_sites < 0 or any(
-            value < 0 or value > 1 for value in (args.max_n_ratio, args.max_x_ratio, args.max_gap_ratio)):
+            not 0 <= value <= 1 for value in (args.max_n_ratio, args.max_x_ratio, args.max_gap_ratio)):
         parser.error("length thresholds must be non-negative and ratios must be between 0 and 1")
     try:
         paths = expand_input_paths(args.input)
@@ -391,7 +394,7 @@ Notes:
             if stat["parsimony_informative_sites"] < args.min_parsimony_informative_sites: reasons.append("parsimony_informative_sites")
             result["pass"] = not reasons; result["reasons"] = sorted(set(reasons))
             (passed if result["pass"] else failed).append(result); results.append(result)
-        write_qc_reports(results, passed, failed, args.prefix, args.seqtype, args.allow_terminal_stop, args.allow_internal_stop)
+        write_qc_reports(results, passed, failed, args.prefix, args.seqtype)
     except (OSError, ValueError, KeyError) as error:
         print(f"alignment_qc: {error}", file=sys.stderr)
         return 2

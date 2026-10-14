@@ -148,7 +148,7 @@ if (!/\.output-preview\s*\{[\s\S]*?resize:\s*vertical/.test(styles)) {
 if (!app.includes('key: "sequence_changes"') || !app.includes("--sequence-changes")) {
   throw new Error("Browser alignment_qc.py must accept sequence_changes.tsv provenance.");
 }
-if (!app.includes("Retain a codon/protein locus pair") || !app.includes("masked to NNN/X")) {
+if (!app.includes("Retain a protein locus or codon/protein locus pair") || !app.includes("masked to NNN/X")) {
   throw new Error("Browser PhyloPrep must explain provenance-aware internal-stop policy.");
 }
 if (!worker.includes('...(changes ? ["--sequence-changes", changes.path] : [])')) {
@@ -186,4 +186,8 @@ if (!app.includes('script === "alignment_qc.py" && seqtype === "codon"')) {
 if (!browserRunner.includes('path_lists = alignments / "path-lists"') ||
     !browserRunner.includes("phyloprep.write_paths(path_lists / list_name, files)")) {
   throw new Error("Browser finalizer must publish validated batch-style path lists for downstream QC.");
+}
+
+if (!app.includes('hide("allow_internal_stop", seqtype === "nucl");')) {
+  throw new Error("Protein workflows must expose the audited internal-stop retention option.");
 }

@@ -18,8 +18,9 @@ import tempfile
 
 from sequence_audit import normalize_workflow, merge_reports
 from MSAP_batch import build_parser as batch_parser
-from msap_io import atomic_output, expand_input_paths, read_fasta_alignment
-from rename_taxa import rename_fasta, read_mapping, normalized_taxon_id
+from msap_io import (atomic_output, expand_input_paths, read_fasta_alignment,
+                     file_digest, file_signature, read_json, NoGenesIncludedError)
+from rename_taxa import rename_fasta, read_mapping_snapshot, normalized_taxon_id
 
 SCRIPTS = Path(__file__).resolve().parent
 QC_VALUES = {
@@ -47,19 +48,24 @@ nucl/codon accept RNA: U is normalized to T and IUPAC ambiguity codes to N,
 with audit rows; outputs use the canonical DNA alphabet. prot removes trailing
 stops and masks internal stops, ambiguous and non-standard residues as X.
 Use --protein-stop-symbol '.' for dot-encoded stops (default: '*'); edits are audited.
-Raw and trimmed alignments are QC-checked with provenance-aware paired codon/protein filtering;
+Raw and trimmed alignments are QC-checked once, then independently and jointly filtered;
 --notrim processes raw alignments only. Codon mode also exports protein
-supermatrices. Codon matrices additionally undergo position splitting and
+supermatrices. Independent matrices use each representation's own QC/PIS passing loci;
+additional paired matrices use the selected paired PIS policy and shared loci.
+Paired outputs are under matrices/paired/ (matrices/pseudogene/paired/ for pseudogenes).
+Codon matrices additionally undergo position splitting and
 four-fold extraction. FASTA, PHYLIP and NEXUS outputs are written under
 matrices/<seqtype>/<raw|trimmed>/. Non-PIS QC is evaluated separately for codon
-and protein and both sides must pass; paired PIS retention is then controlled by
+and protein. Both sides must pass non-PIS QC only for the paired matrices;
+paired PIS retention is then controlled by
 --paired-pis-policy with independent codon/protein thresholds when requested.
 Pseudogene mode selects MACSE and writes matrices/pseudogene/<codon|prot>/<raw|trimmed>/.
 It preserves native alignments and change reports, and automatically generates
 codon-position and four-fold matrices from inferred coding positions. These do
 not establish functional coding or synonymous-site neutrality. Empty four-fold
 results are skipped with a message. See reports/ for audit TSVs.
-No passing genes or no four-fold sites in normal codon mode is an error; final
+No loci in any independent/paired dataset, or no four-fold sites in a nonempty
+normal codon dataset, is an error; final
 matrices are published only after all requested conversions succeed.
 """
     for action in parser._actions:
@@ -158,35 +164,12 @@ def write_paths(path, paths):
         handle.writelines(f"{p}\n" for p in paths)
 
 
-def file_digest(path):
-    digest = hashlib.sha256()
-    with Path(path).open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def file_signature(path):
-    path = Path(path)
-    stat = path.stat()
-    return {"path": str(path.resolve()), "size": stat.st_size,
-            "mtime_ns": stat.st_mtime_ns, "sha256": file_digest(path)}
-
-
-def read_json(path):
-    try:
-        value = json.loads(Path(path).read_text(encoding="utf-8"))
-        return value if isinstance(value, dict) else {}
-    except (OSError, json.JSONDecodeError):
-        return {}
-
-
 def rename_state_path(directory, source):
     key = hashlib.sha256(str(Path(source).resolve()).encode()).hexdigest()[:16]
     return Path(directory) / f".phyloprep-rename-{key}.json"
 
 
-def valid_rename_state(state, source, mapping, target):
+def valid_rename_state(state, source, mapping, target, mapping_signature=None, script_digest=None):
     try:
         if Path(target).is_symlink():
             return False
@@ -194,8 +177,8 @@ def valid_rename_state(state, source, mapping, target):
             "version": RENAME_STATE_VERSION,
             "status": "complete",
             "source": file_signature(source),
-            "mapping": file_signature(mapping),
-            "rename_taxa_sha256": file_digest(SCRIPTS / "rename_taxa.py"),
+            "mapping": mapping_signature if mapping_signature is not None else file_signature(mapping),
+            "rename_taxa_sha256": script_digest if script_digest is not None else file_digest(SCRIPTS / "rename_taxa.py"),
             "outputs": {"alignment": file_signature(target)},
         }
     except OSError:
@@ -246,7 +229,7 @@ def recover_matrix_publication(root):
             os.replace(backup, destination)
 
 
-def publish_matrices(stage_root, root, variants):
+def publish_matrices(stage_root, root, variants, block_signals=True):
     """Build a complete replacement tree, then switch it with rollback.
 
     Old groups and unmanaged files are preserved. The backup lives outside the
@@ -286,7 +269,8 @@ def publish_matrices(stage_root, root, variants):
                 json.dump(names, handle)
 
         # Defer Ctrl-C/SIGTERM until the tree is either committed or restored.
-        old_mask = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT, signal.SIGTERM})
+        old_mask = (signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT, signal.SIGTERM})
+                    if block_signals else None)
         moved_old = False
         try:
             if destination.exists():
@@ -299,7 +283,8 @@ def publish_matrices(stage_root, root, variants):
                     os.replace(backup, destination)
                 raise
         finally:
-            signal.pthread_sigmask(signal.SIG_SETMASK, old_mask)
+            if block_signals:
+                signal.pthread_sigmask(signal.SIG_SETMASK, old_mask)
         if moved_old:
             # Cleanup failure must not turn a successful commit into a failed run.
             try:
@@ -314,17 +299,22 @@ def rename_alignment_matrices(args, paths, root, seqtype, variant):
     renamed_dir = root / "renamed" / seqtype / variant
     renamed_dir.mkdir(parents=True, exist_ok=True)
     renamed = []
+    mapping_signature = getattr(args, "mapping_signature", None)
+    if mapping_signature is None:
+        args.taxon_mapping, mapping_signature = read_mapping_snapshot(args.mapping)
+        args.mapping_signature = mapping_signature
+    if file_signature(args.mapping) != mapping_signature:
+        raise ValueError("Mapping changed after it was read; rerun before renaming alignments")
+    script_digest = file_digest(SCRIPTS / "rename_taxa.py")
     for source in paths:
         target = renamed_dir / source.name
         state_path = rename_state_path(renamed_dir, source)
         if not args.no_resume and valid_rename_state(
-                read_json(state_path), source, args.mapping, target):
+                read_json(state_path), source, args.mapping, target, mapping_signature, script_digest):
             print(f"[phyloprep] rename {source.name}: skipped (already complete)", flush=True)
             renamed.append(target)
             continue
         source_signature = file_signature(source)
-        mapping_signature = file_signature(args.mapping)
-        script_digest = file_digest(SCRIPTS / "rename_taxa.py")
         try:
             rename_fasta(source, target, allow_duplicate_ids=True, mapping=args.taxon_mapping)
         except ValueError as error:
@@ -333,14 +323,15 @@ def rename_alignment_matrices(args, paths, root, seqtype, variant):
                 "Each QC-passing alignment must contain at most one sequence for each mapped taxon. "
                 "Multi-copy orthogroups should retain gene IDs for gene-tree methods such as ASTRAL-Pro3."
             ) from error
-        if (file_signature(source) != source_signature or
-                file_signature(args.mapping) != mapping_signature or
-                file_digest(SCRIPTS / "rename_taxa.py") != script_digest):
+        if file_signature(source) != source_signature:
             raise ValueError(
                 f"Rename inputs changed while processing {source}; outputs were not checkpointed. Rerun the pipeline."
             )
         write_rename_state(state_path, source_signature, mapping_signature, script_digest, target)
         renamed.append(target)
+    if (file_signature(args.mapping) != mapping_signature or
+            file_digest(SCRIPTS / "rename_taxa.py") != script_digest):
+        raise ValueError("Rename mapping or implementation changed during processing; rerun the pipeline")
     return renamed
 
 
@@ -410,10 +401,12 @@ def prepare(args, inputs, root):
     print(f"[phyloprep] Complete: {root / 'matrices'}", flush=True)
 
 
-def _group_stage(stage_root, workflow, seqtype, variant):
+def _group_stage(stage_root, workflow, seqtype, variant, paired=False):
     base = Path(stage_root)
     if workflow == "pseudogene":
         base = base / "pseudogene"
+    if paired:
+        base = base / "paired"
     return base / seqtype / variant
 
 
@@ -424,28 +417,22 @@ def _alignment_locus_key(path, args, seqtype, variant):
     return name[:-len(suffix)] if name.endswith(suffix) else Path(name).stem
 
 
-def run_group_qc(args, root, stage, seqtype, variant, selected=None):
+def run_group_qc(args, root, stage, seqtype, variant):
     """Run one representation-specific QC pass and return its pairing context."""
     print(f"[phyloprep] QC {seqtype}/{variant}", flush=True)
-    if selected is None:
-        list_suffix = f"{seqtype}.aln" if variant == "raw" else f"{seqtype}.trimmed.aln"
-        batch_list = root / "alignments" / "path-lists" / f"all.{list_suffix}.pathlist"
-        if not batch_list.is_file():
-            raise ValueError(
-                f"Validated MSAP batch path list is missing for {seqtype}/{variant}: {batch_list}"
-            )
-        selected = [
-            Path(line.strip()).resolve()
-            for line in batch_list.read_text(encoding="utf-8").splitlines()
-            if line.strip() and not line.lstrip().startswith(("#", ";"))
-        ]
-        if not selected:
-            raise ValueError(f"No validated completed alignments are available for {seqtype}/{variant}")
-    else:
-        selected = [Path(path).resolve() for path in selected]
-        missing = [str(path) for path in selected if not path.is_file()]
-        if missing:
-            raise ValueError("Compatibility QC input alignment(s) do not exist: " + ", ".join(missing))
+    list_suffix = f"{seqtype}.aln" if variant == "raw" else f"{seqtype}.trimmed.aln"
+    batch_list = root / "alignments" / "path-lists" / f"all.{list_suffix}.pathlist"
+    if not batch_list.is_file():
+        raise ValueError(
+            f"Validated MSAP batch path list is missing for {seqtype}/{variant}: {batch_list}"
+        )
+    selected = [
+        Path(line.strip()).resolve()
+        for line in batch_list.read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.lstrip().startswith(("#", ";"))
+    ]
+    if not selected:
+        raise ValueError(f"No validated completed alignments are available for {seqtype}/{variant}")
 
     qc_dir = root / "qc" / ("pseudogene" if args.seqtype == "pseudogene" else "") / seqtype / variant
     qc_paths = selected
@@ -465,7 +452,7 @@ def run_group_qc(args, root, stage, seqtype, variant, selected=None):
         qc_args.extend(["--" + name.replace("_", "-"), value])
 
     changes = root / "reports" / "sequence_changes.tsv"
-    if args.seqtype in {"codon", "pseudogene"} and changes.is_file():
+    if seqtype in {"codon", "prot"} and changes.is_file():
         qc_args.extend(["--sequence-changes", changes])
 
     allow_terminal = args.allow_terminal_stop or args.seqtype == "pseudogene"
@@ -620,28 +607,28 @@ def synchronize_paired_qc(args, root, variant, codon_context, protein_context):
                 ";".join(reasons) or "NA",
             ])
 
-    retained = {}
+    for context, passing, pis, threshold in (
+            (codon_context, codon_pass, codon_pis, codon_threshold),
+            (protein_context, protein_pass, protein_pis, protein_threshold)):
+        independent_path = context["prefix"].parent / "independent.retained.tsv"
+        independent = sorted(locus for locus in passing if pis[locus] >= threshold)
+        write_paths(independent_path, [passing[locus].resolve() for locus in independent])
+        context["independent_retained"] = independent_path
+
     for context, passing in ((codon_context, codon_pass), (protein_context, protein_pass)):
         retained_path = paired_dir / f"{context['seqtype']}.retained.tsv"
         with atomic_output(retained_path) as handle:
             for locus in common:
                 handle.write(str(passing[locus].resolve()) + "\n")
-        retained[context["seqtype"]] = retained_path
-        context["retained"] = retained_path
+        context["paired_retained"] = retained_path
 
-    if not common:
-        raise ValueError(
-            f"No paired codon/protein alignments passed QC for {variant}; "
-            f"paired PIS policy={policy}, minimum codon PIS={codon_threshold}, "
-            f"minimum protein PIS={protein_threshold}. "
-            f"See {report} and the representation-specific alignment.details.tsv reports."
-        )
     print(
         f"[phyloprep] Paired QC {variant}: retained {len(common)} locus/loci "
         f"(PIS policy={policy}, codon minimum={codon_threshold}, "
-        f"protein minimum={protein_threshold}) in both codon and protein matrices",
+        f"protein minimum={protein_threshold})",
         flush=True,
     )
+    return common
 
 
 def _require_passing_group(args, context):
@@ -669,19 +656,26 @@ def build_group_matrices(args, root, context):
     supermatrix = stage / "supermatrix.fasta"
     try:
         run("get_supergenes.py", "-i", passed, "-p", stage / "supermatrix",
-            "--missing-taxa", args.missing_taxa)
+            "--missing-taxa", args.missing_taxa, "--no-phylip")
     except subprocess.CalledProcessError as error:
+        if error.returncode != 3:
+            raise ValueError(
+                f"Concatenation failed for {seqtype}/{variant} (exit {error.returncode}); "
+                "see the original get_supergenes error above."
+            ) from error
         label = "renamed" if args.mapping else "original_ids"
+        if context.get("paired"):
+            label = "paired_" + label
         report = preserve_concat_report(stage, root, seqtype, variant, label)
         if not args.mapping:
             location = f" See {report}." if report else ""
-            raise ValueError(
+            raise NoGenesIncludedError(
                 f"No {seqtype}/{variant} genes can be concatenated with the original gene IDs.{location} "
                 "If these IDs represent the same taxa across loci, provide phyloprep.py -m TAXA.tsv "
                 "to rename all alignment matrices before QC and concatenation."
             ) from error
         location = f" See {report}." if report else ""
-        raise ValueError(
+        raise NoGenesIncludedError(
             f"No {seqtype}/{variant} genes can be concatenated after ID mapping.{location} "
             "Check that every intended gene ID is mapped and that each alignment has one unique ID per taxon. "
             "Multi-copy orthogroups with several genes mapped to one taxon require gene-tree methods such as ASTRAL-Pro3, not a species supermatrix."
@@ -721,23 +715,43 @@ def prepare_variant(args, root, stage_root, variant):
         for seqtype in ("codon", "prot"):
             stage = _group_stage(stage_root, args.seqtype, seqtype, variant)
             contexts[seqtype] = run_group_qc(args, root, stage, seqtype, variant)
-        synchronize_paired_qc(args, root, variant, contexts["codon"], contexts["prot"])
+        paired_loci = synchronize_paired_qc(
+            args, root, variant, contexts["codon"], contexts["prot"])
+        if not paired_loci and not any(
+                context["independent_retained"].read_text().strip()
+                for context in contexts.values()):
+            raise ValueError(f"No codon/protein alignments passed independent or paired QC for {variant}")
+        built = False
         for seqtype in ("codon", "prot"):
-            build_group_matrices(args, root, contexts[seqtype])
+            context = contexts[seqtype]
+            for paired in (False, True):
+                selected = context["paired_retained" if paired else "independent_retained"]
+                stage = _group_stage(stage_root, args.seqtype, seqtype, variant, paired=paired)
+                if not selected.read_text().strip():
+                    stage.mkdir(parents=True, exist_ok=True)
+                    (stage / "skipped.txt").write_text(
+                        "No loci passed " + ("paired" if paired else "independent") + " QC.\n")
+                    continue
+                independent_stage = context["stage"]
+                if (paired and selected.read_text() == context["independent_retained"].read_text()
+                        and (independent_stage / "supermatrix.fasta").is_file()):
+                    shutil.copytree(independent_stage, stage)
+                    built = True
+                    continue
+                try:
+                    build_group_matrices(args, root, {**context, "stage": stage,
+                                                     "retained": selected, "paired": paired})
+                except NoGenesIncludedError as error:
+                    # An empty missing-taxon selection does not invalidate other datasets.
+                    (stage / "skipped.txt").write_text(str(error) + "\n")
+                else:
+                    built = True
+        if not built:
+            raise NoGenesIncludedError(f"No independent or paired matrices could be built for {variant}")
         return
 
     stage = _group_stage(stage_root, args.seqtype, args.seqtype, variant)
     context = run_group_qc(args, root, stage, args.seqtype, variant)
-    _require_passing_group(args, context)
-    build_group_matrices(args, root, context)
-
-
-def prepare_group(args, inputs, root, stage, seqtype, variant):
-    """Backward-compatible single-representation helper used by external callers."""
-    suffix = f".{args.align_software}.{seqtype}"
-    suffix += ".aln" if variant == "raw" else ".trimmed.aln"
-    selected = [Path(root) / "alignments" / (Path(source).stem + suffix) for source in inputs]
-    context = run_group_qc(args, root, stage, seqtype, variant, selected=selected)
     _require_passing_group(args, context)
     build_group_matrices(args, root, context)
 
@@ -757,7 +771,7 @@ def main(argv=None):
             args.mapping = Path(args.mapping).resolve()
             if not args.mapping.is_file():
                 raise ValueError(f"Mapping table does not exist: {args.mapping}")
-            args.taxon_mapping = read_mapping(args.mapping)
+            args.taxon_mapping, args.mapping_signature = read_mapping_snapshot(args.mapping)
         else:
             args.taxon_mapping = None
         root = Path(args.output_dir).resolve()

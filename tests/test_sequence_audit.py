@@ -440,3 +440,31 @@ def test_phyloprep_uses_validated_batch_pathlist_not_stale_alignment(tmp_path, f
     assert pathlist.exists()
     assert not pathlist.read_text().strip()
     assert stale.exists()  # retained as prior public output, but no longer consumed
+
+
+@pytest.mark.parametrize('aligner', ['mafft', 'muscle', 'prank', 'clustalw2', 'macse'])
+def test_audit_locus_names_preserve_embedded_aligner_marker(tmp_path, aligner):
+    from alignment_qc import _audit_locus_key, load_sequence_changes
+    first = tmp_path / 'gene.fa'
+    second = tmp_path / f'gene.{aligner}.extra.fa'
+    report = tmp_path / 'changes.tsv'
+    write_report(report, [event(source, 'a', 'internal_stop', 1,
+                               source_nt_positions='4-6', original='TAA')
+                          for source in (first, second)])
+    audit = load_sequence_changes([report])
+    assert set(audit) == {'gene', f'gene.{aligner}.extra'}
+    for variant in ('aln', 'trimmed.aln'):
+        name = f'gene.{aligner}.extra.{aligner}.codon.{variant}'
+        assert _audit_locus_key(name) == f'gene.{aligner}.extra'
+    assert _audit_locus_key(f'gene.{aligner}.extra.macse_original.NT.fasta') == f'gene.{aligner}.extra'
+
+
+def test_source_filename_can_look_like_an_alignment_suffix(tmp_path):
+    from alignment_qc import load_sequence_changes, _audit_for_alignment
+    source = tmp_path / 'gene.mafft.codon.aln'
+    report = tmp_path / 'changes.tsv'
+    write_report(report, [event(source, 'a', 'internal_stop', 1,
+                               source_nt_positions='4-6', original='TAA')])
+    audit = load_sequence_changes([report])
+    assert set(audit) == {'gene.mafft.codon'}
+    assert _audit_for_alignment('gene.mafft.codon.mafft.codon.aln', audit)['a']['internal']

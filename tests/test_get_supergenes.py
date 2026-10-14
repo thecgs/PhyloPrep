@@ -124,3 +124,15 @@ def test_trimmed_alignment_suffix_preserves_locus_names():
         for seqtype in ('nucl', 'prot', 'codon'):
             for variant in ('aln', 'trimmed.aln'):
                 assert tidy_name(f'/work/ND5.{aligner}.{seqtype}.{variant}') == 'ND5'
+
+
+def test_pipeline_can_defer_phylip_output(tmp_path):
+    source = tmp_path / 'gene.mafft.nucl.aln'
+    write_alignment(source, [('a', 'ACGT'), ('b', 'ACGT')])
+    prefix = tmp_path / 'supermatrix'
+    result = subprocess.run([sys.executable, str(SCRIPT), '-i', str(source),
+                             '-p', str(prefix), '--no-phylip'], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert (tmp_path/'supermatrix.fasta').exists()
+    assert not (tmp_path/'supermatrix.phy').exists()
+    assert 'alignment = supermatrix.phy;' in (tmp_path/'supermatrix_partition_finder.cfg').read_text()

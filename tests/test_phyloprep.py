@@ -131,7 +131,7 @@ def test_codon_iupac_is_masked_before_translation_and_export(tmp_path, fake_alig
     assert 'ATGNTAGCTGGT' in codon.read_text()
     assert 'MXAG' in protein.read_text()
     report = (output / 'reports/sequence_changes.tsv').read_text()
-    assert '\tnucleotide_ambiguity\t4-4\tW\tN\treplace\t1\n' in report
+    assert '\tnucleotide_ambiguity\t4-4\tW\tN\treplace\t1\tsource\n' in report
 
 
 @pytest.mark.parametrize("seqtype,good,bad", [("nucl", "ACGT", "NNNN"), ("prot", "ACDE", "XXXX")])
@@ -170,7 +170,7 @@ def test_failure_does_not_publish_matrices(tmp_path, fake_aligner, failure):
     if failure == "alignment":
         assert not (output / "qc").exists()
     elif failure == "qc":
-        assert "passed QC" in result.stderr
+        assert "passed independent or paired QC" in result.stderr
     else:
         assert "four-fold" in result.stderr
 
@@ -231,7 +231,7 @@ def test_codon_min_length_uses_codon_units_and_does_not_publish_matrices(tmp_pat
     result = invoke(tmp_path, env, "-i", source, "-o", output, "-t", "1",
                     "--notrim", "--min-length", "3")
     assert result.returncode != 0
-    assert "No paired codon/protein alignments passed QC" in result.stderr
+    assert "No codon/protein alignments passed independent or paired QC" in result.stderr
     assert not (output / "qc/codon/raw/alignment.pass.tsv").read_text().strip()
     assert not (output / "matrices").exists()
 
@@ -244,7 +244,7 @@ def test_internal_stop_policy_is_shared_by_codon_and_protein_pair(tmp_path, fake
     rejected = tmp_path / 'rejected'
     result = invoke(tmp_path, env, '-i', source, '-o', rejected, '--notrim', '-t', '1')
     assert result.returncode == 2
-    assert 'No paired codon/protein alignments passed QC' in result.stderr
+    assert 'No codon/protein alignments passed independent or paired QC' in result.stderr
     for seqtype in ('codon', 'prot'):
         details = (rejected / 'qc' / seqtype / 'raw' / 'alignment.details.tsv').read_text()
         assert 'Audited_internal_stop' in details
@@ -272,13 +272,15 @@ def test_paired_qc_keeps_representation_reports_and_uses_retained_manifests(tmp_
     ambiguous.write_text('>a\nGCNGGT\n>b\nGCCGGA\n')
     output = tmp_path / 'results'
     result = invoke(
-        tmp_path, env, '-i', good, ambiguous, '-o', output, '--notrim', '-t', '1',
+        tmp_path, env, '-i', good, ambiguous, '-o', output, '-t', '1',
         '--max-n-ratio', '0', '--max-x-ratio', '1'
     )
     assert result.returncode == 0, result.stdout + result.stderr
     check_formats(output / 'matrices/codon/raw', 'supermatrix',
                   {'a': 'GCTGGT', 'b': 'GCCGGA'})
     check_formats(output / 'matrices/prot/raw', 'supermatrix',
+                  {'a': 'AGAG', 'b': 'AGAG'})
+    check_formats(output / 'matrices/paired/prot/raw', 'supermatrix',
                   {'a': 'AG', 'b': 'AG'})
     paired = (output / 'qc/paired/raw/loci.details.tsv').read_text()
     assert 'ambiguous' in paired
@@ -286,6 +288,11 @@ def test_paired_qc_keeps_representation_reports_and_uses_retained_manifests(tmp_
     assert 'ambiguous.mafft.prot.aln' in (output / 'qc/prot/raw/alignment.pass.tsv').read_text()
     assert 'ambiguous.mafft.prot.aln' not in (output / 'qc/paired/raw/prot.retained.tsv').read_text()
     assert 'ambiguous.mafft.codon.aln' not in (output / 'qc/paired/raw/codon.retained.tsv').read_text()
+
+    for kind in ('codon', 'prot'):
+        assert (output / f'qc/{kind}/trimmed/independent.retained.tsv').read_text().count('\n') == 2
+    check_formats(output / 'matrices/prot/trimmed', 'supermatrix', {'a': 'GAG', 'b': 'GAG'})
+    check_formats(output / 'matrices/paired/prot/trimmed', 'supermatrix', {'a': 'GAG', 'b': 'GAG'})
 
 
 def test_codon_default_trimming_uses_one_shared_site_mask(tmp_path, fake_aligner):
@@ -324,20 +331,22 @@ def test_paired_pis_policy_is_user_selectable(tmp_path, fake_aligner, policy, sh
         "--min-parsimony-informative-sites", "1",
         "--paired-pis-policy", policy,
     )
+    assert result.returncode == 0, result.stdout + result.stderr
+    check_formats(output / "matrices/codon/raw", "supermatrix",
+                  {"a": "GCT", "b": "GCT", "c": "GCC", "d": "GCC"})
+    assert (output / "matrices/prot/raw/skipped.txt").exists()
+    paired = (output / "qc/paired/raw/loci.details.tsv").read_text()
     if should_pass:
-        assert result.returncode == 0, result.stdout + result.stderr
-        paired = (output / "qc/paired/raw/loci.details.tsv").read_text()
         assert "\t1\t0\t1\t1\t" + policy + "\tpass\tpass\tNA\n" in paired
-        check_formats(output / "matrices/codon/raw", "supermatrix",
+        check_formats(output / "matrices/paired/codon/raw", "supermatrix",
                       {"a": "GCT", "b": "GCT", "c": "GCC", "d": "GCC"})
-        check_formats(output / "matrices/prot/raw", "supermatrix",
+        check_formats(output / "matrices/paired/prot/raw", "supermatrix",
                       {"a": "A", "b": "A", "c": "A", "d": "A"})
     else:
-        assert result.returncode == 2
-        paired = (output / "qc/paired/raw/loci.details.tsv").read_text()
         assert "pis_policy_failed" in paired
         assert "\t1\t0\t1\t1\t" + policy + "\tfail\tfail\t" in paired
-        assert not (output / "matrices").exists()
+        assert (output / "matrices/paired/codon/raw/skipped.txt").exists()
+        assert (output / "matrices/paired/prot/raw/skipped.txt").exists()
 
 
 def test_paired_pis_thresholds_can_differ(tmp_path, fake_aligner):

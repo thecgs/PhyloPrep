@@ -12,6 +12,7 @@ import runpy
 import shutil
 import subprocess
 import sys
+import tempfile
 import traceback
 import types
 
@@ -324,6 +325,7 @@ def run_phyloprep_finalize(file_manifest, options, output_root, engine_root="/en
     root.mkdir(parents=True, exist_ok=True)
     stdout, stderr = io.StringIO(), io.StringIO()
     mapping_supplied = False
+    phyloprep = None
     try:
         if str(engine) not in sys.path:
             sys.path.insert(0, str(engine))
@@ -370,7 +372,8 @@ def run_phyloprep_finalize(file_manifest, options, output_root, engine_root="/en
 
         mapping = Path(mapping_items[0]["path"]) if mapping_items else None
         mapping_supplied = mapping is not None
-        taxon_mapping = rename_taxa.read_mapping(mapping) if mapping else None
+        taxon_mapping, mapping_signature = (rename_taxa.read_mapping_snapshot(mapping)
+                                            if mapping else (None, None))
         if mapping:
             phyloprep.annotate_change_report(merged_changes, taxon_mapping)
 
@@ -394,6 +397,7 @@ def run_phyloprep_finalize(file_manifest, options, output_root, engine_root="/en
             X=number("x_ratio", 0.2),
             mapping=mapping,
             taxon_mapping=taxon_mapping,
+            mapping_signature=mapping_signature,
             no_resume=True,
             missing_taxa=str(options.get("missing_taxa", "skip-gene")),
             min_length=number("min_length", 1, int),
@@ -418,10 +422,12 @@ def run_phyloprep_finalize(file_manifest, options, output_root, engine_root="/en
         phyloprep.run = browser_run
         try:
             variants = ("raw",) if args.notrim else ("raw", "trimmed")
-            matrix_root = root / "matrices"
-            with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
-                for variant in variants:
-                    phyloprep.prepare_variant(args, root, matrix_root, variant)
+            with tempfile.TemporaryDirectory(prefix=".matrices-", dir=root) as temporary:
+                matrix_root = Path(temporary)
+                with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                    for variant in variants:
+                        phyloprep.prepare_variant(args, root, matrix_root, variant)
+                    phyloprep.publish_matrices(matrix_root, root, variants, block_signals=False)
         finally:
             phyloprep.run = original_run
 
@@ -438,8 +444,7 @@ def run_phyloprep_finalize(file_manifest, options, output_root, engine_root="/en
     except Exception as error:
         traceback.print_exc(file=stderr)
         technical_error = stderr.getvalue().strip() or "The browser PhyloPrep pipeline failed."
-        message = str(error)
-        if "No genes were included in the supermatrix" in message:
+        if phyloprep is not None and isinstance(error, phyloprep.NoGenesIncludedError):
             files = _visible_output_files(root)
             if mapping_supplied:
                 user_error = (

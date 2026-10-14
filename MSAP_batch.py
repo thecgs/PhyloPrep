@@ -22,7 +22,8 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from msap_io import atomic_output, read_fasta_alignment, expand_input_paths
+from msap_io import (atomic_output, read_fasta_alignment, expand_input_paths,
+                     file_digest as _digest, file_signature as _signature, read_json as _read_json)
 from sequence_audit import add_macse_options, add_protein_options, normalize_workflow, merge_reports, relocate_change_report
 
 
@@ -40,28 +41,6 @@ def _stop_handler(signum: int, _frame: Any) -> None:
 def _input_key(path: Path) -> str:
     digest = hashlib.sha256(str(path.resolve()).encode()).hexdigest()[:10]
     return f"{path.stem}_{digest}"
-
-
-def _digest(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def _signature(path: Path) -> dict[str, Any]:
-    stat = path.stat()
-    return {"path": str(path.resolve()), "size": stat.st_size,
-            "mtime_ns": stat.st_mtime_ns, "sha256": _digest(path)}
-
-
-def _read_json(path: Path) -> dict[str, Any]:
-    try:
-        state = json.loads(path.read_text(encoding="utf-8"))
-        return state if isinstance(state, dict) else {}
-    except (OSError, json.JSONDecodeError):
-        return {}
 
 
 def _atomic_json(path: Path, value: dict[str, Any]) -> None:
