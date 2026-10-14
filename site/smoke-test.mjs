@@ -79,7 +79,7 @@ if (!app.includes('name: "inputs.pathlist"')) throw new Error("PhyloPrep browser
 if (!alignmentWorker.includes('cli.exec("muscle -align "')) throw new Error("MUSCLE must use Aioli single-string exec form.");
 if (alignmentWorker.includes('cli.exec("muscle", [')) throw new Error("Two-argument Aioli exec form must not be used for MUSCLE.");
 
-if (!app.includes('["muscle", "MUSCLE 5.1.0"]')) throw new Error("MUSCLE must remain available for explicit selection.");
+if (!app.includes('["muscle", "MUSCLE 5.1.0 (Biowasm)"]')) throw new Error("MUSCLE must remain available for explicit selection.");
 if (!app.includes('["mafft", "MAFFT E-INS-i 7.520 (Biowasm, default)"]')) throw new Error("MAFFT E-INS-i 7.520 must be the browser default.");
 if (!worker.includes('option(values.align_software, "mafft")')) throw new Error("MAFFT must be the browser fallback aligner.");
 if (!alignmentWorker.includes('program: "tbfast"') || !alignmentWorker.includes('program: "dvtditr"')) throw new Error("Biowasm MAFFT core programs are missing from the alignment worker.");
