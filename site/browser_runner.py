@@ -440,6 +440,16 @@ def run_phyloprep_finalize(file_manifest, options, output_root, engine_root="/en
             "stderr": stderr.getvalue(),
         })
     except Exception as error:
+        if phyloprep is not None and isinstance(error, phyloprep.NoAlignmentsPassedQCError):
+            return json.dumps({
+                "ok": False,
+                "recoverable": True,
+                "files": _visible_output_files(root),
+                "user_error": str(error),
+                "summary": "No loci passed QC; diagnostic reports were preserved.",
+                "stdout": stdout.getvalue(),
+                "stderr": stderr.getvalue(),
+            })
         traceback.print_exc(file=stderr)
         technical_error = stderr.getvalue().strip() or "The browser PhyloPrep pipeline failed."
         if phyloprep is not None and isinstance(error, phyloprep.NoGenesIncludedError):

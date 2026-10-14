@@ -699,6 +699,29 @@ def build_group_matrices(args, root, context):
             "-st", "protein" if seqtype == "prot" else "DNA")
 
 
+class NoAlignmentsPassedQCError(ValueError):
+    """Expected QC rejection with diagnostic files available for inspection."""
+
+
+def no_passing_paired_qc_error(args, variant, contexts):
+    message = f"No codon/protein alignments passed independent or paired QC for {variant}."
+    details = Path(str(contexts["codon"]["prefix"]) + ".details.tsv")
+    with details.open(newline="") as handle:
+        rows = list(csv.DictReader(handle, delimiter="\t"))
+    stopped = sum("internal_stop" in row.get("Issues", "").split(";") for row in rows)
+    if stopped:
+        message += (
+            f" {stopped} of {len(rows)} codon loci were rejected for internal stops "
+            f"(including stops masked during preprocessing). Current genetic-code table: -g {args.genetic_code}. "
+            "Check that -g matches the source CDS; vertebrate mitochondrial CDS typically use table 2, "
+            "rather than the standard table 1. Internal stops can also reflect sequence or annotation errors. "
+            "Correct the genetic-code setting and rerun from the original CDS if it is wrong; "
+            "do not use --allow-internal-stop as a substitute for correcting it."
+        )
+    message += " Inspect alignment.details.tsv and reports/sequence_changes.tsv for rejection reasons."
+    return NoAlignmentsPassedQCError(message)
+
+
 def prepare_variant(args, root, stage_root, variant):
     """Prepare one raw/trimmed variant, pairing codon and protein when applicable."""
     if args.seqtype in {"codon", "pseudogene"}:
@@ -711,7 +734,7 @@ def prepare_variant(args, root, stage_root, variant):
         if not paired_loci and not any(
                 context["independent_retained"].read_text().strip()
                 for context in contexts.values()):
-            raise ValueError(f"No codon/protein alignments passed independent or paired QC for {variant}")
+            raise no_passing_paired_qc_error(args, variant, contexts)
         built = False
         for seqtype in ("codon", "prot"):
             context = contexts[seqtype]

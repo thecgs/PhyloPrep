@@ -477,7 +477,7 @@ git diff --check
 | Problem | Action |
 | --- | --- |
 | CDS has a trailing 1–2-base excess | `codon` trims it with a warning and `terminal_partial_codon` audit event. Internal frameshifts require `pseudogene`. |
-| No alignments pass QC | Inspect `alignment.details.tsv`, then correct data or revise justified thresholds. |
+| No alignments pass QC | Inspect `alignment.details.tsv` and `reports/sequence_changes.tsv`. If loci are rejected for internal stops, verify `-g` matches the source CDS (e.g. table 2 for vertebrate mitochondria). Correct a wrong table and rerun from original CDS; allowing internal stops does not undo masking. Otherwise inspect rejection reasons and revise justified thresholds. |
 | No four-fold matrix | Candidate sites were removed by ambiguity, gaps, or incompatible codon prefixes. |
 | MACSE fails | Check Java, `--macse-jar`, and a valid memory value such as `2g`. |
 | Output-path conflict | Use distinct input, output, and `--changes-report` paths. |

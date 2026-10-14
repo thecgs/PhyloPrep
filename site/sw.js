@@ -1,4 +1,4 @@
-const CACHE_NAME = "phyloprep-web-v33";
+const CACHE_NAME = "phyloprep-web-v34";
 const APP_SHELL = [
   "./",
   "./index.html",
