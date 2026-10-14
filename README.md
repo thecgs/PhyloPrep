@@ -76,7 +76,7 @@ Two end-to-end, Singularity/Apptainer-based examples are available: a mitochondr
 
 ## Input modes and normalization
 
-Inputs are FASTA. IDs must be unique within a file; alignment tools require at least two non-empty sequences. A path-list contains one FASTA path per line; blank lines and lines beginning `#` or `;` are ignored.
+Inputs are FASTA. IDs must be unique within a file; alignment tools require at least two non-empty sequences. A path-list contains one FASTA path per line; blank lines and lines beginning `#` or `;` are ignored. Relative references are resolved from the list directory (existing working-directory references are also accepted). Existing absolute paths are used directly. If a referenced path is missing, PhyloPrep checks for its basename beside the list, allowing an exported folder to be moved between machines. Missing references produce an error naming the list and entry.
 
 | `-st` mode | Input requirement | Standardization |
 | --- | --- | --- |
@@ -459,6 +459,8 @@ For species comparisons, report at least matrix length, gap/N/X ratios, PIS, and
 The current browser catalog exposes 19 tools/workflows, including the complete browser-adapted `phyloprep.py` pipeline, `MSAP_batch.py`, OrthoFinder extraction and orthology-result adapters, QC/filtering, matrix construction, codon-position/four-fold utilities, and format conversion. The single-locus `MSAP.py` entry is intentionally hidden because `MSAP_batch.py` supersedes it for browser-facing use; `MSAP.py` remains bundled internally as the batch implementation. Likewise, `orthogroup_table.py` remains an internal shared dependency and is not shown as a standalone web tool.
 
 Browser alignment uses MUSCLE 5.1.0 as the recommended default and also offers MAFFT E-INS-i 7.520 through Biowasm. Biowasm does not expose the upstream MAFFT shell wrapper as `mafft.js`; the browser MAFFT option therefore runs the compiled `tbfast` + `dvtditr` E-INS-i pipeline directly. It is intentionally labeled as MAFFT E-INS-i and should not be treated as equivalent to CLI `mafft --auto`. PRANK, ClustalW2, trimAl, MACSE and pseudogene mode remain CLI-only because they rely on external executables, Java, or process-management facilities that are not reproduced by the static GitHub Pages application.
+
+For browser pathlists, select the `.pathlist` and authorize its input folder with **Select pathlist input folder**, or select its referenced FASTA files as well. The browser cannot read sibling files from a pathlist alone. Only listed FASTAs are used; missing paths fall back to same-folder basenames, and missing or ambiguous references are reported. Folder authorization is read-only; browsers without the directory-picker API use folder-file selection. RUN limits simultaneous file reads to four, and preflight samples up to 100 FASTAs while reporting the resolved input count. Large datasets still require sufficient browser memory.
 
 The browser interface includes tool search/category grouping, context-aware parameter display, basic input preflight checks, local output-folder support where the browser allows it, cancellable MAFFT/MUSCLE execution, and direct workflow handoff for common upstream chains such as Proteinortho/OMA/OrthoMCL/SonicParanoid → orthogroup extraction → PhyloPrep. Every successful browser run also writes `phyloprep-run.json`, containing the selected module, parameters, equivalent CLI command, runtime provenance, and SHA256 hashes for browser inputs and outputs.
 

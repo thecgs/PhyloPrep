@@ -130,3 +130,7 @@ closed after the two-stage alignment completes. This preserves the shared
 state from leaking into the next FASTA in a batch.
 
 Independent retained lists are written as `qc/<codon|prot>/<raw|trimmed>/independent.retained.tsv`. QC runs once for each representation/variant. Empty datasets produce `skipped.txt`, while other passing datasets are retained. Identical independent/paired selections reuse matrix products.
+
+### Local pathlists and large selections
+
+Select a `.pathlist` and its input folder, or select the referenced FASTAs alongside it. Browsers require explicit directory authorization; a pathlist cannot grant filesystem access. The resolver checks referenced paths within authorized inputs, then same-directory basenames. Missing and ambiguous entries report the list and filename. Only referenced files enter a list-driven run. RUN reads at most four files concurrently; preflight samples at most 100 FASTAs and displays the resolved count. CLI utilities use the shared resolver with the same basename fallback for moved folders.
