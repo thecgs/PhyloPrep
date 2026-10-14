@@ -206,3 +206,5 @@ if (!build.includes('"msap_progress.py"') || !worker.includes('type: "progress"'
   throw new Error("Standard-library progress must be bundled and streamed to the browser UI.");
 }
 await import('./output-transfer-test.mjs');
+await import('./download-test.mjs');
+if (app.includes('revokeObjectURL(link.href), 1000')) throw new Error('Download URLs must not expire after one second.');
