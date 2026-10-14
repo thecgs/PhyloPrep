@@ -308,7 +308,7 @@ Notes:
     Ratios are calculated over the complete matrix: characters for nucl/prot,
     and complete codons for codon ambiguity; --max-gap-ratio is always the
     corresponding character-level gap ratio.
-  * --min-parsimony-informative-sites requires the whole matrix to contain at
+  * --min-nucl-pis / --min-protein-pis require the input alignment to contain at
     least N parsimony-informative sites; use 0 to disable this requirement.
     Site statistics count resolved states only (DNA A/C/G/T, U treated as T;
     protein residues excluding B/J/X/Z, gaps, unknowns and stop symbols).
@@ -352,19 +352,26 @@ Notes:
                           help="Maximum X ratio for protein matrices (default: 1).")
     optional.add_argument("--max-gap-ratio", type=float, default=1.0, metavar="RATIO",
                           help="Maximum gap ratio for the complete matrix (default: 1).")
-    optional.add_argument("--min-parsimony-informative-sites", type=int, default=0, metavar="N",
-                          help="Minimum parsimony-informative sites in the matrix (default: 0).")
+    optional.add_argument("--min-nucl-pis", type=int, default=None, metavar="N",
+                          help="Minimum nucleotide-column PIS in nucl/codon alignments (default: 0).")
+    optional.add_argument("--min-protein-pis", type=int, default=None, metavar="N",
+                          help="Minimum amino-acid PIS in prot alignments (default: 0).")
     optional.add_argument("--sequence-changes", nargs="+", metavar="TSV",
                           help="Optional PhyloPrep sequence_changes.tsv report(s). Masked internal stops are restored as QC provenance for codon/protein alignments.")
     optional.add_argument("--allow-terminal-stop", action="store_true",
-                          help="Allow terminal stops observed directly in codon or protein alignments. MSAP-removed terminal stops are provenance only.")
+                          help="Standalone QC: allow terminal stops directly present in codon/protein alignments without altering sequences. Removed terminal stops in provenance do not fail QC.")
     optional.add_argument("--allow-internal-stop", action="store_true",
                           help="Allow internal stops observed directly in codon/protein alignments or recorded as masked in --sequence-changes.")
     optional.add_argument("-h", "--help", action="help", help="Show this help message and exit.")
     optional.add_argument("-v", "--version", action="version", version="v1.0.0",
                           help="Show program's version number and exit.")
     args = parser.parse_args(argv)
-    if args.min_length < 0 or args.min_parsimony_informative_sites < 0 or any(
+    if args.seqtype == "prot" and args.min_nucl_pis is not None:
+        parser.error("--min-nucl-pis is not applicable to prot mode")
+    if args.seqtype != "prot" and args.min_protein_pis is not None:
+        parser.error("--min-protein-pis is only applicable to prot mode")
+    threshold = (args.min_protein_pis if args.seqtype == "prot" else args.min_nucl_pis) or 0
+    if args.min_length < 0 or threshold < 0 or any(
             not 0 <= value <= 1 for value in (args.max_n_ratio, args.max_x_ratio, args.max_gap_ratio)):
         parser.error("length thresholds must be non-negative and ratios must be between 0 and 1")
     try:
@@ -391,7 +398,7 @@ Notes:
             if stat["gap_ratio"] > args.max_gap_ratio: reasons.append("gap_ratio")
             amb_key = "X_ratio" if args.seqtype == "prot" else "N_ratio"
             if stat[amb_key] > (args.max_x_ratio if args.seqtype == "prot" else args.max_n_ratio): reasons.append(amb_key)
-            if stat["parsimony_informative_sites"] < args.min_parsimony_informative_sites: reasons.append("parsimony_informative_sites")
+            if stat["parsimony_informative_sites"] < threshold: reasons.append("parsimony_informative_sites")
             result["pass"] = not reasons; result["reasons"] = sorted(set(reasons))
             (passed if result["pass"] else failed).append(result); results.append(result)
         write_qc_reports(results, passed, failed, args.prefix, args.seqtype)

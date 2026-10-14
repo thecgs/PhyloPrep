@@ -328,7 +328,7 @@ def test_paired_pis_policy_is_user_selectable(tmp_path, fake_aligner, policy, sh
         "-o", output,
         "--notrim",
         "-t", "1",
-        "--min-parsimony-informative-sites", "1",
+        "--min-nucl-pis", "1", "--min-protein-pis", "1",
         "--paired-pis-policy", policy,
     )
     assert result.returncode == 0, result.stdout + result.stderr
@@ -356,8 +356,7 @@ def test_paired_pis_thresholds_can_differ(tmp_path, fake_aligner):
     output = tmp_path / "pis-thresholds"
     result = invoke(
         tmp_path, env, "-i", source, "-o", output, "--notrim", "-t", "1",
-        "--min-parsimony-informative-sites", "99",
-        "--min-codon-pis", "1",
+        "--min-nucl-pis", "1",
         "--min-protein-pis", "0",
         "--paired-pis-policy", "both",
     )

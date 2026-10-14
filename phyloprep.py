@@ -28,7 +28,6 @@ QC_VALUES = {
     "max_n_ratio": (float, 1.0),
     "max_x_ratio": (float, 1.0),
     "max_gap_ratio": (float, 1.0),
-    "min_parsimony_informative_sites": (int, 0),
 }
 RENAME_STATE_VERSION = 2
 
@@ -83,17 +82,15 @@ matrices are published only after all requested conversions succeed.
         unit = " (nt for nucl, aa for prot, complete codons for codon)" if name == "min_length" else ""
         qc.add_argument("--" + name.replace("_", "-"), type=kind, default=default,
                         help=f"{name.replace('_', ' ')}{unit} (default: %(default)s).")
-    qc.add_argument("--allow-terminal-stop", action="store_true",
-                    help="Allow terminal stop codons that remain directly observable in a final codon alignment. Terminal stops removed by MSAP preprocessing are recorded but do not fail QC.")
     qc.add_argument("--allow-internal-stop", action="store_true",
                     help="Retain codon/protein locus pairs with internal stops detected directly or recorded as masked by MSAP preprocessing. The stop remains masked as NNN/X.")
     qc.add_argument("--paired-pis-policy", choices=["both", "either", "codon", "protein"],
                     default="both",
-                    help="For paired codon/protein workflows, decide how --min-parsimony-informative-sites is applied: both representations must pass (both; default), either may pass, or only codon/protein PIS controls pair retention.")
-    qc.add_argument("--min-codon-pis", type=int, default=None, metavar="N",
-                    help="Paired codon workflow: minimum codon-alignment PIS. Defaults to --min-parsimony-informative-sites when omitted.")
+                    help="For additional paired matrices, combine the effective codon/protein PIS thresholds: both representations must pass (both; default), either may pass, or only codon/protein PIS controls pair retention.")
+    qc.add_argument("--min-nucl-pis", type=int, default=None, metavar="N",
+                    help="Minimum per-locus nucleotide-column PIS in nucl/codon/pseudogene modes, for independent and paired matrices (default: 0).")
     qc.add_argument("--min-protein-pis", type=int, default=None, metavar="N",
-                    help="Paired codon workflow: minimum protein-alignment PIS. Defaults to --min-parsimony-informative-sites when omitted.")
+                    help="Minimum per-locus amino-acid PIS in prot/codon/pseudogene modes, for independent and paired matrices (default: 0).")
     return parser
 
 
@@ -102,19 +99,18 @@ def validate_pipeline_options(args):
     qc_ratios = [args.max_n_ratio, args.max_x_ratio, args.max_gap_ratio]
     if any(not 0 <= value <= 1 for value in qc_ratios):
         raise ValueError("QC ratios must be between 0 and 1")
-    if (args.min_length < 0 or args.min_parsimony_informative_sites < 0 or
-            (args.min_codon_pis is not None and args.min_codon_pis < 0) or
+    if (args.min_length < 0 or
+            (args.min_nucl_pis is not None and args.min_nucl_pis < 0) or
             (args.min_protein_pis is not None and args.min_protein_pis < 0)):
         raise ValueError("QC length/site thresholds must be non-negative")
     if args.paired_pis_policy not in {"both", "either", "codon", "protein"}:
         raise ValueError("Invalid paired PIS policy")
-    if args.seqtype not in {"codon", "pseudogene"}:
-        if args.min_codon_pis is not None or args.min_protein_pis is not None:
-            raise ValueError(
-                "--min-codon-pis and --min-protein-pis require a paired codon/protein workflow"
-            )
-        if args.paired_pis_policy != "both":
-            raise ValueError("--paired-pis-policy requires a paired codon/protein workflow")
+    if args.seqtype == "prot" and args.min_nucl_pis is not None:
+        raise ValueError("--min-nucl-pis is not applicable to prot mode")
+    if args.seqtype == "nucl" and args.min_protein_pis is not None:
+        raise ValueError("--min-protein-pis is not applicable to nucl mode")
+    if args.seqtype not in {"codon", "pseudogene"} and args.paired_pis_policy != "both":
+        raise ValueError("--paired-pis-policy requires a paired codon/protein workflow")
 
 
 def run(script, *arguments, cwd=None):
@@ -445,19 +441,18 @@ def run_group_qc(args, root, stage, seqtype, variant):
     qc_args = ["-i", qc_inputs, "-st", seqtype, "-g", args.genetic_code, "-p", prefix]
     for name in QC_VALUES:
         value = getattr(args, name)
-        if name == "min_parsimony_informative_sites" and args.seqtype in {"codon", "pseudogene"}:
-            # PIS is representation-specific. Paired workflows apply the user-selected
-            # codon/protein policy after all non-PIS QC has been evaluated.
-            value = 0
         qc_args.extend(["--" + name.replace("_", "-"), value])
+    pis_flag = "--min-protein-pis" if seqtype == "prot" else "--min-nucl-pis"
+    threshold = args.min_protein_pis if seqtype == "prot" else args.min_nucl_pis
+    # Paired workflows combine PIS decisions after computing non-PIS QC once.
+    qc_args.extend([pis_flag, 0 if args.seqtype in {"codon", "pseudogene"} else (threshold or 0)])
 
     changes = root / "reports" / "sequence_changes.tsv"
     if seqtype in {"codon", "prot"} and changes.is_file():
         qc_args.extend(["--sequence-changes", changes])
 
-    allow_terminal = args.allow_terminal_stop or args.seqtype == "pseudogene"
     allow_internal = args.allow_internal_stop or args.seqtype == "pseudogene"
-    if allow_terminal:
+    if args.seqtype == "pseudogene":
         qc_args.append("--allow-terminal-stop")
     if allow_internal:
         qc_args.append("--allow-internal-stop")
@@ -519,11 +514,7 @@ def _pis_map(context, args):
     return values
 
 def _paired_pis_thresholds(args):
-    fallback = args.min_parsimony_informative_sites
-    return (
-        fallback if args.min_codon_pis is None else args.min_codon_pis,
-        fallback if args.min_protein_pis is None else args.min_protein_pis,
-    )
+    return (args.min_nucl_pis or 0, args.min_protein_pis or 0)
 
 
 def _paired_pis_decision(policy, codon_pis, protein_pis, codon_threshold, protein_threshold):
