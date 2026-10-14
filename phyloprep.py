@@ -89,11 +89,11 @@ matrices are published only after all requested conversions succeed.
                     help="Retain codon/protein locus pairs with internal stops detected directly or recorded as masked by MSAP preprocessing. The stop remains masked as NNN/X.")
     qc.add_argument("--paired-pis-policy", choices=["both", "either", "codon", "protein"],
                     default="both",
-                    help="For paired codon/protein workflows, decide how --min-parsimony-informative-sites is applied: both representations must pass (both; default), either may pass, or only codon/protein PIS controls pair retention.")
+                    help="For additional paired matrices, combine the effective codon/protein PIS thresholds: both representations must pass (both; default), either may pass, or only codon/protein PIS controls pair retention.")
     qc.add_argument("--min-codon-pis", type=int, default=None, metavar="N",
-                    help="Paired codon workflow: minimum codon-alignment PIS. Defaults to --min-parsimony-informative-sites when omitted.")
+                    help="Codon/pseudogene workflow: per-locus codon PIS threshold for independent and paired matrices. Defaults to --min-parsimony-informative-sites when omitted.")
     qc.add_argument("--min-protein-pis", type=int, default=None, metavar="N",
-                    help="Paired codon workflow: minimum protein-alignment PIS. Defaults to --min-parsimony-informative-sites when omitted.")
+                    help="Codon/pseudogene workflow: per-locus protein PIS threshold for independent and paired matrices. Defaults to --min-parsimony-informative-sites when omitted.")
     return parser
 
 
