@@ -82,8 +82,6 @@ matrices are published only after all requested conversions succeed.
         unit = " (nt for nucl, aa for prot, complete codons for codon)" if name == "min_length" else ""
         qc.add_argument("--" + name.replace("_", "-"), type=kind, default=default,
                         help=f"{name.replace('_', ' ')}{unit} (default: %(default)s).")
-    qc.add_argument("--allow-terminal-stop", action="store_true",
-                    help="Allow terminal stop codons that remain directly observable in a final codon alignment. Terminal stops removed by MSAP preprocessing are recorded but do not fail QC.")
     qc.add_argument("--allow-internal-stop", action="store_true",
                     help="Retain codon/protein locus pairs with internal stops detected directly or recorded as masked by MSAP preprocessing. The stop remains masked as NNN/X.")
     qc.add_argument("--paired-pis-policy", choices=["both", "either", "codon", "protein"],
@@ -453,9 +451,8 @@ def run_group_qc(args, root, stage, seqtype, variant):
     if seqtype in {"codon", "prot"} and changes.is_file():
         qc_args.extend(["--sequence-changes", changes])
 
-    allow_terminal = args.allow_terminal_stop or args.seqtype == "pseudogene"
     allow_internal = args.allow_internal_stop or args.seqtype == "pseudogene"
-    if allow_terminal:
+    if args.seqtype == "pseudogene":
         qc_args.append("--allow-terminal-stop")
     if allow_internal:
         qc_args.append("--allow-internal-stop")

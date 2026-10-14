@@ -359,7 +359,7 @@ Notes:
     optional.add_argument("--sequence-changes", nargs="+", metavar="TSV",
                           help="Optional PhyloPrep sequence_changes.tsv report(s). Masked internal stops are restored as QC provenance for codon/protein alignments.")
     optional.add_argument("--allow-terminal-stop", action="store_true",
-                          help="Allow terminal stops observed directly in codon or protein alignments. MSAP-removed terminal stops are provenance only.")
+                          help="Standalone QC: allow terminal stops directly present in codon/protein alignments without altering sequences. Removed terminal stops in provenance do not fail QC.")
     optional.add_argument("--allow-internal-stop", action="store_true",
                           help="Allow internal stops observed directly in codon/protein alignments or recorded as masked in --sequence-changes.")
     optional.add_argument("-h", "--help", action="help", help="Show this help message and exit.")

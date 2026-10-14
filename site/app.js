@@ -120,10 +120,9 @@ const modules = [
       { flag: "--min-nucl-pis", label: "Minimum nucleotide PIS", description: "Minimum nucleotide-column PIS per locus in nucleotide/codon modes. Default: 0.", type: "number", value: "", token: "min_nucl_pis" },
       { flag: "--min-protein-pis", label: "Minimum protein PIS", description: "Minimum amino-acid PIS per locus in protein/codon modes. Default: 0.", type: "number", value: "", token: "min_protein_pis" },
       { flag: "--paired-pis-policy", label: "Paired PIS policy", description: "Codon workflow only. Decide how the minimum PIS threshold is applied to the paired codon/protein locus: both must pass, either may pass, or only codon/protein PIS controls retention. Final codon and protein matrices still use the same locus set.", type: "select", value: "both", options: [["both", "both — codon AND protein must pass"], ["either", "either — codon OR protein may pass"], ["codon", "codon — use codon PIS only"], ["protein", "protein — use protein PIS only"]], token: "paired_pis_policy" },
-      { flag: "--allow-terminal-stop", label: "Allow observed terminal stop", description: "Allow a terminal stop that remains directly observable in the final codon alignment. Terminal stops normally removed by MSAP are reported as provenance and do not fail QC.", type: "checkbox", value: false, token: "allow_terminal_stop" },
       { flag: "--allow-internal-stop", label: "Allow internal stop", description: "Retain a protein locus or codon/protein locus pair when an internal stop is observed directly or recorded by MSAP as masked to NNN/X. The masked NNN/X is never restored.", type: "checkbox", value: false, token: "allow_internal_stop" },
     ],
-    command: "python phyloprep.py -i {inputs} -o phyloprep-results{mapping_option} -st {seqtype} -s {align_software} -t 1 -j 1 -g {genetic_code} -ts trimAlnSeq -G {gap_ratio} -N {n_ratio} -X {x_ratio} --missing-taxa {missing_taxa} --min-length {min_length} --max-n-ratio {max_n_ratio} --max-x-ratio {max_x_ratio} --max-gap-ratio {max_gap_ratio}{min_nucl_pis_option}{min_protein_pis_option} --paired-pis-policy {paired_pis_policy} --protein-stop-symbol {protein_stop_symbol_cli}{allow_terminal_stop}{allow_internal_stop}{notrim_option}",
+    command: "python phyloprep.py -i {inputs} -o phyloprep-results{mapping_option} -st {seqtype} -s {align_software} -t 1 -j 1 -g {genetic_code} -ts trimAlnSeq -G {gap_ratio} -N {n_ratio} -X {x_ratio} --missing-taxa {missing_taxa} --min-length {min_length} --max-n-ratio {max_n_ratio} --max-x-ratio {max_x_ratio} --max-gap-ratio {max_gap_ratio}{min_nucl_pis_option}{min_protein_pis_option} --paired-pis-policy {paired_pis_policy} --protein-stop-symbol {protein_stop_symbol_cli}{allow_internal_stop}{notrim_option}",
   },
   {
     script: "MSAP_batch.py", title: "Batch alignment workflow", category: "Batch", browser: true, browserWorkflow: "batch", inputListKey: "inputs", cliOutputDir: "msap-results",
@@ -611,7 +610,7 @@ function updateContextualParameters() {
   hide("gap_ratio", Boolean(notrim));
   hide("max_n_ratio", seqtype === "prot");
   hide("max_x_ratio", seqtype === "nucl" || (script === "alignment_qc.py" && seqtype === "codon"));
-  hide("allow_terminal_stop", !(seqtype === "codon" || (script === "alignment_qc.py" && seqtype === "prot")));
+  hide("allow_terminal_stop", script !== "alignment_qc.py" || !["codon", "prot"].includes(seqtype));
   hide("allow_internal_stop", seqtype === "nucl");
   const pairedPis = script === "phyloprep.py" && seqtype === "codon";
   hide("paired_pis_policy", !pairedPis);

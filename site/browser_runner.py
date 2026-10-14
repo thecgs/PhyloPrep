@@ -407,7 +407,6 @@ def run_phyloprep_finalize(file_manifest, options, output_root, engine_root="/en
             min_nucl_pis=optional_number("min_nucl_pis", int),
             min_protein_pis=optional_number("min_protein_pis", int),
             paired_pis_policy=str(options.get("paired_pis_policy", "both")),
-            allow_terminal_stop=bool(options.get("allow_terminal_stop", False)),
             allow_internal_stop=bool(options.get("allow_internal_stop", False)),
         )
         phyloprep.validate_pipeline_options(args)
