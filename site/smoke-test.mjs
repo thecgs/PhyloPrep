@@ -176,7 +176,7 @@ if (!app.includes('hide("x_ratio", seqtype === "nucl"') ||
 if (!app.includes('script: "alignment_qc.py", title: "Alignment quality control", category: "QC", browser: true, inputListKey: "inputs"')) {
   throw new Error("alignment_qc.py command preview must scope -i inputs to alignment files only.");
 }
-if (!app.includes('flag: "--min-codon-pis"') || !app.includes('flag: "--min-protein-pis"')) {
+if (!app.includes('flag: "--min-nucl-pis"') || !app.includes('flag: "--min-protein-pis"')) {
   throw new Error("Browser PhyloPrep must expose independent codon/protein PIS thresholds.");
 }
 if (!app.includes('script === "alignment_qc.py" && seqtype === "codon"')) {
