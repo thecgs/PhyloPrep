@@ -109,7 +109,7 @@ const modules = [
       { flag: "-st", label: "Sequence type", description: "Browser pipeline supports codon, protein, and nucleotide modes. Pseudogene/MACSE remains CLI-only.", type: "select", value: "codon", options: [["codon", "Codon / CDS"], ["prot", "Protein"], ["nucl", "Nucleotide"]], token: "seqtype" },
       geneticCodeParameter(),
       { flag: "--missing-taxa", label: "Missing taxa policy", description: "Skip genes missing taxa, or pad missing taxa with gaps during concatenation.", type: "select", value: "skip-gene", options: [["skip-gene", "skip-gene"], ["pad-gaps", "pad-gaps"]], token: "missing_taxa" },
-      { flag: "-s", label: "Alignment software", description: "Runs locally through Biowasm/WebAssembly. MUSCLE is the recommended browser default. MAFFT is optional E-INS-i through Biowasm's compiled tbfast + dvtditr pipeline; CLI -s mafft continues to use upstream mafft --auto and can differ.", type: "select", value: "muscle", options: [["muscle", "MUSCLE 5.1.0 (recommended)"], ["mafft", "MAFFT E-INS-i 7.520 (Biowasm)"]], token: "align_software" },
+      { flag: "-s", label: "Alignment software", description: "Runs locally through Biowasm/WebAssembly. MAFFT E-INS-i is the browser default through Biowasm's compiled tbfast + dvtditr pipeline; CLI -s mafft continues to use upstream mafft --auto and can differ.", type: "select", value: "mafft", options: [["mafft", "MAFFT E-INS-i 7.520 (Biowasm, default)"], ["muscle", "MUSCLE 5.1.0"]], token: "align_software" },
       { flag: "-t", label: "Threads per locus", description: "Browser fixed to one thread for GitHub Pages/WebAssembly compatibility.", type: "select", value: "1", options: [["1", "1 (browser fixed)"]], token: "thread" },
       { flag: "-j", label: "Concurrent loci", description: "Browser edition processes loci sequentially to keep memory predictable.", type: "select", value: "1", options: [["1", "1 (browser sequential)"]], token: "jobs" },
       { flag: "-ts", label: "Trimming software", description: "Browser fixed to PhyloPrep's bundled trimAlnSeq.py.", type: "select", value: "trimAlnSeq", options: [["trimAlnSeq", "trimAlnSeq.py (browser fixed)"]], token: "trim_software" },
@@ -139,7 +139,7 @@ const modules = [
     parameters: [
       { flag: "-st", label: "Sequence type", description: "Browser batch supports codon, protein, and nucleotide modes. Pseudogene/MACSE remains CLI-only.", type: "select", value: "codon", options: [["codon", "Codon / CDS"], ["prot", "Protein"], ["nucl", "Nucleotide"]], token: "seqtype" },
       geneticCodeParameter(),
-      { flag: "-s", label: "Alignment software", description: "Runs locally through Biowasm/WebAssembly. MUSCLE is the recommended browser default. MAFFT is optional E-INS-i through Biowasm's compiled tbfast + dvtditr pipeline; CLI -s mafft continues to use upstream mafft --auto and can differ.", type: "select", value: "muscle", options: [["muscle", "MUSCLE 5.1.0 (recommended)"], ["mafft", "MAFFT E-INS-i 7.520 (Biowasm)"]], token: "align_software" },
+      { flag: "-s", label: "Alignment software", description: "Runs locally through Biowasm/WebAssembly. MAFFT E-INS-i is the browser default through Biowasm's compiled tbfast + dvtditr pipeline; CLI -s mafft continues to use upstream mafft --auto and can differ.", type: "select", value: "mafft", options: [["mafft", "MAFFT E-INS-i 7.520 (Biowasm, default)"], ["muscle", "MUSCLE 5.1.0"]], token: "align_software" },
       { flag: "-t", label: "Threads per locus", description: "Browser fixed to one thread.", type: "select", value: "1", options: [["1", "1 (browser fixed)"]], token: "thread" },
       { flag: "-j", label: "Concurrent loci", description: "Browser edition processes loci sequentially.", type: "select", value: "1", options: [["1", "1 (browser sequential)"]], token: "jobs" },
       { flag: "-ts", label: "Trimming software", description: "Browser fixed to PhyloPrep's bundled trimAlnSeq.py.", type: "select", value: "trimAlnSeq", options: [["trimAlnSeq", "trimAlnSeq.py (browser fixed)"]], token: "trim_software" },
@@ -1176,6 +1176,7 @@ async function chooseOutputFolder() {
   try {
     outputDirectoryHandle = await window.showDirectoryPicker({ mode: "readwrite" });
     elements.outputFolder.textContent = `Selected local folder: ${outputDirectoryHandle.name}`;
+    elements.downloadAll.textContent = "Save all to folder";
     updateCommand();
     setLog("Output folder selected. Generated files will be written there.", "success");
   } catch (error) {
@@ -1359,19 +1360,33 @@ function previewOutput(content) {
   return content.length > limit ? content.slice(0, limit) + "\n[Preview truncated; download contains the complete file.]" : content;
 }
 
-function downloadGeneratedFile(file) {
-  const link = document.createElement("a");
-  link.href = URL.createObjectURL(new Blob([file.content], { type: "text/plain;charset=utf-8" }));
-  link.download = file.name;
-  link.click();
-  window.setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+async function downloadGeneratedFile(file) {
+  const name = file.name.replaceAll("\\", "/").split("/").at(-1);
+  if ("showSaveFilePicker" in window) {
+    const handle = await window.showSaveFilePicker({ suggestedName: name });
+    const writable = await handle.createWritable();
+    try {
+      await writable.write(file.content);
+      await writable.close();
+    } catch (error) {
+      try { await writable.abort(); } catch {}
+      throw error;
+    }
+    return "saved";
+  }
+  PhyloPrepDownloads.requestDownload(() => new Blob([file.content], { type: "text/plain;charset=utf-8" }), name, file);
+  return "requested";
 }
 
-function downloadSelectedOutput() {
+async function downloadSelectedOutput() {
   const file = generatedFiles[selectedGeneratedFileIndex];
   if (!file) return;
-  downloadGeneratedFile(file);
-  setLog(`Downloaded ${file.name}.`, "success");
+  try {
+    const status = await downloadGeneratedFile(file);
+    setLog(status === "saved" ? `Saved ${file.name}.` : `Download requested for ${file.name}; check your browser downloads for completion.`, "success");
+  } catch (error) {
+    setLog(error.name === "AbortError" ? "Save cancelled; results remain available." : `Unable to save ${file.name}: ${error.message}. Results remain available for retry.`, error.name === "AbortError" ? "warning" : "error");
+  }
 }
 
 async function copyEquivalentCommand() {
@@ -1395,76 +1410,33 @@ async function copyEquivalentCommand() {
   }
 }
 
-let crcTable;
-
-function crc32(bytes) {
-  if (!crcTable) {
-    crcTable = Array.from({ length: 256 }, (_, index) => {
-      let value = index;
-      for (let bit = 0; bit < 8; bit += 1) value = value & 1 ? (value >>> 1) ^ 0xedb88320 : value >>> 1;
-      return value >>> 0;
-    });
-  }
-  let value = 0xffffffff;
-  bytes.forEach((byte) => { value = (value >>> 8) ^ crcTable[(value ^ byte) & 0xff]; });
-  return (value ^ 0xffffffff) >>> 0;
-}
-
-function makeZip(files) {
-  const encoder = new TextEncoder();
-  const chunks = [];
-  const centralDirectory = [];
-  let offset = 0;
-  files.forEach((file) => {
-    const name = encoder.encode(file.name);
-    const content = encoder.encode(file.content);
-    const checksum = crc32(content);
-    const local = new Uint8Array(30 + name.length);
-    const localView = new DataView(local.buffer);
-    localView.setUint32(0, 0x04034b50, true);
-    localView.setUint16(4, 20, true);
-    localView.setUint32(14, checksum, true);
-    localView.setUint32(18, content.length, true);
-    localView.setUint32(22, content.length, true);
-    localView.setUint16(26, name.length, true);
-    local.set(name, 30);
-    chunks.push(local, content);
-
-    const central = new Uint8Array(46 + name.length);
-    const centralView = new DataView(central.buffer);
-    centralView.setUint32(0, 0x02014b50, true);
-    centralView.setUint16(4, 20, true);
-    centralView.setUint16(6, 20, true);
-    centralView.setUint32(16, checksum, true);
-    centralView.setUint32(20, content.length, true);
-    centralView.setUint32(24, content.length, true);
-    centralView.setUint16(28, name.length, true);
-    centralView.setUint32(42, offset, true);
-    central.set(name, 46);
-    centralDirectory.push(central);
-    offset += local.length + content.length;
-  });
-  const centralOffset = offset;
-  const centralSize = centralDirectory.reduce((size, item) => size + item.length, 0);
-  const end = new Uint8Array(22);
-  const endView = new DataView(end.buffer);
-  endView.setUint32(0, 0x06054b50, true);
-  endView.setUint16(8, files.length, true);
-  endView.setUint16(10, files.length, true);
-  endView.setUint32(12, centralSize, true);
-  endView.setUint32(16, centralOffset, true);
-  return new Blob([...chunks, ...centralDirectory, end], { type: "application/zip" });
-}
-
-function downloadAllOutputs() {
+async function downloadAllOutputs() {
   if (generatedFiles.length < 2) return;
   const stem = (elements.outputName.value.trim() || activeModule().script.replace(/\.py$/i, "outputs")).replace(/\.[^.]+$/, "").replace(/[^a-z0-9._-]+/gi, "-");
-  const link = document.createElement("a");
-  link.href = URL.createObjectURL(makeZip(generatedFiles));
-  link.download = `${stem || "phyloprep"}-outputs.zip`;
-  link.click();
-  window.setTimeout(() => URL.revokeObjectURL(link.href), 1000);
-  setLog(`Downloaded ${generatedFiles.length} output files as a ZIP archive.`, "success");
+  try {
+    if (outputDirectoryHandle) {
+      for (const [index, file] of generatedFiles.entries()) {
+        setLog(`Saving file ${index + 1}/${generatedFiles.length}: ${file.name}`, "info");
+        await saveGeneratedFile(file);
+      }
+      setLog(`Saved ${generatedFiles.length} files to the selected output folder.`, "success");
+      return;
+    }
+    PhyloPrepDownloads.checkZipCount(generatedFiles);
+    const name = `${stem || "phyloprep"}-outputs.zip`;
+    if ("showSaveFilePicker" in window) {
+      const handle = await window.showSaveFilePicker({ suggestedName: name });
+      const writable = await handle.createWritable();
+      setLog("Writing ZIP archive to the selected file…", "info");
+      await PhyloPrepDownloads.writeZip(generatedFiles, writable);
+      setLog(`Saved ${generatedFiles.length} files as a ZIP archive.`, "success");
+    } else {
+      PhyloPrepDownloads.requestDownload(() => new Blob([...PhyloPrepDownloads.zipParts(generatedFiles)], { type: "application/zip" }), name, generatedFiles);
+      setLog(`ZIP download requested for ${generatedFiles.length} files; check your browser downloads for completion.`, "success");
+    }
+  } catch (error) {
+    setLog(error.name === "AbortError" ? "Save cancelled; results remain available." : `Unable to save outputs: ${error.message}. Results remain available for retry.`, error.name === "AbortError" ? "warning" : "error");
+  }
 }
 
 
