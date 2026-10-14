@@ -134,3 +134,5 @@ Independent retained lists are written as `qc/<codon|prot>/<raw|trimmed>/indepen
 ### Local pathlists and large selections
 
 Select a `.pathlist` and its input folder, or select the referenced FASTAs alongside it. Browsers require explicit directory authorization; a pathlist cannot grant filesystem access. The resolver checks referenced paths within authorized inputs, then same-directory basenames. Missing and ambiguous entries report the list and filename. Only referenced files enter a list-driven run. RUN reads at most four files concurrently; preflight samples at most 100 FASTAs and displays the resolved count. CLI utilities use the shared resolver with the same basename fallback for moved folders.
+
+Browser batch progress shows completed/total loci with elapsed time and estimated remaining time. Python QC and matrix construction stream stage updates through the existing worker bridge. The interface refreshes elapsed time while a stage is active and stops timers on result, error or cancellation. Stage counts are not compute-time percentages; progress requires no additional libraries.

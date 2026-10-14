@@ -1200,6 +1200,26 @@ function createPyodideWorker() {
   worker.addEventListener("message", (event) => {
     const message = event.data;
     if (!activeWorkerRun || message.runId !== activeWorkerRun.id) return;
+    if (message.type === "output-chunk" || message.type === "output-file-end") {
+      clearInterval(activeWorkerRun.progressTimer);
+      const outputs = activeWorkerRun.streamedOutputs;
+      let file = outputs.get(message.index);
+      if (!file) {
+        file = { decoder: new TextDecoder(), parts: [], name: message.name };
+        outputs.set(message.index, file);
+      }
+      if (message.type === "output-chunk") {
+        file.parts.push(file.decoder.decode(message.bytes, { stream: true }));
+        setRunStage(3, `Receiving output ${message.index + 1}/${message.fileCount}: ${message.name}`);
+        worker.postMessage({ type: "output-chunk-ack", runId: message.runId, sequence: message.sequence });
+      } else {
+        file.parts.push(file.decoder.decode());
+        file.content = file.parts.join("");
+        file.parts = [];
+        file.decoder = undefined;
+      }
+      return;
+    }
     if (message.type === "stage") {
       if (message.stage === "runtime") {
         elements.runtimeStatus.textContent = `${message.label}…`;
@@ -1210,12 +1230,38 @@ function createPyodideWorker() {
       }
       return;
     }
+    if (message.type === "progress") {
+      const progress = message.progress;
+      const received = performance.now();
+      const render = () => {
+        const elapsed = progress.elapsed_seconds + (performance.now() - received) / 1000;
+        const label = `${progress.completed}/${progress.total} ${progress.unit} · ${progress.label} · ${Math.round(elapsed)}s elapsed`;
+        elements.runtimeStatus.textContent = label;
+        setRunStage(2, label);
+      };
+      clearInterval(activeWorkerRun.progressTimer);
+      render();
+      activeWorkerRun.progressTimer = setInterval(render, 1000);
+      return;
+    }
     const run = activeWorkerRun;
+    clearInterval(run.progressTimer);
     activeWorkerRun = undefined;
     elements.cancelRun.hidden = true;
     if (message.type === "result") {
       elements.runtimeStatus.textContent = "Local worker ready";
-      run.resolve(message.result);
+      try {
+        if (message.result.files?.some(file => file.path)) {
+          message.result.files = message.result.files.map((file, index) => {
+            const streamed = run.streamedOutputs.get(index);
+            if (!streamed || streamed.content === undefined) throw new Error(`Incomplete output received: ${file.name}`);
+            return { name: file.name, content: streamed.content };
+          });
+        }
+        run.resolve(message.result);
+      } catch (error) {
+        run.reject(error);
+      }
     } else if (message.type === "error") {
       run.reject(new Error(message.message || "The local workflow could not be completed."));
     }
@@ -1223,6 +1269,7 @@ function createPyodideWorker() {
   worker.addEventListener("error", (event) => {
     if (!activeWorkerRun) return;
     const run = activeWorkerRun;
+    clearInterval(run.progressTimer);
     activeWorkerRun = undefined;
     elements.cancelRun.hidden = true;
     run.reject(new Error(event.message || "The local worker stopped unexpectedly."));
@@ -1235,7 +1282,7 @@ function runInWorker(payload) {
   const worker = pyodideWorker || createPyodideWorker();
   const runId = ++nextRunId;
   return new Promise((resolve, reject) => {
-    activeWorkerRun = { id: runId, resolve, reject };
+    activeWorkerRun = { id: runId, resolve, reject, streamedOutputs: new Map() };
     worker.postMessage({ type: payload.type || "run", runId, ...payload });
   });
 }
@@ -1248,6 +1295,7 @@ function cancelActiveRun() {
   }
   if (!activeWorkerRun) return;
   const run = activeWorkerRun;
+  clearInterval(run.progressTimer);
   activeWorkerRun = undefined;
   pyodideWorker?.terminate();
   pyodideWorker = undefined;
@@ -1297,13 +1345,18 @@ function renderGeneratedFiles() {
     button.title = file.name;
     button.addEventListener("click", () => {
       selectedGeneratedFileIndex = index;
-      elements.preview.textContent = file.content;
+      elements.preview.textContent = previewOutput(file.content);
       elements.outputFilesList.querySelectorAll("button").forEach((item) => item.classList.remove("active"));
       button.classList.add("active");
     });
     elements.outputFilesList.append(button);
   });
-  elements.preview.textContent = generatedFiles[0]?.content || "";
+  elements.preview.textContent = previewOutput(generatedFiles[0]?.content || "");
+}
+
+function previewOutput(content) {
+  const limit = 200000;
+  return content.length > limit ? content.slice(0, limit) + "\n[Preview truncated; download contains the complete file.]" : content;
 }
 
 function downloadGeneratedFile(file) {
@@ -1511,6 +1564,14 @@ function batchPathLists(files) {
   return outputs;
 }
 
+function showLocusProgress(completed, total, started, label) {
+  const elapsed = (performance.now() - started) / 1000;
+  const eta = completed ? ` · estimated remaining ${Math.round(elapsed * (total - completed) / completed)}s` : "";
+  const text = `${completed}/${total} loci complete · ${label} · ${Math.round(elapsed)}s elapsed${eta}`;
+  elements.runtimeStatus.textContent = text;
+  setRunStage(2, text);
+}
+
 async function runMsapBatchBrowserWorkflow(request) {
   const inputs = request.files.filter((file) => file.inputKey === "inputs" && String(file.content || "").trimStart().startsWith(">"));
   if (!inputs.length) throw new Error("Select at least one FASTA input.");
@@ -1522,17 +1583,20 @@ async function runMsapBatchBrowserWorkflow(request) {
       content: selectedInputPathList(inputs),
     });
   }
+  const progressStarted = performance.now();
   for (let index = 0; index < inputs.length; index += 1) {
     const input = inputs[index];
-    setRunStage(2, `Aligning locus ${index + 1}/${inputs.length}: ${input.name}`);
-    elements.runtimeStatus.textContent = `${request.options.align_software === "mafft" ? "MAFFT E-INS-i" : "MUSCLE"} locus ${index + 1}/${inputs.length}`;
-    const result = await runMsapBrowserWorkflow({
-      ...request,
-      script: "MSAP.py",
-      files: [input],
-      outputName: "",
-      usesPathList: false,
-    });
+    showLocusProgress(index, inputs.length, progressStarted, `Aligning ${input.name}`);
+    const heartbeat = setInterval(() => showLocusProgress(index, inputs.length, progressStarted, `Aligning ${input.name}`), 1000);
+    let result;
+    try {
+      result = await runMsapBrowserWorkflow({
+        ...request, script: "MSAP.py", files: [input], outputName: "", usesPathList: false,
+      });
+    } finally {
+      clearInterval(heartbeat);
+    }
+    showLocusProgress(index + 1, inputs.length, progressStarted, input.name);
     outputs.push(...result.files.map((file) => ({ name: file.name, content: file.content })));
   }
   outputs.push(...batchPathLists(outputs));

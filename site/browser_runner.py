@@ -311,14 +311,23 @@ def _browser_run_engine_script(engine, script, arguments, cwd=None):
         raise subprocess.CalledProcessError(code, [sys.executable, str(path), *map(str, arguments)])
 
 
-def _visible_output_files(root):
-    return [
-        file for file in _output_files(Path(root))
-        if not any(part.startswith(".") for part in Path(file["name"]).parts)
-    ]
+def _visible_output_files(root, manifest_only=False):
+    root = Path(root)
+    files = []
+    for path in sorted(root.rglob("*")):
+        relative = path.relative_to(root)
+        if not path.is_file() or any(part.startswith(".") for part in relative.parts):
+            continue
+        file = {"name": relative.as_posix()}
+        if manifest_only:
+            file.update(path=str(path), size=path.stat().st_size)
+        else:
+            file["content"] = path.read_text(encoding="utf-8", errors="replace")
+        files.append(file)
+    return files
 
 
-def run_phyloprep_finalize(file_manifest, options, output_root, engine_root="/engine"):
+def run_phyloprep_finalize(file_manifest, options, output_root, engine_root="/engine", progress_callback=None, manifest_only=False):
     """Finish the browser pipeline with the repository's original downstream modules."""
     engine = Path(engine_root).resolve()
     root = Path(output_root).resolve()
@@ -410,6 +419,9 @@ def run_phyloprep_finalize(file_manifest, options, output_root, engine_root="/en
             allow_internal_stop=bool(options.get("allow_internal_stop", False)),
         )
         phyloprep.validate_pipeline_options(args)
+        from msap_progress import ProgressReporter, progress_context, report_phase
+        variants = ("raw",) if args.notrim else ("raw", "trimmed")
+        args._progress = ProgressReporter('PhyloPrep', len(variants) + 1, unit='stages', callback=progress_callback)
 
         original_run = phyloprep.run
 
@@ -422,14 +434,18 @@ def run_phyloprep_finalize(file_manifest, options, output_root, engine_root="/en
             variants = ("raw",) if args.notrim else ("raw", "trimmed")
             with tempfile.TemporaryDirectory(prefix=".matrices-", dir=root) as temporary:
                 matrix_root = Path(temporary)
-                with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
-                    for variant in variants:
+                with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr), progress_context(args._progress):
+                    for index, variant in enumerate(variants):
+                        report_phase(args, f'{variant}: QC and matrix preparation')
                         phyloprep.prepare_variant(args, root, matrix_root, variant)
+                        args._progress.update(f'{variant}: complete', completed=index + 1)
+                    report_phase(args, 'Publishing matrices')
                     phyloprep.publish_matrices(matrix_root, root, variants, block_signals=False)
+                    args._progress.update('Complete', completed=len(variants) + 1)
         finally:
             phyloprep.run = original_run
 
-        files = _visible_output_files(root)
+        files = _visible_output_files(root, manifest_only=manifest_only)
         if not files:
             raise ValueError("PhyloPrep produced no downloadable output files.")
         return json.dumps({
@@ -444,7 +460,7 @@ def run_phyloprep_finalize(file_manifest, options, output_root, engine_root="/en
             return json.dumps({
                 "ok": False,
                 "recoverable": True,
-                "files": _visible_output_files(root),
+                "files": _visible_output_files(root, manifest_only=manifest_only),
                 "user_error": str(error),
                 "summary": "No loci passed QC; diagnostic reports were preserved.",
                 "stdout": stdout.getvalue(),
@@ -453,7 +469,7 @@ def run_phyloprep_finalize(file_manifest, options, output_root, engine_root="/en
         traceback.print_exc(file=stderr)
         technical_error = stderr.getvalue().strip() or "The browser PhyloPrep pipeline failed."
         if phyloprep is not None and isinstance(error, phyloprep.NoGenesIncludedError):
-            files = _visible_output_files(root)
+            files = _visible_output_files(root, manifest_only=manifest_only)
             if mapping_supplied:
                 user_error = (
                     "No supermatrix could be built with missing-taxa=skip-gene because no locus retained the full "

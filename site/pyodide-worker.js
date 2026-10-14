@@ -3,6 +3,40 @@ const ENGINE_ROOT = "/engine";
 let runtimePromise;
 let engineManifest;
 
+const outputAcknowledgements = new Map();
+let outputSequence = 0;
+
+async function streamOutputFiles(runtime, runId, files) {
+  for (let index = 0; index < files.length; index++) {
+    const file = files[index];
+    if (!file.path) continue;
+    const stream = runtime.FS.open(file.path, "r");
+    try {
+      let position = 0;
+      while (position < file.size) {
+        const bytes = new Uint8Array(Math.min(1024 * 1024, file.size - position));
+        const read = runtime.FS.read(stream, bytes, 0, bytes.length, position);
+        if (!read) throw new Error(`Incomplete output transfer: ${file.name}`);
+        const chunk = bytes.subarray(0, read);
+        const sequence = ++outputSequence;
+        await new Promise((resolve, reject) => {
+          const timer = setTimeout(() => {
+            outputAcknowledgements.delete(sequence);
+            reject(new Error(`Output transfer acknowledgement timed out: ${file.name}`));
+          }, 30000);
+          outputAcknowledgements.set(sequence, { runId, resolve: () => { clearTimeout(timer); resolve(); } });
+          self.postMessage({ type: "output-chunk", runId, sequence, index, name: file.name,
+            fileCount: files.length, bytes: chunk }, [bytes.buffer]);
+        });
+        position += read;
+      }
+      self.postMessage({ type: "output-file-end", runId, index, name: file.name });
+    } finally {
+      runtime.FS.close(stream);
+    }
+  }
+}
+
 function safeRelativePath(value, fallback) {
   const pieces = String(value || fallback).replaceAll("\\", "/").split("/")
     .filter((piece) => piece && piece !== "." && piece !== "..");
@@ -242,6 +276,14 @@ function msapArguments(request, stage) {
 
 self.addEventListener("message", async (event) => {
   const request = event.data;
+  if (request.type === "output-chunk-ack") {
+    const pending = outputAcknowledgements.get(request.sequence);
+    if (pending?.runId === request.runId) {
+      outputAcknowledgements.delete(request.sequence);
+      pending.resolve();
+    }
+    return;
+  }
   if (!["run", "msap-probe", "msap-complete", "phyloprep-finalize", "orthofinder-extract"].includes(request.type)) return;
   const { runId } = request;
   let runtime;
@@ -282,11 +324,20 @@ self.addEventListener("message", async (event) => {
     if (request.type === "phyloprep-finalize") {
       self.postMessage({ type: "stage", runId, stage: "process", label: "Running PhyloPrep QC and matrix construction" });
       const manifest = stage.files.map(({ name, path, role, inputKey, fasta }) => ({ name, path, role, inputKey, fasta }));
-      const raw = await runtime.runPythonAsync(`run_phyloprep_finalize(${pythonJson(manifest)}, ${pythonJson(request.options)}, ${JSON.stringify(stage.outputRoot)})`);
+      runtime.globals.set("_phyloprep_progress_callback", (eventJson) => {
+        self.postMessage({ type: "progress", runId, progress: JSON.parse(eventJson) });
+      });
+      let raw;
+      try {
+        raw = await runtime.runPythonAsync(`run_phyloprep_finalize(${pythonJson(manifest)}, ${pythonJson(request.options)}, ${JSON.stringify(stage.outputRoot)}, progress_callback=_phyloprep_progress_callback, manifest_only=True)`);
+      } finally {
+        runtime.globals.delete("_phyloprep_progress_callback");
+      }
       const result = JSON.parse(raw);
       if (!result.ok && !result.recoverable) {
         throw new Error(result.user_error || result.error || "The browser PhyloPrep pipeline could not complete.");
       }
+      await streamOutputFiles(runtime, runId, result.files || []);
       self.postMessage({
         type: "result",
         runId,

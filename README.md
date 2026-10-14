@@ -127,6 +127,12 @@ flowchart LR
 
 The complete workflow automatically removes terminal stops from CDS and protein inputs and records them in the audit report. Removed terminal stops do not fail QC. `phyloprep.py` does not accept `--allow-terminal-stop`; unexpected directly observed stops in normal codon/protein outputs still fail QC. Pseudogene workflows retain their internal stop/frameshift-tolerant policy. The option is available only in standalone `alignment_qc.py` for externally supplied alignments; it permits an observed terminal stop without modifying the sequence. `--allow-internal-stop` remains available in the complete workflow to control retention of audited masked internal stops.
 
+### Live progress
+
+`MSAP_batch.py` reports completed/total loci, completed/skipped/failed counts, elapsed time and an estimated remaining time. Updates are flushed immediately after a locus finishes, with a throttled heartbeat while jobs are running. Failed and cancelled runs are labelled accordingly; completed-task counts are not a success guarantee.
+
+`phyloprep.py` reports alignment, raw/trimmed QC and matrix preparation, dataset export, and publication. Stage counts describe completed stages, not a percentage of compute time. Long-running CLI subprocesses refresh elapsed time periodically. Browser batch workflows update locus counts and elapsed time live; Python QC/matrix stages stream progress to the browser and the interface refreshes elapsed time while a stage runs. Pipeline results return a metadata-only file manifest; contents are transferred separately in acknowledged 1 MiB chunks, avoiding a single JSON containing every output. Previews are capped while downloads remain complete. This reduces serialization peaks but does not eliminate the memory required for alignment or retained browser output. ETA is an estimate based on completed loci and can be inaccurate for heterogeneous or resumed inputs. Progress reporting uses Python's standard library, with the existing browser's native JavaScript APIs for display and no additional progress dependencies.
+
 ## Outputs and audit reports
 
 ```text
