@@ -653,9 +653,9 @@ def _require_passing_group(args, context):
 
 
 def build_group_matrices(args, root, context):
+    """Concatenate one already-QC-filtered representation and export derived matrices."""
     report_phase(args, f"{context['variant']}/{context['seqtype']}: "
                  f"{'paired' if context.get('paired') else 'independent'} matrix construction")
-    """Concatenate one already-QC-filtered representation and export derived matrices."""
     stage = context["stage"]
     seqtype = context["seqtype"]
     variant = context["variant"]
