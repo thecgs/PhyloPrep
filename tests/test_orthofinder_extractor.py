@@ -2,6 +2,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
 from Bio import SeqIO
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -58,7 +59,7 @@ def test_x_writes_unprefixed_ids_and_map_to_custom_path(tmp_path):
     assert not (tmp_path / 'out/orthogroups.pathlist').exists()
 
 
-def test_orthofinder_x_table_is_detected_and_preserved_without_extractor_x(tmp_path):
+def test_unprefixed_table_gets_taxon_prefix_without_extractor_x(tmp_path):
     table, cds = write_inputs(tmp_path)
     table.write_text(
         'Orthogroup\tHuman\tMouse\tFish\n'
@@ -67,10 +68,10 @@ def test_orthofinder_x_table_is_detected_and_preserved_without_extractor_x(tmp_p
     result = run(tmp_path, '-og', table, '-i', cds, '-o', tmp_path / 'out')
     assert result.returncode == 0, result.stderr
     assert [record.id for record in SeqIO.parse(tmp_path / 'out/OG0001.fasta', 'fasta')] == [
-        'gene_1', 'gene_2', 'gene_3',
+        'Human_gene_1', 'Mouse_gene_2', 'Fish_gene_3',
     ]
     assert (tmp_path / 'out/map.tsv').read_text().splitlines() == [
-        'gene_1\tHuman', 'gene_2\tMouse', 'gene_3\tFish',
+        'Human_gene_1\tHuman', 'Mouse_gene_2\tMouse', 'Fish_gene_3\tFish',
     ]
 
 
@@ -137,3 +138,53 @@ def test_keep_drop_overlap_errors_and_all_copies_preserves_paralogs(tmp_path):
         'Human_gene_4', 'Human_gene_5', 'Mouse_gene_4', 'Fish_gene_8',
     ]
     assert (tmp_path / 'all_copies/OG0003.fasta').exists() is False
+
+
+@pytest.mark.parametrize('prefixed', [False, True])
+@pytest.mark.parametrize('x', [False, True])
+def test_export_prefix_policy_is_independent_of_table_style(tmp_path, prefixed, x):
+    table, cds = write_inputs(tmp_path)
+    values = ['Human_gene:1', 'Mouse_gene:2', 'Fish_gene:3'] if prefixed else ['gene:1', 'gene:2', 'gene:3']
+    table.write_text('Orthogroup\tHuman\tMouse\tFish\nOG0001\t' + '\t'.join(values) + '\n')
+    output = tmp_path / 'out'
+    result = run(tmp_path, '-og', table, '-i', cds, '-o', output, *(['-X'] if x else []))
+    assert result.returncode == 0, result.stderr
+    records = list(SeqIO.parse(output / 'OG0001.fasta', 'fasta'))
+    expected = ['gene_1', 'gene_2', 'gene_3'] if x else ['Human_gene_1', 'Mouse_gene_2', 'Fish_gene_3']
+    assert [r.id for r in records] == expected
+    assert [str(r.seq) for r in records] == ['ATG', 'ATC', 'ATT']
+    assert (output / 'map.tsv').read_text().splitlines() == [f'{identifier}\t{taxon}' for identifier, taxon in zip(expected, ['Human', 'Mouse', 'Fish'])]
+
+
+def test_default_prefixes_disambiguate_shared_ids_but_x_rejects(tmp_path):
+    cds = tmp_path / 'cds'
+    cds.mkdir()
+    for taxon in ['Human', 'Mouse']:
+        (cds / f'{taxon}.fa').write_text('>gene1\nATG\n')
+    table = tmp_path / 'Orthogroups.tsv'
+    table.write_text('Orthogroup\tHuman\tMouse\nOG1\tgene1\tgene1\n')
+    output = tmp_path / 'out'
+    result = run(tmp_path, '-og', table, '-i', cds, '-o', output)
+    assert result.returncode == 0, result.stderr
+    assert [r.id for r in SeqIO.parse(output / 'OG1.fasta', 'fasta')] == ['Human_gene1', 'Mouse_gene1']
+    rejected = tmp_path / 'rejected'
+    result = run(tmp_path, '-og', table, '-i', cds, '-o', rejected, '-X')
+    assert result.returncode != 0
+    assert 'output IDs are not unique' in result.stderr
+    assert not (rejected / 'OG1.fasta').exists()
+
+
+def test_x_rejects_ambiguous_map_ids_across_different_orthogroups(tmp_path):
+    cds = tmp_path / 'cds'
+    cds.mkdir()
+    (cds / 'Human.fa').write_text('>gene1\nATG\n')
+    (cds / 'Mouse.fa').write_text('>mouse1\nATG\n>mouse2\nATG\n')
+    (cds / 'Fish.fa').write_text('>gene1\nATG\n')
+    table = tmp_path / 'Orthogroups.tsv'
+    table.write_text('Orthogroup\tHuman\tMouse\tFish\nOG1\tgene1\tmouse1\t\nOG2\t\tmouse2\tgene1\n')
+    output = tmp_path / 'out'
+    result = run(tmp_path, '-og', table, '-i', cds, '-o', output, '--min-taxa', '2', '-X')
+    assert result.returncode != 0
+    assert 'maps to multiple taxa across orthogroups' in result.stderr
+    assert not (output / 'map.tsv').exists()
+    assert not list(output.glob('*.fasta'))
