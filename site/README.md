@@ -117,7 +117,7 @@ the top-level pipeline's CLI organization.
 
 ## Repeated browser alignments
 
-MUSCLE 5.1.0 is configured with Aioli `reinit: true`. Batch workflows reuse
+The Biowasm MUSCLE package is configured with Aioli `reinit: true`. Batch workflows reuse
 the alignment worker across loci, but the MUSCLE WebAssembly module itself is
 reinitialized after each invocation so argument-parser and other module-global
 state cannot leak from one FASTA alignment into the next.
@@ -136,3 +136,5 @@ Independent retained lists are written as `qc/<codon|prot>/<raw|trimmed>/indepen
 Select a `.pathlist` and its input folder, or select the referenced FASTAs alongside it. Browsers require explicit directory authorization; a pathlist cannot grant filesystem access. The resolver checks referenced paths within authorized inputs, then same-directory basenames. Missing and ambiguous entries report the list and filename. Only referenced files enter a list-driven run. RUN reads at most four files concurrently; preflight samples at most 100 FASTAs and displays the resolved count. CLI utilities use the shared resolver with the same basename fallback for moved folders.
 
 Browser batch progress shows completed/total loci with elapsed time and estimated remaining time. Python QC and matrix construction stream stage updates through the existing worker bridge. The interface refreshes elapsed time while a stage is active and stops timers on result, error or cancellation. Stage counts are not compute-time percentages; progress requires no additional libraries.
+
+The web catalog and selected-tool details load each script version from `engine/manifest.json`. The build reads the scripts’ own `--version` declarations and records their source SHA256 hashes; version strings are not duplicated in the interface. `phyloprep-run.json` records the version and hashes of the engine bundle actually used. Biowasm package versions come from the alignment-worker configuration and are labeled as package versions; a program’s own banner can report a different version. A missing declaration or failed manifest request is shown explicitly.

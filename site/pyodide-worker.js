@@ -218,7 +218,7 @@ function originalArguments(request, stage) {
   const output = outputPath(stage, request.outputName, "output.txt");
   switch (request.script) {
     case "AA2Codon.py":
-      return ["-c", inputFile(stage, 0), "-p", inputFile(stage, 1), "-o", output, "-g", option(values.genetic_code, "1")];
+      return ["-c", inputFile(stage, 0), "-p", inputFile(stage, 1), "-o", output, ...(values.validate_translation ? ["-g", option(values.genetic_code, "1")] : [])];
     case "alignment_qc.py": {
       const changes = stage.files.find((file) => file.inputKey === "sequence_changes");
       return ["-i", ...listInputs(stage), "-p", outputPath(stage, request.outputName, "phyloprep-qc"), "-st", option(values.seqtype, "nucl"), "-g", option(values.genetic_code, "1"), ...(changes ? ["--sequence-changes", changes.path] : []), "--min-length", option(values.min_length, "1"), "--max-n-ratio", option(values.max_n_ratio, "1"), "--max-x-ratio", option(values.max_x_ratio, "1"), "--max-gap-ratio", option(values.max_gap_ratio, "1"), ...(values.seqtype === "prot" ? ["--min-protein-pis", option(values.min_protein_pis, "0")] : ["--min-nucl-pis", option(values.min_nucl_pis, "0")]), ...(values.allow_terminal_stop ? ["--allow-terminal-stop"] : []), ...(values.allow_internal_stop ? ["--allow-internal-stop"] : [])];
@@ -234,7 +234,7 @@ function originalArguments(request, stage) {
     case "rename_taxa.py": {
       const mapping = stage.plainFiles[0]?.path;
       const mapOutput = values.map_output ? outputPath(stage, `${safeRelativePath(request.outputName, "renamed.fasta").replace(/\.[^.]+$/, "")}.map.tsv`, "renamed.map.tsv") : undefined;
-      return ["-i", inputFile(stage), "-o", output, ...(mapping ? ["-m", mapping] : []), ...(mapOutput ? ["--map-output", mapOutput] : []), ...(values.allow_duplicate_ids ? ["--allow-duplicate-ids"] : []), ...(values.keep_special ? ["--keep-special"] : [])];
+      return ["-i", inputFile(stage), "-o", output, ...(mapping ? ["-m", mapping] : []), ...(mapOutput ? ["--map-output", mapOutput] : []), ...(values.allow_duplicate_ids ? ["--allow-duplicate-ids"] : [])];
     }
     case "trimAlnSeq.py":
       return ["-i", inputFile(stage), "-o", output, "-st", option(values.seqtype, "codon"), "-G", option(values.gap_ratio, "0.2"), "-N", option(values.n_ratio, "0.2"), "-X", option(values.x_ratio, "0.2"), ...(values.removeall ? ["-ra"] : [])];
@@ -315,7 +315,8 @@ self.addEventListener("message", async (event) => {
         runId,
         result: {
           ...result,
-          provenance: `Untouched MSAP.py + Biowasm ${request.options.align_software === "mafft" ? "MAFFT E-INS-i 7.520" : "MUSCLE 5.1.0"} · source bundle ${engineManifest.bundleSha256.slice(0, 12)}`,
+          engineMetadata: engineManifest,
+          provenance: `Untouched MSAP.py + ${request.options.align_software === "mafft" ? "MAFFT E-INS-i" : "MUSCLE"} (Biowasm package ${engineManifest.aligners[request.options.align_software || "mafft"].packageVersion}) · source bundle ${engineManifest.bundleSha256.slice(0, 12)}`,
         },
       });
       return;
@@ -343,6 +344,7 @@ self.addEventListener("message", async (event) => {
         runId,
         result: {
           ...result,
+          engineMetadata: engineManifest,
           partial: Boolean(result.recoverable),
           provenance: `Browser phyloprep.py adapter · original downstream modules · source bundle ${engineManifest.bundleSha256.slice(0, 12)}`,
         },
@@ -361,6 +363,7 @@ self.addEventListener("message", async (event) => {
         runId,
         result: {
           ...result,
+          engineMetadata: engineManifest,
           provenance: `Original extract_orthofinder_orthogroups.py · source bundle ${engineManifest.bundleSha256.slice(0, 12)}`,
         },
       });
@@ -377,6 +380,7 @@ self.addEventListener("message", async (event) => {
       runId,
       result: {
         ...result,
+        engineMetadata: engineManifest,
         provenance: `Original source bundle ${engineManifest.bundleSha256.slice(0, 12)}`,
       },
     });

@@ -13,6 +13,7 @@ def main(argv=None):
     parser.add_argument("-o", "--output", required=True, metavar="TSV", help="Standard Orthogroup TSV.")
     parser.add_argument("--taxon-separator", default="|", help="Genome/gene separator in members (default: '|').")
     parser.add_argument("--strip-taxon-prefix", action="store_true", help="Write gene IDs without the leading 'genome<separator>' portion.")
+    parser.add_argument("-v", "--version", action="version", version="v1.0.0")
     args = parser.parse_args(argv)
     try:
         taxa, groups = parse_prefixed_tab_groups(Path(args.input), separator=args.taxon_separator, strip_prefix=args.strip_taxon_prefix)

@@ -79,8 +79,8 @@ if (!app.includes('name: "inputs.pathlist"')) throw new Error("PhyloPrep browser
 if (!alignmentWorker.includes('cli.exec("muscle -align "')) throw new Error("MUSCLE must use Aioli single-string exec form.");
 if (alignmentWorker.includes('cli.exec("muscle", [')) throw new Error("Two-argument Aioli exec form must not be used for MUSCLE.");
 
-if (!app.includes('["muscle", "MUSCLE 5.1.0"]')) throw new Error("MUSCLE must remain available for explicit selection.");
-if (!app.includes('["mafft", "MAFFT E-INS-i 7.520 (Biowasm, default)"]')) throw new Error("MAFFT E-INS-i 7.520 must be the browser default.");
+if (!app.includes('["muscle", "MUSCLE (Biowasm)"]')) throw new Error("MUSCLE must remain available for explicit selection.");
+if (!app.includes('["mafft", "MAFFT E-INS-i (Biowasm, default)"]')) throw new Error("MAFFT E-INS-i 7.520 must be the browser default.");
 if (!worker.includes('option(values.align_software, "mafft")')) throw new Error("MAFFT must be the browser fallback aligner.");
 if (!alignmentWorker.includes('program: "tbfast"') || !alignmentWorker.includes('program: "dvtditr"')) throw new Error("Biowasm MAFFT core programs are missing from the alignment worker.");
 if (alignmentWorker.includes('"mafft/7.520"')) throw new Error("Biowasm MAFFT has no mafft.js wrapper; load tbfast/dvtditr explicitly.");
@@ -160,8 +160,8 @@ if (!browserRunner.includes("phyloprep.prepare_variant(args, root, matrix_root, 
 }
 
 if (!app.includes('flag: "--paired-pis-policy"') ||
-    !app.includes('["both", "both — codon AND protein must pass"]') ||
-    !app.includes('["either", "either — codon OR protein may pass"]')) {
+    !app.includes('["both", "both"]') ||
+    !app.includes('["either", "either"]')) {
   throw new Error("Browser PhyloPrep must expose the four paired PIS policies.");
 }
 if (!app.includes('const pairedPis = script === "phyloprep.py" && seqtype === "codon"') ||
@@ -212,3 +212,5 @@ if (app.includes('revokeObjectURL(link.href), 1000')) throw new Error('Download 
 const alignerControls = app.split("\n").filter(line => line.includes('token: "align_software"'));
 if (alignerControls.length !== 2 || alignerControls.some(line => !line.includes('value: "mafft"'))) throw new Error("Both browser workflows must default to MAFFT.");
 await import('./result-test.mjs');
+await import('./options-test.mjs');
+await import('./version-test.mjs');

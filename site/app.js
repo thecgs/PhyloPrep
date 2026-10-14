@@ -8,6 +8,7 @@ const elements = {
   scriptList: document.querySelector("#script-list"),
   selectedName: document.querySelector("#selected-name"),
   selectedSummary: document.querySelector("#selected-summary"),
+  scriptVersion: document.querySelector("#script-version"),
   parameterList: document.querySelector("#parameter-list"),
   workspaceScript: document.querySelector("#workspace-script"),
   workspaceMode: document.querySelector("#workspace-mode"),
@@ -112,10 +113,10 @@ const modules = [
     outputs: ["Per-locus alignments and audit reports", "QC reports", "Optional renamed alignments", "Independent and paired raw/trimmed supermatrices", "Codon-position and four-fold matrices", "FASTA/PHYLIP/NEXUS exports"],
     outputLabel: "Pipeline output", outputHelp: "Browser output is collected as downloadable files or written into the selected local folder.", defaultOutput: "", hideOutputName: true,
     parameters: [
-      { flag: "-st", label: "Sequence type", description: "Browser pipeline supports codon, protein, and nucleotide modes. Pseudogene/MACSE remains CLI-only.", type: "select", value: "codon", options: [["codon", "Codon / CDS"], ["prot", "Protein"], ["nucl", "Nucleotide"]], token: "seqtype" },
+      { flag: "-st", label: "Sequence type", description: "Browser pipeline supports codon, protein, and nucleotide modes. Pseudogene/MACSE remains CLI-only.", type: "select", value: "codon", options: [["codon", "codon"], ["prot", "prot"], ["nucl", "nucl"]], token: "seqtype" },
       geneticCodeParameter(),
       { flag: "--missing-taxa", label: "Missing taxa policy", description: "Skip genes missing taxa, or pad missing taxa with gaps during concatenation.", type: "select", value: "skip-gene", options: [["skip-gene", "skip-gene"], ["pad-gaps", "pad-gaps"]], token: "missing_taxa" },
-      { flag: "-s", label: "Alignment software", description: "Runs locally through Biowasm/WebAssembly. MAFFT E-INS-i is the browser default through Biowasm's compiled tbfast + dvtditr pipeline; CLI -s mafft continues to use upstream mafft --auto and can differ.", type: "select", value: "mafft", options: [["mafft", "MAFFT E-INS-i 7.520 (Biowasm, default)"], ["muscle", "MUSCLE 5.1.0"]], token: "align_software" },
+      { flag: "-s", label: "Alignment software", description: "Runs locally through Biowasm/WebAssembly. MAFFT E-INS-i is the browser default through Biowasm's compiled tbfast + dvtditr pipeline; CLI -s mafft continues to use upstream mafft --auto and can differ.", type: "select", value: "mafft", options: [["mafft", "MAFFT E-INS-i (Biowasm, default)"], ["muscle", "MUSCLE (Biowasm)"]], token: "align_software" },
       { flag: "-t", label: "Threads per locus", description: "Browser fixed to one thread for GitHub Pages/WebAssembly compatibility.", type: "select", value: "1", options: [["1", "1 (browser fixed)"]], token: "thread" },
       { flag: "-j", label: "Concurrent loci", description: "Browser edition processes loci sequentially to keep memory predictable.", type: "select", value: "1", options: [["1", "1 (browser sequential)"]], token: "jobs" },
       { flag: "-ts", label: "Trimming software", description: "Browser fixed to PhyloPrep's bundled trimAlnSeq.py.", type: "select", value: "trimAlnSeq", options: [["trimAlnSeq", "trimAlnSeq.py (browser fixed)"]], token: "trim_software" },
@@ -130,7 +131,7 @@ const modules = [
       { flag: "--max-gap-ratio", label: "Maximum QC gap ratio", description: "Maximum gap ratio allowed by alignment QC. Range: 0–1.", type: "number", value: "1", step: "0.01", token: "max_gap_ratio" },
       { flag: "--min-nucl-pis", label: "Minimum nucleotide PIS", description: "Minimum nucleotide-column PIS per locus in nucleotide/codon modes. Default: 0.", type: "number", value: "0", token: "min_nucl_pis" },
       { flag: "--min-protein-pis", label: "Minimum protein PIS", description: "Minimum amino-acid PIS per locus in protein/codon modes. Default: 0.", type: "number", value: "0", token: "min_protein_pis" },
-      { flag: "--paired-pis-policy", label: "Paired PIS policy", description: "Codon workflow only. Decide how the minimum PIS threshold is applied to the paired codon/protein locus: both must pass, either may pass, or only codon/protein PIS controls retention. Final codon and protein matrices still use the same locus set.", type: "select", value: "both", options: [["both", "both — codon AND protein must pass"], ["either", "either — codon OR protein may pass"], ["codon", "codon — use codon PIS only"], ["protein", "protein — use protein PIS only"]], token: "paired_pis_policy" },
+      { flag: "--paired-pis-policy", label: "Paired PIS policy", description: "Codon workflow only. Decide how the minimum PIS threshold is applied to the paired codon/protein locus: both must pass, either may pass, or only codon/protein PIS controls retention. Additional paired matrices use the same locus set; independent matrices use each representation's own passing loci.", type: "select", value: "both", options: [["both", "both"], ["either", "either"], ["codon", "codon"], ["protein", "protein"]], token: "paired_pis_policy" },
       { flag: "--allow-internal-stop", label: "Allow internal stop", description: "Retain a protein locus or codon/protein locus pair when an internal stop is observed directly or recorded by MSAP as masked to NNN/X. The masked NNN/X is never restored.", type: "checkbox", value: false, token: "allow_internal_stop" },
     ],
     command: "python phyloprep.py -i {inputs} -o phyloprep-results{mapping_option} -st {seqtype} -s {align_software} -t 1 -j 1 -g {genetic_code} -ts trimAlnSeq -G {gap_ratio} -N {n_ratio} -X {x_ratio} --missing-taxa {missing_taxa} --min-length {min_length} --max-n-ratio {max_n_ratio} --max-x-ratio {max_x_ratio} --max-gap-ratio {max_gap_ratio}{min_nucl_pis_option}{min_protein_pis_option} --paired-pis-policy {paired_pis_policy} --protein-stop-symbol {protein_stop_symbol_cli}{allow_internal_stop}{notrim_option}",
@@ -143,9 +144,9 @@ const modules = [
     outputs: ["Per-locus preprocessing and audit files", "MAFFT or MUSCLE alignments", "Optional trimmed alignments", "Batch path lists", "Merged sequence-change report"],
     outputLabel: "Batch output", outputHelp: "Browser output is collected as downloadable files or written into the selected local folder.", defaultOutput: "", hideOutputName: true,
     parameters: [
-      { flag: "-st", label: "Sequence type", description: "Browser batch supports codon, protein, and nucleotide modes. Pseudogene/MACSE remains CLI-only.", type: "select", value: "codon", options: [["codon", "Codon / CDS"], ["prot", "Protein"], ["nucl", "Nucleotide"]], token: "seqtype" },
+      { flag: "-st", label: "Sequence type", description: "Browser batch supports codon, protein, and nucleotide modes. Pseudogene/MACSE remains CLI-only.", type: "select", value: "codon", options: [["codon", "codon"], ["prot", "prot"], ["nucl", "nucl"]], token: "seqtype" },
       geneticCodeParameter(),
-      { flag: "-s", label: "Alignment software", description: "Runs locally through Biowasm/WebAssembly. MAFFT E-INS-i is the browser default through Biowasm's compiled tbfast + dvtditr pipeline; CLI -s mafft continues to use upstream mafft --auto and can differ.", type: "select", value: "mafft", options: [["mafft", "MAFFT E-INS-i 7.520 (Biowasm, default)"], ["muscle", "MUSCLE 5.1.0"]], token: "align_software" },
+      { flag: "-s", label: "Alignment software", description: "Runs locally through Biowasm/WebAssembly. MAFFT E-INS-i is the browser default through Biowasm's compiled tbfast + dvtditr pipeline; CLI -s mafft continues to use upstream mafft --auto and can differ.", type: "select", value: "mafft", options: [["mafft", "MAFFT E-INS-i (Biowasm, default)"], ["muscle", "MUSCLE (Biowasm)"]], token: "align_software" },
       { flag: "-t", label: "Threads per locus", description: "Browser fixed to one thread.", type: "select", value: "1", options: [["1", "1 (browser fixed)"]], token: "thread" },
       { flag: "-j", label: "Concurrent loci", description: "Browser edition processes loci sequentially.", type: "select", value: "1", options: [["1", "1 (browser sequential)"]], token: "jobs" },
       { flag: "-ts", label: "Trimming software", description: "Browser fixed to PhyloPrep's bundled trimAlnSeq.py.", type: "select", value: "trimAlnSeq", options: [["trimAlnSeq", "trimAlnSeq.py (browser fixed)"]], token: "trim_software" },
@@ -168,12 +169,12 @@ const modules = [
     outputs: ["One FASTA per retained orthogroup", "map.tsv", "orthogroups.pathlist"],
     outputLabel: "Output directory name", outputHelp: "Equivalent to -o/--outdir. Browser-selected FASTA files are staged as a temporary sequence directory.", defaultOutput: "one-to-one_orthologs",
     parameters: [
-      { flag: "-m, --copy-mode", label: "Copy mode", description: "single-copy requires exactly one gene in each counted taxon; all-copies retains every listed copy.", type: "select", value: "single-copy", options: [["single-copy", "Single-copy"], ["all-copies", "All copies"]], token: "copy_mode" },
-      { flag: "--min-taxa", label: "Minimum occupied taxa", description: "Leave blank to require all selected taxa.", type: "number", value: "", token: "min_taxa" },
-      { flag: "-k, --keep-taxa", label: "Keep taxa", description: "Optional taxon names separated by commas or whitespace.", type: "text", value: "", token: "keep_taxa_text" },
-      { flag: "-d, --drop-taxa", label: "Drop taxa", description: "Optional taxon names separated by commas or whitespace.", type: "text", value: "", token: "drop_taxa_text" },
-      { flag: "-X", label: "Write unprefixed gene IDs", description: "Match OrthoFinder -X-style exported IDs.", type: "checkbox", value: false, token: "no_species_prefix" },
-      { flag: "--orthofinder-id-style", label: "Orthogroup ID style", description: "Auto-detect normal taxon-prefixed or OrthoFinder -X unprefixed table IDs.", type: "select", value: "auto", options: [["auto", "Auto-detect"], ["prefixed", "Prefixed"], ["unprefixed", "Unprefixed"]], token: "orthofinder_id_style" },
+      { flag: "-m, --copy-mode", label: "Copy mode", description: "single-copy requires exactly one gene in each counted taxon; all-copies retains every listed copy.", type: "select", value: "single-copy", options: [["single-copy", "single-copy"], ["all-copies", "all-copies"]], token: "copy_mode" },
+      { flag: "--min-taxa", label: "Minimum occupied taxa", description: "CLI default: all selected taxa. Filled from Orthogroups.tsv and keep/drop filters. Editing overrides the default; use the reset button to restore it.", type: "number", value: "", token: "min_taxa" },
+      { flag: "-k, --keep-taxa", label: "Keep taxa", description: "Default: all taxa. Optional taxon names separated by commas or whitespace.", type: "text", value: "", placeholder: "All taxa (default)", token: "keep_taxa_text" },
+      { flag: "-d, --drop-taxa", label: "Drop taxa", description: "Default: remove none. Optional taxon names separated by commas or whitespace.", type: "text", value: "", placeholder: "None (default)", token: "drop_taxa_text" },
+      { flag: "-X", label: "Write unprefixed gene IDs", description: "Checked: write geneID. Unchecked: always write Taxon_geneID, regardless of table ID style. Matching map.tsv IDs are updated automatically.", type: "checkbox", value: false, token: "no_species_prefix" },
+      { flag: "--orthofinder-id-style", label: "Orthogroup ID style", description: "Input ID style for sequence lookup only; exported prefixes are controlled by -X.", type: "select", value: "auto", options: [["auto", "auto"], ["prefixed", "prefixed"], ["unprefixed", "unprefixed"]], token: "orthofinder_id_style" },
       { flag: "-mo, --map-output", label: "Map file name", description: "Written inside the selected output directory.", type: "text", value: "map.tsv", token: "map_output_name" },
       { flag: "--pathlist-output", label: "Pathlist file name", description: "Written inside the selected output directory.", type: "text", value: "orthogroups.pathlist", token: "pathlist_output_name" },
     ],
@@ -242,8 +243,11 @@ const modules = [
     inputFields: [{ key: "cds", label: "CDS FASTA", flag: "-c, --cds" }, { key: "protaln", label: "Protein alignment FASTA", flag: "-p, --protaln" }],
     outputs: ["Codon alignment FASTA (-o, --out; stdout when omitted)"],
     outputLabel: "Output file name", outputHelp: "Codon alignment FASTA written by -o.", defaultOutput: "codon.aln.fasta",
-    parameters: [geneticCodeParameter()],
-    command: "python AA2Codon.py -c {cds} -p {protaln} -o {output} -g {genetic_code}",
+    parameters: [
+      { flag: "-g (optional)", label: "Validate translation", description: "CLI default: disabled. Enable to validate protein/CDS translations with the selected genetic code.", type: "checkbox", value: false, token: "validate_translation" },
+      geneticCodeParameter(),
+    ],
+    command: "python AA2Codon.py -c {cds} -p {protaln} -o {output}{validation_genetic_code_option}",
   },
   {
     script: "alignment_qc.py", title: "Alignment quality control", category: "QC", browser: true, inputListKey: "inputs",
@@ -256,7 +260,7 @@ const modules = [
     outputs: ["PREFIX.pass.tsv", "PREFIX.fail.tsv", "PREFIX.details.tsv"],
     outputLabel: "Report prefix", outputHelp: "The command-line script creates its QC reports from this prefix.", defaultOutput: "phyloprep-qc",
     parameters: [
-      { flag: "-st", label: "Sequence type", description: "Expected sequence type for the command-line quality-control workflow.", type: "select", value: "nucl", options: [["nucl", "Nucleotide"], ["prot", "Protein"], ["codon", "Codon"]], token: "seqtype" },
+      { flag: "-st", label: "Sequence type", description: "Expected sequence type for the command-line quality-control workflow.", type: "select", value: "nucl", options: [["nucl", "nucl"], ["prot", "prot"], ["codon", "codon"]], token: "seqtype" },
       geneticCodeParameter(),
       { flag: "--min-length", label: "Minimum length", description: "Minimum alignment or sequence length. Default: 1.", type: "number", value: "1" },
       { flag: "--max-n-ratio", label: "Maximum N ratio", description: "Maximum N-base ratio for nucleotide matrices or N-containing codon ratio in codon matrices. Range: 0–1.", type: "number", value: "1", step: "0.01", token: "max_n_ratio" },
@@ -290,7 +294,7 @@ const modules = [
   {
     script: "get_supergenes.py", title: "Build supergenes", category: "Matrix", browser: true,
     summary: "Combines compatible single-copy alignments into concatenated supermatrices.",
-    inputs: ["One or more alignment FASTA files (-i, --input)"], outputs: ["PREFIX.supergene.fasta", "Partition information and occupancy reports"],
+    inputs: ["One or more alignment FASTA files (-i, --input)"], outputs: ["PREFIX.fasta and PREFIX.phy", "Partition files and gene-inclusion report"],
     inputFields: [{ key: "inputs", label: "Alignment input files", flag: "-i, --input", multiple: true, pathList: true }],
     outputLabel: "Matrix prefix", outputHelp: "The command-line script derives supermatrix files from this prefix.", defaultOutput: "supergene",
     parameters: [{ flag: "--missing-taxa", label: "Missing taxa policy", description: "How records absent from a gene alignment are handled.", type: "select", value: "skip-gene", options: [["skip-gene", "skip-gene"], ["pad-gaps", "pad-gaps"]], token: "missing_taxa" }],
@@ -303,7 +307,7 @@ const modules = [
     inputFields: [{ key: "input", label: "Alignment FASTA", flag: "-i, --input" }],
     outputLabel: "Output file name", outputHelp: "Filtered FASTA written by -o.", defaultOutput: "filtered.fasta",
     parameters: [
-      { flag: "-st", label: "Sequence type", description: "Required sequence type for filtering.", type: "select", value: "nucl", options: [["nucl", "Nucleotide"], ["prot", "Protein"], ["codon", "Codon"]], token: "seqtype" },
+      { flag: "-st", label: "Sequence type", description: "Required sequence type for filtering.", type: "select", value: "nucl", options: [["nucl", "nucl"], ["prot", "prot"], ["codon", "codon"]], token: "seqtype" },
       { flag: "--min-length", label: "Minimum length", description: "Minimum retained sequence length.", type: "number", value: "0", token: "min_length" },
       { flag: "--max-gap-ratio", label: "Maximum gap ratio", description: "Maximum allowed gap fraction.", type: "number", value: "1", step: "0.01" },
       { flag: "--max-n-ratio", label: "Maximum N ratio", description: "Maximum allowed N fraction in nucleotide or codon sequences.", type: "number", value: "1", step: "0.01", token: "max_n_ratio" },
@@ -322,9 +326,8 @@ const modules = [
     parameters: [
       { flag: "--map-output", label: "Write map audit", description: "Save the resolved mapping table beside the output.", type: "checkbox", value: false, token: "map_output" },
       { flag: "--allow-duplicate-ids", label: "Allow duplicate renamed IDs", description: "Write duplicated IDs for downstream validation; normally they are rejected.", type: "checkbox", value: false, token: "allow_duplicate_ids" },
-      { flag: "--keep-special", label: "Keep special IDs", description: "Preserve special record identifiers when supported by the script.", type: "checkbox", value: false, token: "keep_special" },
     ],
-    command: "python rename_taxa.py -i {input} -o {output}{mapping_option}{map_output_option}{allow_duplicate_ids_option}{keep_special_option}",
+    command: "python rename_taxa.py -i {input} -o {output}{mapping_option}{map_output_option}{allow_duplicate_ids_option}",
   },
   {
     script: "trimAlnSeq.py", title: "Trim alignment sequences", category: "Trimming", browser: true,
@@ -333,7 +336,7 @@ const modules = [
     inputFields: [{ key: "input", label: "Alignment FASTA", flag: "-i, --input" }],
     outputLabel: "Output file name", outputHelp: "Trimmed FASTA written by -o when provided.", defaultOutput: "trimmed.aln",
     parameters: [
-      { flag: "-st", label: "Sequence type", description: "Alignment sequence type.", type: "select", value: "codon", options: [["codon", "Codon"], ["prot", "Protein"], ["nucl", "Nucleotide"]], token: "seqtype" },
+      { flag: "-st", label: "Sequence type", description: "Alignment sequence type.", type: "select", value: "codon", options: [["codon", "codon"], ["prot", "prot"], ["nucl", "nucl"]], token: "seqtype" },
       { flag: "-G", label: "Maximum gap proportion", description: "Column gap threshold for trimming. Range: 0–1.", type: "number", value: "0.2", step: "0.01", token: "gap_ratio" },
       { flag: "-N", label: "Maximum N proportion", description: "Column N threshold for nucleotide or codon alignments. Range: 0–1.", type: "number", value: "0.2", step: "0.01", token: "n_ratio" },
       { flag: "-X", label: "Maximum X proportion", description: "Column X threshold for protein alignments. Range: 0–1.", type: "number", value: "0.2", step: "0.01", token: "x_ratio" },
@@ -347,7 +350,7 @@ const modules = [
     inputs: ["Two-sequence aligned FASTA (-i, --input)"], outputs: ["AXT file (-o, --out)"],
     inputFields: [{ key: "input", label: "Two-sequence aligned FASTA", flag: "-i, --input" }],
     outputLabel: "Output file name", outputHelp: "AXT output generated locally in the browser.", defaultOutput: "alignment.axt",
-    parameters: [{ flag: "-st", label: "Sequence type", description: "Sequence type used by the converter.", type: "select", value: "DNA", options: [["DNA", "DNA"], ["protein", "Protein"]], token: "seqtype" }], command: "python fasta2axt.py -i {input} -o {output} -st {seqtype}",
+    parameters: [{ flag: "-st", label: "Sequence type", description: "Sequence type used by the converter.", type: "select", value: "DNA", options: [["DNA", "DNA"], ["protein", "protein"]], token: "seqtype" }], command: "python fasta2axt.py -i {input} -o {output} -st {seqtype}",
   },
   {
     script: "fasta2nex.py", title: "Convert FASTA to NEXUS", category: "Convert", browser: true,
@@ -355,7 +358,7 @@ const modules = [
     inputs: ["Aligned FASTA (-i, --input)"], outputs: ["NEXUS file (-o, --out)"],
     inputFields: [{ key: "input", label: "Aligned FASTA", flag: "-i, --input" }],
     outputLabel: "Output file name", outputHelp: "NEXUS output generated locally in the browser.", defaultOutput: "alignment.nex",
-    parameters: [{ flag: "-st", label: "Sequence type", description: "Alignment type used by the converter.", type: "select", value: "DNA", options: [["DNA", "DNA"], ["RNA", "RNA"], ["protein", "Protein"]], token: "seqtype" }], command: "python fasta2nex.py -i {input} -o {output} -st {seqtype}",
+    parameters: [{ flag: "-st", label: "Sequence type", description: "Alignment type used by the converter.", type: "select", value: "DNA", options: [["DNA", "DNA"], ["RNA", "RNA"], ["protein", "protein"]], token: "seqtype" }], command: "python fasta2nex.py -i {input} -o {output} -st {seqtype}",
   },
   {
     script: "fasta2phy.py", title: "Convert FASTA to PHYLIP", category: "Convert", browser: true,
@@ -363,10 +366,12 @@ const modules = [
     inputs: ["Aligned FASTA (-i, --input)"], outputs: ["PHYLIP file (-o, --out)"],
     inputFields: [{ key: "input", label: "Aligned FASTA", flag: "-i, --input" }],
     outputLabel: "Output file name", outputHelp: "PHYLIP output generated locally in the browser.", defaultOutput: "alignment.phy",
-    parameters: [{ flag: "-st", label: "Sequence type", description: "Sequence type used by the converter.", type: "select", value: "DNA", options: [["DNA", "DNA"], ["protein", "Protein"]], token: "seqtype" }], command: "python fasta2phy.py -i {input} -o {output} -st {seqtype}",
+    parameters: [{ flag: "-st", label: "Sequence type", description: "Sequence type used by the converter.", type: "select", value: "DNA", options: [["DNA", "DNA"], ["protein", "protein"]], token: "seqtype" }], command: "python fasta2phy.py -i {input} -o {output} -st {seqtype}",
   },
 ];
 
+let versionManifest;
+let versionLoadFailed = false;
 let activeModuleIndex = 0;
 let outputDirectoryHandle;
 let generatedFiles = [];
@@ -385,19 +390,49 @@ let pendingTransfer;
 
 function activeModule() { return modules[activeModuleIndex]; }
 
+function scriptMetadata(script) { return versionManifest?.files?.find(file => file.name === script); }
+function scriptVersionLabel(script) {
+  return scriptMetadata(script)?.version || (versionLoadFailed ? "Version unavailable" : versionManifest ? "Version not declared" : "Loading version…");
+}
+function externalAlignerLabel(tool, defaultLabel = false) {
+  const name = tool === "mafft" ? "MAFFT E-INS-i" : "MUSCLE";
+  const version = versionManifest?.aligners?.[tool]?.packageVersion;
+  return `${name} (Biowasm${version ? ` package ${version}` : ""}${defaultLabel ? ", default" : ""})`;
+}
+function refreshVersionDisplay() {
+  const entry = scriptMetadata(activeModule().script);
+  elements.scriptVersion.textContent = `${scriptVersionLabel(activeModule().script)}${entry?.sha256 ? ` · source ${entry.sha256.slice(0, 12)}` : ""}`;
+  for (const control of elements.parameterList.querySelectorAll('[data-parameter="align_software"]')) {
+    for (const option of control.options) option.textContent = externalAlignerLabel(option.value, option.value === "mafft");
+  }
+}
+async function loadVersionManifest() {
+  try {
+    const response = await fetch("engine/manifest.json", { cache: "no-cache" });
+    if (!response.ok) throw new Error("Version manifest unavailable");
+    const manifest = await response.json();
+    if (!Array.isArray(manifest.files)) throw new Error("Invalid version manifest");
+    versionManifest = manifest;
+  } catch { versionLoadFailed = true; }
+  renderCatalog();
+  refreshVersionDisplay();
+  updateCommand();
+}
+
+
 function implementationProfile(module) {
   if (module.browserWorkflow === "phyloprep") {
     return {
       key: "compatible",
       label: "Browser PhyloPrep pipeline",
-      note: "The browser orchestrates the repository's original preparation modules locally: MSAP preprocessing/back-translation/trimming in Pyodide, MUSCLE 5.1.0 or optional MAFFT E-INS-i 7.520 in Biowasm, then provenance-aware paired codon/protein QC, renaming, concatenation, codon splitting, four-fold extraction and format-conversion code. Linux process-management features are replaced by a browser-safe sequential adapter.",
+      note: "The browser orchestrates the repository's original preparation modules locally: MSAP preprocessing/back-translation/trimming in Pyodide, MAFFT E-INS-i (default) or MUSCLE in Biowasm, then provenance-aware paired codon/protein QC, renaming, concatenation, codon splitting, four-fold extraction and format-conversion code. Linux process-management features are replaced by a browser-safe sequential adapter.",
     };
   }
   if (module.browserWorkflow === "batch") {
     return {
       key: "compatible",
       label: "Browser batch adapter",
-      note: "Processes loci sequentially in the browser with the same MSAP sequence workflow and Biowasm MUSCLE 5.1.0 or MAFFT E-INS-i 7.520, then generates batch-style path lists and a merged sequence-change report. Linux process groups, file locks and concurrent jobs are intentionally not used in the browser.",
+      note: "Processes loci sequentially in the browser with the same MSAP sequence workflow and Biowasm MAFFT E-INS-i (default) or MUSCLE, then generates batch-style path lists and a merged sequence-change report. Linux process groups, file locks and concurrent jobs are intentionally not used in the browser.",
     };
   }
   if (module.fullWorkflow) {
@@ -478,7 +513,10 @@ function renderCatalog() {
       const title = document.createElement("span");
       title.className = "script-category";
       title.textContent = module.title;
-      button.append(name, title);
+      const version = document.createElement("span");
+      version.className = "script-catalog-version";
+      version.textContent = scriptVersionLabel(module.script);
+      button.append(name, title, version);
       button.addEventListener("click", () => selectModule(index));
       group.append(button);
     });
@@ -539,6 +577,7 @@ function renderParameterControl(parameter) {
       control.type = parameter.type || "text";
       control.value = parameter.value ?? "";
       if (parameter.step) control.step = parameter.step;
+      if (parameter.placeholder) control.placeholder = parameter.placeholder;
     }
     control.id = id;
     control.dataset.parameter = parameterToken(parameter);
@@ -553,6 +592,21 @@ function renderParameterControl(parameter) {
       description.append(reference);
     }
     card.append(label, description, control);
+    if (parameterToken(parameter) === "min_taxa") {
+      control.dataset.autoDefault = "true";
+      control.placeholder = "All selected taxa (select table first)";
+      control.min = "2";
+      control.addEventListener("input", () => { control.dataset.autoDefault = control.value === "" ? "true" : "false"; });
+      const reset = document.createElement("button");
+      reset.type = "button";
+      reset.className = "copy-button";
+      reset.textContent = "Use CLI default (all selected taxa)";
+      reset.addEventListener("click", () => {
+        control.dataset.autoDefault = "true";
+        void refreshOrthogroupDefaults().then(updateCommand);
+      });
+      card.append(reset);
+    }
   }
   return card;
 }
@@ -600,7 +654,7 @@ function renderParameters(module) {
       elements.parameterList.append(group);
     }
     elements.parameterList.querySelectorAll("input, select").forEach((control) => {
-      const refresh = () => { updateContextualParameters(); updateCommand(); void updatePreflight(); };
+      const refresh = () => { updateContextualParameters(); updateCommand(); void refreshOrthogroupDefaults().then(updateCommand); void updatePreflight(); };
       control.addEventListener("input", refresh);
       control.addEventListener("change", refresh);
     });
@@ -616,7 +670,7 @@ function updateContextualParameters() {
     const card = elements.parameterList.querySelector(`[data-parameter-token="${token}"]`);
     if (card) card.dataset.contextHidden = String(Boolean(hidden));
   };
-  hide("genetic_code", seqtype === "prot" || seqtype === "nucl");
+  hide("genetic_code", script === "AA2Codon.py" ? !elements.parameterList.querySelector('[data-parameter="validate_translation"]')?.checked : seqtype === "prot" || seqtype === "nucl");
   hide("protein_stop_symbol", seqtype !== "prot");
   hide("n_ratio", seqtype === "prot" || Boolean(notrim));
   hide("x_ratio", seqtype === "nucl" || Boolean(notrim));
@@ -796,6 +850,7 @@ function rawParameterValues() {
   if (parameterValues.seqtype === "nucl" || (module.script === "alignment_qc.py" && parameterValues.seqtype === "codon")) {
     delete parameterValues.min_protein_pis;
   }
+  if (elements.parameterList.querySelector('[data-parameter="min_taxa"]')?.dataset.autoDefault === "true") delete parameterValues.min_taxa;
   return parameterValues;
 }
 
@@ -829,6 +884,7 @@ function valuesForCommand() {
     prefix: cliQuote(outputPath),
     seqtype: parameterValues.seqtype || "nucl",
     genetic_code: parameterValues.genetic_code || "1",
+    validation_genetic_code_option: parameterValues.validate_translation ? ` -g ${parameterValues.genetic_code || "1"}` : "",
     protein_stop_symbol: parameterValues.protein_stop_symbol || "*",
     protein_stop_symbol_cli: cliQuote(parameterValues.protein_stop_symbol || "*"),
     taxon_separator_cli: cliQuote(parameterValues.taxon_separator || "|"),
@@ -849,7 +905,6 @@ function valuesForCommand() {
       : "",
     map_output_option: parameterValues.map_output ? ` --map-output ${cliQuote(mapOutputPath)}` : "",
     allow_duplicate_ids_option: parameterValues.allow_duplicate_ids ? " --allow-duplicate-ids" : "",
-    keep_special_option: parameterValues.keep_special ? " --keep-special" : "",
     notrim_option: parameterValues.notrim ? " -n" : "",
     strip_taxon_prefix_option: parameterValues.strip_taxon_prefix ? " --strip-taxon-prefix" : "",
     no_species_prefix_option: parameterValues.no_species_prefix ? " -X" : "",
@@ -867,7 +922,7 @@ function updateCommand() {
   const values = valuesForCommand();
   let command = activeModule().command.replace(/\{([a-z_]+)\}/g, (_, key) => values[key] ?? `{${key}}`);
   if (["phyloprep.py", "MSAP_batch.py"].includes(activeModule().script) && values.align_software === "mafft") {
-    command += "\n# Web note: MAFFT E-INS-i 7.520 (Biowasm) is selected here; CLI -s mafft runs upstream mafft --auto and may produce different alignments.";
+    command += `\n# Web note: ${externalAlignerLabel("mafft")} is selected here; CLI -s mafft runs upstream mafft --auto and may produce different alignments.`;
   }
   elements.command.textContent = command;
 }
@@ -937,9 +992,33 @@ function selectModule(index) {
   }
   renderCatalog();
   renderParameters(module);
+  refreshVersionDisplay();
   resetGeneratedOutput();
   setLog("Select the required input file or files, then run the local workflow.");
   updateCommand();
+}
+
+const orthogroupHeaderCache = new WeakMap();
+let orthogroupDefaultGeneration = 0;
+async function refreshOrthogroupDefaults() {
+  if (activeModule().script !== "extract_orthofinder_orthogroups.py") return;
+  const generation = ++orthogroupDefaultGeneration;
+  const control = elements.parameterList.querySelector('[data-parameter="min_taxa"]');
+  if (!control || control.dataset.autoDefault !== "true") return;
+  const table = selectedInputFiles.get("orthogroups")?.[0];
+  if (!table) { control.value = ""; return; }
+  try {
+    if (!orthogroupHeaderCache.has(table)) {
+      orthogroupHeaderCache.set(table, table.slice(0, 1024 * 1024).text().then(PhyloPrepOrthogroupDefaults.taxaFromHeader));
+    }
+    const taxa = await orthogroupHeaderCache.get(table);
+    if (generation !== orthogroupDefaultGeneration || control.dataset.autoDefault !== "true") return;
+    const keep = elements.parameterList.querySelector('[data-parameter="keep_taxa_text"]')?.value;
+    const drop = elements.parameterList.querySelector('[data-parameter="drop_taxa_text"]')?.value;
+    control.value = taxa.length ? String(PhyloPrepOrthogroupDefaults.selectedTaxonCount(taxa, keep, drop)) : "";
+  } catch {
+    if (generation === orthogroupDefaultGeneration) control.value = "";
+  }
 }
 
 async function refreshTaxonSelectors() {
@@ -1082,6 +1161,7 @@ async function renderInputFiles() {
     elements.inputFilesHelp.textContent = "Select the files required by this module."
   }
   await updatePathlistFolderNotices();
+  await refreshOrthogroupDefaults();
   await refreshTaxonSelectors();
   await updatePreflight();
   resetGeneratedOutput();
@@ -1516,10 +1596,10 @@ async function runMsapBrowserWorkflow(request) {
   const probe = await runInWorker({ type: "msap-probe", ...request });
   if (!probe.alignmentInput) throw new Error("MSAP.py did not provide an input for the selected browser aligner.");
 
-  const alignerLabel = probe.tool === "mafft" ? "MAFFT E-INS-i 7.520 (Biowasm)" : "MUSCLE 5.1.0";
+  const alignerLabel = externalAlignerLabel(probe.tool);
   elements.cancelRun.hidden = false;
-  setRunStage(2, `Running Biowasm ${alignerLabel}`);
-  elements.runtimeStatus.textContent = `Biowasm ${alignerLabel} running`;
+  setRunStage(2, `Running ${alignerLabel}`);
+  elements.runtimeStatus.textContent = `${alignerLabel} running`;
   const alignmentContent = await runBrowserAlignment(probe.alignmentInput, probe.tool, request.options.seqtype || "codon");
 
   setRunStage(2, "Finishing original MSAP.py workflow");
@@ -1587,6 +1667,7 @@ async function runMsapBatchBrowserWorkflow(request) {
     });
   }
   const progressStarted = performance.now();
+  let engineMetadata;
   for (let index = 0; index < inputs.length; index += 1) {
     const input = inputs[index];
     showLocusProgress(index, inputs.length, progressStarted, `Aligning ${input.name}`);
@@ -1600,6 +1681,7 @@ async function runMsapBatchBrowserWorkflow(request) {
       clearInterval(heartbeat);
     }
     showLocusProgress(index + 1, inputs.length, progressStarted, input.name);
+    engineMetadata = result.engineMetadata;
     outputs.push(...result.files.map((file) => ({ name: file.name, content: file.content })));
   }
   outputs.push(...batchPathLists(outputs));
@@ -1608,8 +1690,9 @@ async function runMsapBatchBrowserWorkflow(request) {
   if (mergedReport) outputs.push({ name: "reports/sequence_changes.tsv", content: mergedReport });
   return {
     files: outputs,
+    engineMetadata,
     summary: `Processed ${inputs.length} loci with the browser MSAP batch workflow.`,
-    provenance: `Browser MSAP_batch adapter · untouched MSAP.py + Biowasm ${request.options.align_software === "mafft" ? "MAFFT E-INS-i 7.520 (Biowasm)" : "MUSCLE 5.1.0"}`,
+    provenance: `Browser MSAP_batch adapter · untouched MSAP.py + ${externalAlignerLabel(request.options.align_software || "mafft")}`,
   };
 }
 
@@ -1669,7 +1752,12 @@ async function buildRunManifest(module, request, result, outputs) {
       sha256: await sha256Text(file.content),
     });
   }
+  const engine = result.engineMetadata || versionManifest;
+  const script = engine?.files?.find(file => file.name === module.script);
   return JSON.stringify({
+    script_version: script?.version || null,
+    source_sha256: script?.sha256 || null,
+    engine_metadata: engine || null,
     schema: "phyloprep-web-run-v1",
     created_at: new Date().toISOString(),
     module: module.script,
@@ -1682,7 +1770,7 @@ async function buildRunManifest(module, request, result, outputs) {
     runtime: {
       pyodide: "0.27.2",
       aligner: ["phyloprep.py", "MSAP_batch.py"].includes(module.script)
-        ? (request.options.align_software === "mafft" ? "Biowasm MAFFT E-INS-i 7.520" : "Biowasm MUSCLE 5.1.0")
+        ? externalAlignerLabel(request.options.align_software || "mafft")
         : null,
       user_agent: navigator.userAgent,
     },
@@ -1863,3 +1951,5 @@ if ("serviceWorker" in navigator) {
 }
 
 selectModule(activeModuleIndex);
+
+void loadVersionManifest();

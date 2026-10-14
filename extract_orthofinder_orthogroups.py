@@ -193,6 +193,7 @@ def extract_orthologs(orthogroups: Path, sequence_directory: Path, outdir: Path,
     check_output_path(map_output, inputs=inputs)
     check_output_path(pathlist_output, inputs=inputs + [map_output])
     prepared, map_rows = [], []
+    mapped_taxa = {}
     # Validate every orthogroup before publishing any output, so a missing sequence
     # cannot leave a partially updated output directory.
     for orthogroup, cells, present_taxa in selected:
@@ -201,13 +202,13 @@ def extract_orthologs(orthogroups: Path, sequence_directory: Path, outdir: Path,
         output_rows, seen_ids = [], set()
         for taxon in present_taxa:
             for table_id in genes_in_cell(cells[taxon], orthogroup, taxon):
-                normalized_table_id, gene_id = table_gene_id(table_id, taxon, id_style)
+                _normalized_table_id, gene_id = table_gene_id(table_id, taxon, id_style)
                 if gene_id not in sequences_by_taxon[taxon]:
                     raise ValueError(
                         f"{orthogroup}: sequence ID '{gene_id}' for taxon '{taxon}' was not found in {sequence_files[taxon]}. "
                         "Check that the input FASTAs and Orthogroups.tsv use identical OrthoFinder-normalized IDs."
                     )
-                export_id = gene_id if no_species_prefix else normalized_table_id
+                export_id = gene_id if no_species_prefix else orthofinder_safe_id(taxon) + "_" + gene_id
                 if any(char.isspace() for char in export_id):
                     raise ValueError(f"{orthogroup}: output ID contains whitespace: {export_id!r}")
                 if export_id in seen_ids:
@@ -217,6 +218,12 @@ def extract_orthologs(orthogroups: Path, sequence_directory: Path, outdir: Path,
                     )
                 seen_ids.add(export_id)
                 output_rows.append((export_id, gene_id, taxon, sequences_by_taxon[taxon][gene_id]))
+                if export_id in mapped_taxa and mapped_taxa[export_id] != taxon:
+                    raise ValueError(
+                        f"Output ID '{export_id}' maps to multiple taxa across orthogroups: "
+                        f"{mapped_taxa[export_id]} and {taxon}. Omit -X or use globally unique gene IDs."
+                    )
+                mapped_taxa[export_id] = taxon
                 map_rows.append((export_id, taxon))
         prepared.append((output, orthogroup, output_rows))
     output_fastas = [output for output, _orthogroup, _output_rows in prepared]
@@ -258,8 +265,10 @@ paralogs for gene-tree methods such as ASTRAL-Pro3. --min-taxa is evaluated
 under the chosen mode. Its maximum is the number of taxa remaining after taxon
 filtering; its default is that maximum. The default --orthofinder-id-style auto
 detects taxon-prefixed table IDs (normal OrthoFinder output) or unprefixed IDs
-(OrthoFinder -X output). Source FASTA lookup and default exported IDs preserve
-that detected style; -X always emits unprefixed gene IDs. Use
+(OrthoFinder -X output). Detection controls source FASTA lookup only.
+Default exported IDs are always Taxon_geneID; -X always emits geneID without
+adding the taxon prefix. An existing table prefix is stripped before the
+output policy is applied, so normal prefixed tables are not double-prefixed. Use
 --orthofinder-id-style prefixed|unprefixed only to override auto detection for
 a nonstandard converted table. map.tsv contains one
 'FASTA_ID<TAB>Taxa' row for every written sequence; its first column always
@@ -278,7 +287,7 @@ absolute output FASTA paths and can be passed directly to phyloprep.py -i.
     parser.add_argument("--min-taxa", type=int, metavar="N",
                         help="Require N occupied taxa after filtering; occupancy follows --copy-mode (default: all selected taxa).")
     parser.add_argument("-X", action="store_true", dest="no_species_prefix",
-                        help="Write unprefixed gene IDs, matching OrthoFinder -X.")
+                        help="Write gene IDs without adding the taxon prefix. Without -X, always write Taxon_geneID, regardless of input table style.")
     parser.add_argument("--orthofinder-id-style", choices=("auto", "prefixed", "unprefixed"), default="auto",
                         help="Orthogroups.tsv ID style: auto-detect (default), prefixed (normal OrthoFinder), or unprefixed (OrthoFinder -X).")
     parser.add_argument("-o", "--outdir", default="one-to-one_orthologs", metavar="DIR", help="Output directory.")
