@@ -1,7 +1,7 @@
 (() => {
   const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
-  const category = name => name.startsWith('matrices/') ? 'matrices' : name.startsWith('qc/') ? 'qc' : name.startsWith('reports/') ? 'reports' : 'other';
-  const rank = { matrices: 0, qc: 1, reports: 2, other: 3 };
+  const category = name => name === 'phyloprep-run.json' ? 'run' : name.startsWith('reports/') ? 'reports' : name.startsWith('matrices/') ? 'matrices' : name.startsWith('qc/') ? 'qc' : 'other';
+  const rank = { run: 0, reports: 1, matrices: 2, qc: 3, other: 4 };
   function createEntries(files) {
     return files.map((file, index) => ({ file, index, category: category(file.name) }))
       .sort((a, b) => rank[a.category] - rank[b.category] || collator.compare(a.file.name, b.file.name) || a.index - b.index);
