@@ -11,6 +11,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description="Convert Proteinortho group output into Orthogroup-by-taxon TSV for extract_orthofinder_orthogroups.py.")
     parser.add_argument("-i", "--input", required=True, metavar="PROTEINORTHO", help="Proteinortho tab-separated result table.")
     parser.add_argument("-o", "--output", required=True, metavar="TSV", help="Standard Orthogroup TSV.")
+    parser.add_argument("-v", "--version", action="version", version="v1.0.0")
     args = parser.parse_args(argv)
     try:
         taxa, groups = parse_matrix_table(Path(args.input), metadata_columns=3, header_comment=True, group_prefix="POG")

@@ -38,10 +38,10 @@ jobs:
           python -m pip install --upgrade pytest biopython
       - name: Run Python test suite
         run: python -m pytest -q
-      - name: Run browser bundle smoke checks
-        run: node site/smoke-test.mjs
       - name: Bundle original browser scripts
         run: node site/build-engine.mjs
+      - name: Run browser bundle smoke checks
+        run: node site/smoke-test.mjs
       - name: Upload static site artifact
         uses: actions/upload-pages-artifact@v3
         with:

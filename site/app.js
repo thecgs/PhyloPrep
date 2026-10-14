@@ -8,6 +8,7 @@ const elements = {
   scriptList: document.querySelector("#script-list"),
   selectedName: document.querySelector("#selected-name"),
   selectedSummary: document.querySelector("#selected-summary"),
+  scriptVersion: document.querySelector("#script-version"),
   parameterList: document.querySelector("#parameter-list"),
   workspaceScript: document.querySelector("#workspace-script"),
   workspaceMode: document.querySelector("#workspace-mode"),
@@ -115,7 +116,7 @@ const modules = [
       { flag: "-st", label: "Sequence type", description: "Browser pipeline supports codon, protein, and nucleotide modes. Pseudogene/MACSE remains CLI-only.", type: "select", value: "codon", options: [["codon", "codon"], ["prot", "prot"], ["nucl", "nucl"]], token: "seqtype" },
       geneticCodeParameter(),
       { flag: "--missing-taxa", label: "Missing taxa policy", description: "Skip genes missing taxa, or pad missing taxa with gaps during concatenation.", type: "select", value: "skip-gene", options: [["skip-gene", "skip-gene"], ["pad-gaps", "pad-gaps"]], token: "missing_taxa" },
-      { flag: "-s", label: "Alignment software", description: "Runs locally through Biowasm/WebAssembly. MAFFT E-INS-i is the browser default through Biowasm's compiled tbfast + dvtditr pipeline; CLI -s mafft continues to use upstream mafft --auto and can differ.", type: "select", value: "mafft", options: [["mafft", "MAFFT E-INS-i 7.520 (Biowasm, default)"], ["muscle", "MUSCLE 5.1.0 (Biowasm)"]], token: "align_software" },
+      { flag: "-s", label: "Alignment software", description: "Runs locally through Biowasm/WebAssembly. MAFFT E-INS-i is the browser default through Biowasm's compiled tbfast + dvtditr pipeline; CLI -s mafft continues to use upstream mafft --auto and can differ.", type: "select", value: "mafft", options: [["mafft", "MAFFT E-INS-i (Biowasm, default)"], ["muscle", "MUSCLE (Biowasm)"]], token: "align_software" },
       { flag: "-t", label: "Threads per locus", description: "Browser fixed to one thread for GitHub Pages/WebAssembly compatibility.", type: "select", value: "1", options: [["1", "1 (browser fixed)"]], token: "thread" },
       { flag: "-j", label: "Concurrent loci", description: "Browser edition processes loci sequentially to keep memory predictable.", type: "select", value: "1", options: [["1", "1 (browser sequential)"]], token: "jobs" },
       { flag: "-ts", label: "Trimming software", description: "Browser fixed to PhyloPrep's bundled trimAlnSeq.py.", type: "select", value: "trimAlnSeq", options: [["trimAlnSeq", "trimAlnSeq.py (browser fixed)"]], token: "trim_software" },
@@ -145,7 +146,7 @@ const modules = [
     parameters: [
       { flag: "-st", label: "Sequence type", description: "Browser batch supports codon, protein, and nucleotide modes. Pseudogene/MACSE remains CLI-only.", type: "select", value: "codon", options: [["codon", "codon"], ["prot", "prot"], ["nucl", "nucl"]], token: "seqtype" },
       geneticCodeParameter(),
-      { flag: "-s", label: "Alignment software", description: "Runs locally through Biowasm/WebAssembly. MAFFT E-INS-i is the browser default through Biowasm's compiled tbfast + dvtditr pipeline; CLI -s mafft continues to use upstream mafft --auto and can differ.", type: "select", value: "mafft", options: [["mafft", "MAFFT E-INS-i 7.520 (Biowasm, default)"], ["muscle", "MUSCLE 5.1.0 (Biowasm)"]], token: "align_software" },
+      { flag: "-s", label: "Alignment software", description: "Runs locally through Biowasm/WebAssembly. MAFFT E-INS-i is the browser default through Biowasm's compiled tbfast + dvtditr pipeline; CLI -s mafft continues to use upstream mafft --auto and can differ.", type: "select", value: "mafft", options: [["mafft", "MAFFT E-INS-i (Biowasm, default)"], ["muscle", "MUSCLE (Biowasm)"]], token: "align_software" },
       { flag: "-t", label: "Threads per locus", description: "Browser fixed to one thread.", type: "select", value: "1", options: [["1", "1 (browser fixed)"]], token: "thread" },
       { flag: "-j", label: "Concurrent loci", description: "Browser edition processes loci sequentially.", type: "select", value: "1", options: [["1", "1 (browser sequential)"]], token: "jobs" },
       { flag: "-ts", label: "Trimming software", description: "Browser fixed to PhyloPrep's bundled trimAlnSeq.py.", type: "select", value: "trimAlnSeq", options: [["trimAlnSeq", "trimAlnSeq.py (browser fixed)"]], token: "trim_software" },
@@ -369,6 +370,8 @@ const modules = [
   },
 ];
 
+let versionManifest;
+let versionLoadFailed = false;
 let activeModuleIndex = 0;
 let outputDirectoryHandle;
 let generatedFiles = [];
@@ -387,19 +390,49 @@ let pendingTransfer;
 
 function activeModule() { return modules[activeModuleIndex]; }
 
+function scriptMetadata(script) { return versionManifest?.files?.find(file => file.name === script); }
+function scriptVersionLabel(script) {
+  return scriptMetadata(script)?.version || (versionLoadFailed ? "Version unavailable" : versionManifest ? "Version not declared" : "Loading version…");
+}
+function externalAlignerLabel(tool, defaultLabel = false) {
+  const name = tool === "mafft" ? "MAFFT E-INS-i" : "MUSCLE";
+  const version = versionManifest?.aligners?.[tool]?.packageVersion;
+  return `${name} (Biowasm${version ? ` package ${version}` : ""}${defaultLabel ? ", default" : ""})`;
+}
+function refreshVersionDisplay() {
+  const entry = scriptMetadata(activeModule().script);
+  elements.scriptVersion.textContent = `${scriptVersionLabel(activeModule().script)}${entry?.sha256 ? ` · source ${entry.sha256.slice(0, 12)}` : ""}`;
+  for (const control of elements.parameterList.querySelectorAll('[data-parameter="align_software"]')) {
+    for (const option of control.options) option.textContent = externalAlignerLabel(option.value, option.value === "mafft");
+  }
+}
+async function loadVersionManifest() {
+  try {
+    const response = await fetch("engine/manifest.json", { cache: "no-cache" });
+    if (!response.ok) throw new Error("Version manifest unavailable");
+    const manifest = await response.json();
+    if (!Array.isArray(manifest.files)) throw new Error("Invalid version manifest");
+    versionManifest = manifest;
+  } catch { versionLoadFailed = true; }
+  renderCatalog();
+  refreshVersionDisplay();
+  updateCommand();
+}
+
+
 function implementationProfile(module) {
   if (module.browserWorkflow === "phyloprep") {
     return {
       key: "compatible",
       label: "Browser PhyloPrep pipeline",
-      note: "The browser orchestrates the repository's original preparation modules locally: MSAP preprocessing/back-translation/trimming in Pyodide, MAFFT E-INS-i 7.520 (default) or MUSCLE 5.1.0 in Biowasm, then provenance-aware paired codon/protein QC, renaming, concatenation, codon splitting, four-fold extraction and format-conversion code. Linux process-management features are replaced by a browser-safe sequential adapter.",
+      note: "The browser orchestrates the repository's original preparation modules locally: MSAP preprocessing/back-translation/trimming in Pyodide, MAFFT E-INS-i (default) or MUSCLE in Biowasm, then provenance-aware paired codon/protein QC, renaming, concatenation, codon splitting, four-fold extraction and format-conversion code. Linux process-management features are replaced by a browser-safe sequential adapter.",
     };
   }
   if (module.browserWorkflow === "batch") {
     return {
       key: "compatible",
       label: "Browser batch adapter",
-      note: "Processes loci sequentially in the browser with the same MSAP sequence workflow and Biowasm MUSCLE 5.1.0 or MAFFT E-INS-i 7.520, then generates batch-style path lists and a merged sequence-change report. Linux process groups, file locks and concurrent jobs are intentionally not used in the browser.",
+      note: "Processes loci sequentially in the browser with the same MSAP sequence workflow and Biowasm MAFFT E-INS-i (default) or MUSCLE, then generates batch-style path lists and a merged sequence-change report. Linux process groups, file locks and concurrent jobs are intentionally not used in the browser.",
     };
   }
   if (module.fullWorkflow) {
@@ -480,7 +513,10 @@ function renderCatalog() {
       const title = document.createElement("span");
       title.className = "script-category";
       title.textContent = module.title;
-      button.append(name, title);
+      const version = document.createElement("span");
+      version.className = "script-catalog-version";
+      version.textContent = scriptVersionLabel(module.script);
+      button.append(name, title, version);
       button.addEventListener("click", () => selectModule(index));
       group.append(button);
     });
@@ -886,7 +922,7 @@ function updateCommand() {
   const values = valuesForCommand();
   let command = activeModule().command.replace(/\{([a-z_]+)\}/g, (_, key) => values[key] ?? `{${key}}`);
   if (["phyloprep.py", "MSAP_batch.py"].includes(activeModule().script) && values.align_software === "mafft") {
-    command += "\n# Web note: MAFFT E-INS-i 7.520 (Biowasm) is selected here; CLI -s mafft runs upstream mafft --auto and may produce different alignments.";
+    command += `\n# Web note: ${externalAlignerLabel("mafft")} is selected here; CLI -s mafft runs upstream mafft --auto and may produce different alignments.`;
   }
   elements.command.textContent = command;
 }
@@ -956,6 +992,7 @@ function selectModule(index) {
   }
   renderCatalog();
   renderParameters(module);
+  refreshVersionDisplay();
   resetGeneratedOutput();
   setLog("Select the required input file or files, then run the local workflow.");
   updateCommand();
@@ -1559,10 +1596,10 @@ async function runMsapBrowserWorkflow(request) {
   const probe = await runInWorker({ type: "msap-probe", ...request });
   if (!probe.alignmentInput) throw new Error("MSAP.py did not provide an input for the selected browser aligner.");
 
-  const alignerLabel = probe.tool === "mafft" ? "MAFFT E-INS-i 7.520 (Biowasm)" : "MUSCLE 5.1.0 (Biowasm)";
+  const alignerLabel = externalAlignerLabel(probe.tool);
   elements.cancelRun.hidden = false;
-  setRunStage(2, `Running Biowasm ${alignerLabel}`);
-  elements.runtimeStatus.textContent = `Biowasm ${alignerLabel} running`;
+  setRunStage(2, `Running ${alignerLabel}`);
+  elements.runtimeStatus.textContent = `${alignerLabel} running`;
   const alignmentContent = await runBrowserAlignment(probe.alignmentInput, probe.tool, request.options.seqtype || "codon");
 
   setRunStage(2, "Finishing original MSAP.py workflow");
@@ -1630,6 +1667,7 @@ async function runMsapBatchBrowserWorkflow(request) {
     });
   }
   const progressStarted = performance.now();
+  let engineMetadata;
   for (let index = 0; index < inputs.length; index += 1) {
     const input = inputs[index];
     showLocusProgress(index, inputs.length, progressStarted, `Aligning ${input.name}`);
@@ -1643,6 +1681,7 @@ async function runMsapBatchBrowserWorkflow(request) {
       clearInterval(heartbeat);
     }
     showLocusProgress(index + 1, inputs.length, progressStarted, input.name);
+    engineMetadata = result.engineMetadata;
     outputs.push(...result.files.map((file) => ({ name: file.name, content: file.content })));
   }
   outputs.push(...batchPathLists(outputs));
@@ -1651,8 +1690,9 @@ async function runMsapBatchBrowserWorkflow(request) {
   if (mergedReport) outputs.push({ name: "reports/sequence_changes.tsv", content: mergedReport });
   return {
     files: outputs,
+    engineMetadata,
     summary: `Processed ${inputs.length} loci with the browser MSAP batch workflow.`,
-    provenance: `Browser MSAP_batch adapter · untouched MSAP.py + Biowasm ${request.options.align_software === "mafft" ? "MAFFT E-INS-i 7.520 (Biowasm)" : "MUSCLE 5.1.0"}`,
+    provenance: `Browser MSAP_batch adapter · untouched MSAP.py + ${externalAlignerLabel(request.options.align_software || "mafft")}`,
   };
 }
 
@@ -1712,7 +1752,12 @@ async function buildRunManifest(module, request, result, outputs) {
       sha256: await sha256Text(file.content),
     });
   }
+  const engine = result.engineMetadata || versionManifest;
+  const script = engine?.files?.find(file => file.name === module.script);
   return JSON.stringify({
+    script_version: script?.version || null,
+    source_sha256: script?.sha256 || null,
+    engine_metadata: engine || null,
     schema: "phyloprep-web-run-v1",
     created_at: new Date().toISOString(),
     module: module.script,
@@ -1725,7 +1770,7 @@ async function buildRunManifest(module, request, result, outputs) {
     runtime: {
       pyodide: "0.27.2",
       aligner: ["phyloprep.py", "MSAP_batch.py"].includes(module.script)
-        ? (request.options.align_software === "mafft" ? "Biowasm MAFFT E-INS-i 7.520" : "Biowasm MUSCLE 5.1.0")
+        ? externalAlignerLabel(request.options.align_software || "mafft")
         : null,
       user_agent: navigator.userAgent,
     },
@@ -1906,3 +1951,5 @@ if ("serviceWorker" in navigator) {
 }
 
 selectModule(activeModuleIndex);
+
+void loadVersionManifest();

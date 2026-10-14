@@ -1,5 +1,6 @@
 import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
+import { spawnSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -42,12 +43,24 @@ for (const name of sourceFiles) {
   files.push({ name, sha256: createHash("sha256").update(contents).digest("hex") });
 }
 
+const metadataProcess = spawnSync(process.env.PYTHON || "python3", [join(siteDirectory, "script_metadata.py"), ...sourceFiles.map(name => join(engineDirectory, name))], {
+  encoding: "utf8", cwd: sourceDirectory,
+});
+if (metadataProcess.status !== 0) throw new Error(`Could not read script versions: ${metadataProcess.stderr}`);
+const metadata = JSON.parse(metadataProcess.stdout);
+for (const file of files) file.version = metadata[file.name]?.version || null;
+const alignmentWorkerSource = await readFile(join(siteDirectory, "alignment-worker.js"), "utf8");
+const aligners = {};
+for (const match of alignmentWorkerSource.matchAll(/tool:\s*"(mafft|muscle)",\s*version:\s*"([^"]+)"/g)) {
+  aligners[match[1]] = { packageVersion: match[2], provider: "Biowasm" };
+}
+
 const bundleSha256 = createHash("sha256")
   .update(files.map(({ name, sha256 }) => `${name}:${sha256}`).join("\n"))
   .digest("hex");
 await writeFile(
   join(engineDirectory, "manifest.json"),
-  `${JSON.stringify({ files, bundleSha256 }, null, 2)}\n`,
+  `${JSON.stringify({ files, bundleSha256, aligners }, null, 2)}\n`,
 );
 
 console.log(`Bundled ${files.length} original Python sources (${bundleSha256.slice(0, 12)}).`);

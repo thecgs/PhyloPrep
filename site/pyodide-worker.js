@@ -315,7 +315,8 @@ self.addEventListener("message", async (event) => {
         runId,
         result: {
           ...result,
-          provenance: `Untouched MSAP.py + Biowasm ${request.options.align_software === "mafft" ? "MAFFT E-INS-i 7.520" : "MUSCLE 5.1.0"} · source bundle ${engineManifest.bundleSha256.slice(0, 12)}`,
+          engineMetadata: engineManifest,
+          provenance: `Untouched MSAP.py + ${request.options.align_software === "mafft" ? "MAFFT E-INS-i" : "MUSCLE"} (Biowasm package ${engineManifest.aligners[request.options.align_software || "mafft"].packageVersion}) · source bundle ${engineManifest.bundleSha256.slice(0, 12)}`,
         },
       });
       return;
@@ -343,6 +344,7 @@ self.addEventListener("message", async (event) => {
         runId,
         result: {
           ...result,
+          engineMetadata: engineManifest,
           partial: Boolean(result.recoverable),
           provenance: `Browser phyloprep.py adapter · original downstream modules · source bundle ${engineManifest.bundleSha256.slice(0, 12)}`,
         },
@@ -361,6 +363,7 @@ self.addEventListener("message", async (event) => {
         runId,
         result: {
           ...result,
+          engineMetadata: engineManifest,
           provenance: `Original extract_orthofinder_orthogroups.py · source bundle ${engineManifest.bundleSha256.slice(0, 12)}`,
         },
       });
@@ -377,6 +380,7 @@ self.addEventListener("message", async (event) => {
       runId,
       result: {
         ...result,
+        engineMetadata: engineManifest,
         provenance: `Original source bundle ${engineManifest.bundleSha256.slice(0, 12)}`,
       },
     });
