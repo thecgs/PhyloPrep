@@ -1200,6 +1200,26 @@ function createPyodideWorker() {
   worker.addEventListener("message", (event) => {
     const message = event.data;
     if (!activeWorkerRun || message.runId !== activeWorkerRun.id) return;
+    if (message.type === "output-chunk" || message.type === "output-file-end") {
+      clearInterval(activeWorkerRun.progressTimer);
+      const outputs = activeWorkerRun.streamedOutputs;
+      let file = outputs.get(message.index);
+      if (!file) {
+        file = { decoder: new TextDecoder(), parts: [], name: message.name };
+        outputs.set(message.index, file);
+      }
+      if (message.type === "output-chunk") {
+        file.parts.push(file.decoder.decode(message.bytes, { stream: true }));
+        setRunStage(3, `Receiving output ${message.index + 1}/${message.fileCount}: ${message.name}`);
+        worker.postMessage({ type: "output-chunk-ack", runId: message.runId, sequence: message.sequence });
+      } else {
+        file.parts.push(file.decoder.decode());
+        file.content = file.parts.join("");
+        file.parts = [];
+        file.decoder = undefined;
+      }
+      return;
+    }
     if (message.type === "stage") {
       if (message.stage === "runtime") {
         elements.runtimeStatus.textContent = `${message.label}…`;
@@ -1230,7 +1250,18 @@ function createPyodideWorker() {
     elements.cancelRun.hidden = true;
     if (message.type === "result") {
       elements.runtimeStatus.textContent = "Local worker ready";
-      run.resolve(message.result);
+      try {
+        if (message.result.files?.some(file => file.path)) {
+          message.result.files = message.result.files.map((file, index) => {
+            const streamed = run.streamedOutputs.get(index);
+            if (!streamed || streamed.content === undefined) throw new Error(`Incomplete output received: ${file.name}`);
+            return { name: file.name, content: streamed.content };
+          });
+        }
+        run.resolve(message.result);
+      } catch (error) {
+        run.reject(error);
+      }
     } else if (message.type === "error") {
       run.reject(new Error(message.message || "The local workflow could not be completed."));
     }
@@ -1251,7 +1282,7 @@ function runInWorker(payload) {
   const worker = pyodideWorker || createPyodideWorker();
   const runId = ++nextRunId;
   return new Promise((resolve, reject) => {
-    activeWorkerRun = { id: runId, resolve, reject };
+    activeWorkerRun = { id: runId, resolve, reject, streamedOutputs: new Map() };
     worker.postMessage({ type: payload.type || "run", runId, ...payload });
   });
 }
@@ -1314,13 +1345,18 @@ function renderGeneratedFiles() {
     button.title = file.name;
     button.addEventListener("click", () => {
       selectedGeneratedFileIndex = index;
-      elements.preview.textContent = file.content;
+      elements.preview.textContent = previewOutput(file.content);
       elements.outputFilesList.querySelectorAll("button").forEach((item) => item.classList.remove("active"));
       button.classList.add("active");
     });
     elements.outputFilesList.append(button);
   });
-  elements.preview.textContent = generatedFiles[0]?.content || "";
+  elements.preview.textContent = previewOutput(generatedFiles[0]?.content || "");
+}
+
+function previewOutput(content) {
+  const limit = 200000;
+  return content.length > limit ? content.slice(0, limit) + "\n[Preview truncated; download contains the complete file.]" : content;
 }
 
 function downloadGeneratedFile(file) {

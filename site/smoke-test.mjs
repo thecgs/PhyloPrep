@@ -205,3 +205,4 @@ for (const flag of ['--min-nucl-pis', '--min-protein-pis']) {
 if (!build.includes('"msap_progress.py"') || !worker.includes('type: "progress"') || !app.includes('message.type === "progress"')) {
   throw new Error("Standard-library progress must be bundled and streamed to the browser UI.");
 }
+await import('./output-transfer-test.mjs');

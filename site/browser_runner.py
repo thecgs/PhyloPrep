@@ -311,14 +311,23 @@ def _browser_run_engine_script(engine, script, arguments, cwd=None):
         raise subprocess.CalledProcessError(code, [sys.executable, str(path), *map(str, arguments)])
 
 
-def _visible_output_files(root):
-    return [
-        file for file in _output_files(Path(root))
-        if not any(part.startswith(".") for part in Path(file["name"]).parts)
-    ]
+def _visible_output_files(root, manifest_only=False):
+    root = Path(root)
+    files = []
+    for path in sorted(root.rglob("*")):
+        relative = path.relative_to(root)
+        if not path.is_file() or any(part.startswith(".") for part in relative.parts):
+            continue
+        file = {"name": relative.as_posix()}
+        if manifest_only:
+            file.update(path=str(path), size=path.stat().st_size)
+        else:
+            file["content"] = path.read_text(encoding="utf-8", errors="replace")
+        files.append(file)
+    return files
 
 
-def run_phyloprep_finalize(file_manifest, options, output_root, engine_root="/engine", progress_callback=None):
+def run_phyloprep_finalize(file_manifest, options, output_root, engine_root="/engine", progress_callback=None, manifest_only=False):
     """Finish the browser pipeline with the repository's original downstream modules."""
     engine = Path(engine_root).resolve()
     root = Path(output_root).resolve()
@@ -436,7 +445,7 @@ def run_phyloprep_finalize(file_manifest, options, output_root, engine_root="/en
         finally:
             phyloprep.run = original_run
 
-        files = _visible_output_files(root)
+        files = _visible_output_files(root, manifest_only=manifest_only)
         if not files:
             raise ValueError("PhyloPrep produced no downloadable output files.")
         return json.dumps({
@@ -451,7 +460,7 @@ def run_phyloprep_finalize(file_manifest, options, output_root, engine_root="/en
             return json.dumps({
                 "ok": False,
                 "recoverable": True,
-                "files": _visible_output_files(root),
+                "files": _visible_output_files(root, manifest_only=manifest_only),
                 "user_error": str(error),
                 "summary": "No loci passed QC; diagnostic reports were preserved.",
                 "stdout": stdout.getvalue(),
@@ -460,7 +469,7 @@ def run_phyloprep_finalize(file_manifest, options, output_root, engine_root="/en
         traceback.print_exc(file=stderr)
         technical_error = stderr.getvalue().strip() or "The browser PhyloPrep pipeline failed."
         if phyloprep is not None and isinstance(error, phyloprep.NoGenesIncludedError):
-            files = _visible_output_files(root)
+            files = _visible_output_files(root, manifest_only=manifest_only)
             if mapping_supplied:
                 user_error = (
                     "No supermatrix could be built with missing-taxa=skip-gene because no locus retained the full "
