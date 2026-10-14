@@ -50,8 +50,8 @@ alignments and invokes the repository's provenance-aware paired codon/protein QC
 taxon-renaming, supermatrix, codon-position, four-fold and FASTA/PHYLIP/NEXUS
 modules inside Pyodide.
 
-Current browser constraints are explicit in the parameter UI: MUSCLE 5.1.0 is
-the recommended default; MAFFT E-INS-i 7.520 is optional. The browser uses one
+Current browser constraints are explicit in the parameter UI: MAFFT E-INS-i
+7.520 is the default; MUSCLE 5.1.0 remains available for explicit selection. The browser uses one
 alignment worker, one locus at a time, and
 `trimAlnSeq.py` trimming. Pseudogene/MACSE, PRANK, ClustalW2 and trimAl remain
 CLI-only.

@@ -262,7 +262,7 @@ function msapArguments(request, stage) {
   return [
     "-i", inputFile(stage),
     "-st", option(values.seqtype, "codon"),
-    "-s", option(values.align_software, "muscle"),
+    "-s", option(values.align_software, "mafft"),
     "-t", "1",
     "-g", option(values.genetic_code, "1"),
     "-ts", "trimAlnSeq",
