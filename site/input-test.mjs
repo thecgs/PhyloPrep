@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import vm from "node:vm";
 const context = vm.createContext({});
 vm.runInContext(await readFile('site/browser-inputs.js', 'utf8'), context);
-const { readBounded, resolveFiles, readText } = context.PhyloPrepInputs;
+const { readBounded, resolveFiles, readText, pathlistFolders } = context.PhyloPrepInputs;
 const file = (name, content, path = '') => ({ name, webkitRelativePath: path, text: async () => content });
 const list = file('orthogroups.pathlist', '# ignored\n/old/a.fa\nb.fa\n; ignored\n');
 const a = file('a.fa', '>a\nAC\n'), b = file('b.fa', '>a\nTT\n'), unrelated = file('extra.fa', '>a\nGG\n');
@@ -27,3 +27,7 @@ assert.equal(maxActive, 4);
 assert.equal(result.length, 7644);
 assert.equal(result[7643], 7643);
 console.log('Browser pathlist and 7,644-file bounded-read checks passed.');
+
+const parsed = pathlistFolders('# comment\n/home/data/a.fa\n/home/data/b.fa\nC:\\input\\c.fa\nd.fa\n; comment\n');
+assert.equal(parsed.count, 4);
+assert.deepEqual(Array.from(parsed.folders), ['/home/data', 'C:/input', 'beside the pathlist']);

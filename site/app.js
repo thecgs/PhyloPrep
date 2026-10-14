@@ -2,6 +2,7 @@ const inputFolderHandles = new Map();
 const inputFolderFiles = new Map();
 const resolvedFolderFiles = new Map();
 let preflightGeneration = 0;
+let pathlistNoticeGeneration = 0;
 const elements = {
   runtimeStatus: document.querySelector("#runtime-status"),
   scriptList: document.querySelector("#script-list"),
@@ -718,6 +719,7 @@ function renderInputFileFields(module) {
       const folderButton = document.createElement("button");
       folderButton.type = "button";
       folderButton.className = "folder-picker";
+      folderButton.dataset.pathlistFolderKey = field.key;
       folderButton.textContent = "Select pathlist input folder";
       folderButton.addEventListener("click", async () => {
         try {
@@ -756,7 +758,11 @@ function renderInputFileFields(module) {
         folderButton.textContent = "Input folder selected";
         void renderInputFiles();
       });
-      section.append(folderButton, directoryControl);
+      const notice = document.createElement("p");
+      notice.dataset.pathlistNoticeKey = field.key;
+      notice.setAttribute("role", "status");
+      notice.hidden = true;
+      section.append(folderButton, directoryControl, notice);
     }
     elements.inputFileFields.append(section);
   });
@@ -963,6 +969,52 @@ async function refreshTaxonSelectors() {
   });
 }
 
+async function updatePathlistFolderNotices() {
+  const generation = ++pathlistNoticeGeneration;
+  for (const control of inputControls()) {
+    const key = control.dataset.inputKey;
+    const section = control.closest(".input-file-field");
+    const notice = section.querySelector("[data-pathlist-notice-key]");
+    const button = section.querySelector("[data-pathlist-folder-key]");
+    if (!notice || !button) continue;
+    const selected = filesForInput(control);
+    const lists = selected.filter(file => /\.(pathlist|list)$/i.test(file.name));
+    notice.hidden = !lists.length;
+    if (!lists.length) {
+      if (!inputFolderHandles.has(key) && !inputFolderFiles.has(key)) button.textContent = "Select pathlist input folder";
+      continue;
+    }
+    notice.textContent = "Reading pathlist references…";
+    try {
+      const texts = await PhyloPrepInputs.readBounded(lists);
+      if (generation !== pathlistNoticeGeneration) return;
+      const parsed = texts.map(PhyloPrepInputs.pathlistFolders);
+      const folders = [...new Set(parsed.flatMap(item => item.folders))];
+      const count = parsed.reduce((total, item) => total + item.count, 0);
+      const folderSummary = folders.slice(0, 3).join("; ") + (folders.length > 3 ? `; and ${folders.length - 3} more` : "");
+      const references = `Pathlist contains ${count} reference(s). Recorded folders: ${folderSummary || "none"}. `;
+      if (inputFolderHandles.has(key) || inputFolderFiles.has(key)) {
+        notice.textContent = references + "Input folder selected. Preflight will check referenced files and same-folder basenames.";
+      } else {
+        let needsFolder = false;
+        try { await PhyloPrepInputs.resolveFiles(selected); }
+        catch { needsFolder = true; }
+        if (generation !== pathlistNoticeGeneration) return;
+        if (needsFolder) {
+          button.textContent = "Authorize pathlist input folder";
+          notice.textContent = references + "Click Authorize pathlist input folder and select the folder containing these FASTAs. If the data were moved, select their current folder (usually beside the pathlist). Browser permission requires your confirmation; the listed paths do not grant access.";
+        } else {
+          button.textContent = "Select pathlist input folder";
+          notice.textContent = references + "Referenced FASTAs are already selected; no additional folder access is needed.";
+        }
+      }
+    } catch (error) {
+      if (generation !== pathlistNoticeGeneration) return;
+      notice.textContent = error.message;
+    }
+  }
+}
+
 async function renderInputFiles() {
   const controls = inputControls();
   const names = selectedInputNames();
@@ -1018,6 +1070,7 @@ async function renderInputFiles() {
   } else {
     elements.inputFilesHelp.textContent = "Select the files required by this module."
   }
+  await updatePathlistFolderNotices();
   await refreshTaxonSelectors();
   await updatePreflight();
   resetGeneratedOutput();

@@ -3,6 +3,18 @@
   const normalize = path => String(path).replaceAll("\\", "/").replace(/^\.\//, "");
   const basename = path => normalize(path).split("/").at(-1);
   const isList = file => /\.(pathlist|list)$/i.test(file.name);
+  function pathlistFolders(content) {
+    const folders = new Set();
+    let count = 0;
+    for (const line of content.split(/\r?\n/)) {
+      const entry = normalize(line.trim());
+      if (!entry || /^[#;]/.test(entry)) continue;
+      count++;
+      const slash = entry.lastIndexOf("/");
+      folders.add(slash < 0 ? "beside the pathlist" : (entry.slice(0, slash) || "/"));
+    }
+    return { folders: [...folders], count };
+  }
   async function readText(file) {
     try { return await file.text(); }
     catch (error) {
@@ -60,5 +72,5 @@
     if (!result.length) throw new Error("The selected pathlist contains no FASTA paths.");
     return result;
   }
-  globalThis.PhyloPrepInputs = { readText, readBounded, resolveFiles, normalize, basename };
+  globalThis.PhyloPrepInputs = { readText, readBounded, resolveFiles, pathlistFolders, normalize, basename };
 })();
