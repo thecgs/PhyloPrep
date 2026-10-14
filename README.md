@@ -120,7 +120,7 @@ flowchart LR
 | `--allow-internal-stop` | Retain a protein locus or paired codon/protein locus when an internal stop is observed directly or recorded by preprocessing as masked to `NNN/X`. The masked state is not restored. |
 | `--allow-terminal-stop` | Allow a terminal stop that remains directly observable in a final codon alignment. Normal terminal stops removed by MSAP preprocessing are provenance only and do not fail QC. |
 | `--paired-pis-policy` | `both` (default), `either`, `codon`, or `protein`; controls how paired codon/protein PIS decisions are combined while keeping the final locus set identical in both matrices. |
-| `--min-codon-pis`, `--min-protein-pis` | Optional representation-specific PIS thresholds for paired codon workflows. Each falls back to `--min-parsimony-informative-sites` when omitted. |
+| `--min-codon-pis`, `--min-protein-pis` | Representation-specific per-locus PIS thresholds for codon/pseudogene workflows, used by both independent and paired matrices. Each falls back to `--min-parsimony-informative-sites` when omitted. |
 | `-g TABLE` | NCBI genetic-code table; default 1. |
 | `--macse-jar`, `--macse-memory` | Pseudogene MACSE settings. |
 
@@ -384,6 +384,18 @@ Translation does not make the two QC decisions identical. Synonymous substitutio
 Here, pairing refers to codon versus protein within each `raw` or `trimmed` branch. Raw and trimmed data are filtered separately and may retain different loci because trimming changes alignment length, uncertainty ratios, and PIS. A controlled comparison of trimming effects would additionally require matching the retained locus sets across these branches; the default paired outputs do not enforce that constraint.
 
 Paired QC operates only on filtering policy: all non-PIS QC requirements must pass for both representations, while PIS is calculated separately for codon and protein because synonymous substitutions can make the two values differ legitimately.
+
+`--min-parsimony-informative-sites` is a per-locus threshold applied before concatenation, not a minimum total PIS for the final supermatrix. Its default is `0`. In `nucl` and protein-only `prot` modes, it directly sets the PIS threshold for each input alignment. In `codon` and `pseudogene` modes, it supplies the default for each representation:
+
+| Setting | Effective codon threshold | Effective protein threshold |
+| --- | --- | --- |
+| Global threshold `20`, neither override supplied | 20 | 20 |
+| Global `20`, `--min-codon-pis 30` | 30 | 20 |
+| Global `20`, `--min-protein-pis 5` | 20 | 5 |
+| Global `20`, codon override `30`, protein override `5` | 30 | 5 |
+| Global `20`, `--min-protein-pis 0` | 20 | 0 (PIS filtering disabled for protein) |
+
+An explicit representation-specific threshold replaces the global default; the values are neither added nor combined by taking their maximum. If both overrides are supplied, the global threshold has no further effect in that codon/pseudogene run. Both effective thresholds apply to independent matrix selection and to paired selection; `--paired-pis-policy` controls only how the two PIS decisions are combined for paired matrices. These rules apply separately to raw and trimmed alignments. The CLI currently uses the full option name `--min-parsimony-informative-sites`; `--min-pis` is not an accepted alias.
 
 The user decides how PIS controls pair retention with `--paired-pis-policy`:
 
