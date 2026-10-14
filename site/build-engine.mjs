@@ -28,6 +28,7 @@ const sourceFiles = [
   "fasta2nex.py",
   "fasta2phy.py",
   "msap_io.py",
+  "msap_progress.py",
   "sequence_audit.py",
   "split_codon_seqence_alignment.py",
 ];

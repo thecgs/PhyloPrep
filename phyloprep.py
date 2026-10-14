@@ -16,6 +16,7 @@ import subprocess
 import sys
 import tempfile
 
+from msap_progress import ProgressReporter, progress_context, report_phase, heartbeat
 from sequence_audit import normalize_workflow, merge_reports
 from MSAP_batch import build_parser as batch_parser
 from msap_io import (atomic_output, expand_input_paths, read_fasta_alignment,
@@ -139,6 +140,7 @@ def run(script, *arguments, cwd=None):
                 returncode = process.wait(timeout=0.2)
                 break
             except subprocess.TimeoutExpired:
+                heartbeat()
                 if interrupted and script != "MSAP_batch.py":
                     try:
                         process.wait(timeout=5)
@@ -362,6 +364,13 @@ def annotate_change_report(path, mapping):
 
 
 def prepare(args, inputs, root):
+    variants = ("raw",) if args.notrim else ("raw", "trimmed")
+    args._progress = ProgressReporter('PhyloPrep', len(variants) + 2, unit='stages')
+    with progress_context(args._progress):
+        return _prepare(args, inputs, root)
+
+
+def _prepare(args, inputs, root):
     recover_matrix_publication(root)
     if args.seqtype == 'pseudogene':
         print('[phyloprep] Pseudogene mode: frameshift/stop codons are masked for analysis. '
@@ -379,6 +388,7 @@ def prepare(args, inputs, root):
     previous_stats = {name: path.stat().st_mtime_ns if path.exists() else None
                       for name, path in report_files.items()}
     try:
+        report_phase(args, f'Alignment: {len(inputs)} loci')
         run("MSAP_batch.py", *batch_arguments(args, input_list, alignments))
     finally:
         for name, path in report_files.items():
@@ -387,12 +397,17 @@ def prepare(args, inputs, root):
             if taxon_mapping is not None:
                 annotate_change_report(root / 'reports' / f'{name}.tsv', taxon_mapping)
 
+    args._progress.update('Alignment complete', completed=1)
     variants = ("raw",) if args.notrim else ("raw", "trimmed")
     with tempfile.TemporaryDirectory(prefix=".matrices-", dir=root) as temporary:
         stage_root = Path(temporary)
-        for variant in variants:
+        for index, variant in enumerate(variants):
+            report_phase(args, f'{variant}: QC and matrix preparation')
             prepare_variant(args, root, stage_root, variant)
+            args._progress.update(f'{variant}: complete', completed=index + 2)
+        report_phase(args, 'Publishing matrices')
         publish_matrices(stage_root, root, variants)
+        args._progress.update('Complete', completed=len(variants) + 2)
 
     print(f"[phyloprep] Complete: {root / 'matrices'}", flush=True)
 
@@ -415,6 +430,7 @@ def _alignment_locus_key(path, args, seqtype, variant):
 
 def run_group_qc(args, root, stage, seqtype, variant):
     """Run one representation-specific QC pass and return its pairing context."""
+    report_phase(args, f'{variant}/{seqtype}: renaming and QC')
     print(f"[phyloprep] QC {seqtype}/{variant}", flush=True)
     list_suffix = f"{seqtype}.aln" if variant == "raw" else f"{seqtype}.trimmed.aln"
     batch_list = root / "alignments" / "path-lists" / f"all.{list_suffix}.pathlist"
@@ -637,6 +653,8 @@ def _require_passing_group(args, context):
 
 
 def build_group_matrices(args, root, context):
+    report_phase(args, f"{context['variant']}/{context['seqtype']}: "
+                 f"{'paired' if context.get('paired') else 'independent'} matrix construction")
     """Concatenate one already-QC-filtered representation and export derived matrices."""
     stage = context["stage"]
     seqtype = context["seqtype"]
@@ -693,6 +711,7 @@ def build_group_matrices(args, root, context):
             matrices.append(fourfold)
 
     for matrix in matrices:
+        report_phase(args, f'{variant}/{seqtype}: exporting {matrix.name}')
         run("fasta2phy.py", "-i", matrix, "-o", matrix.with_suffix(".phy"),
             "-st", "protein" if seqtype == "prot" else "DNA")
         run("fasta2nex.py", "-i", matrix, "-o", matrix.with_suffix(".nex"),

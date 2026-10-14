@@ -1210,7 +1210,22 @@ function createPyodideWorker() {
       }
       return;
     }
+    if (message.type === "progress") {
+      const progress = message.progress;
+      const received = performance.now();
+      const render = () => {
+        const elapsed = progress.elapsed_seconds + (performance.now() - received) / 1000;
+        const label = `${progress.completed}/${progress.total} ${progress.unit} · ${progress.label} · ${Math.round(elapsed)}s elapsed`;
+        elements.runtimeStatus.textContent = label;
+        setRunStage(2, label);
+      };
+      clearInterval(activeWorkerRun.progressTimer);
+      render();
+      activeWorkerRun.progressTimer = setInterval(render, 1000);
+      return;
+    }
     const run = activeWorkerRun;
+    clearInterval(run.progressTimer);
     activeWorkerRun = undefined;
     elements.cancelRun.hidden = true;
     if (message.type === "result") {
@@ -1223,6 +1238,7 @@ function createPyodideWorker() {
   worker.addEventListener("error", (event) => {
     if (!activeWorkerRun) return;
     const run = activeWorkerRun;
+    clearInterval(run.progressTimer);
     activeWorkerRun = undefined;
     elements.cancelRun.hidden = true;
     run.reject(new Error(event.message || "The local worker stopped unexpectedly."));
@@ -1248,6 +1264,7 @@ function cancelActiveRun() {
   }
   if (!activeWorkerRun) return;
   const run = activeWorkerRun;
+  clearInterval(run.progressTimer);
   activeWorkerRun = undefined;
   pyodideWorker?.terminate();
   pyodideWorker = undefined;
@@ -1511,6 +1528,14 @@ function batchPathLists(files) {
   return outputs;
 }
 
+function showLocusProgress(completed, total, started, label) {
+  const elapsed = (performance.now() - started) / 1000;
+  const eta = completed ? ` · estimated remaining ${Math.round(elapsed * (total - completed) / completed)}s` : "";
+  const text = `${completed}/${total} loci complete · ${label} · ${Math.round(elapsed)}s elapsed${eta}`;
+  elements.runtimeStatus.textContent = text;
+  setRunStage(2, text);
+}
+
 async function runMsapBatchBrowserWorkflow(request) {
   const inputs = request.files.filter((file) => file.inputKey === "inputs" && String(file.content || "").trimStart().startsWith(">"));
   if (!inputs.length) throw new Error("Select at least one FASTA input.");
@@ -1522,17 +1547,20 @@ async function runMsapBatchBrowserWorkflow(request) {
       content: selectedInputPathList(inputs),
     });
   }
+  const progressStarted = performance.now();
   for (let index = 0; index < inputs.length; index += 1) {
     const input = inputs[index];
-    setRunStage(2, `Aligning locus ${index + 1}/${inputs.length}: ${input.name}`);
-    elements.runtimeStatus.textContent = `${request.options.align_software === "mafft" ? "MAFFT E-INS-i" : "MUSCLE"} locus ${index + 1}/${inputs.length}`;
-    const result = await runMsapBrowserWorkflow({
-      ...request,
-      script: "MSAP.py",
-      files: [input],
-      outputName: "",
-      usesPathList: false,
-    });
+    showLocusProgress(index, inputs.length, progressStarted, `Aligning ${input.name}`);
+    const heartbeat = setInterval(() => showLocusProgress(index, inputs.length, progressStarted, `Aligning ${input.name}`), 1000);
+    let result;
+    try {
+      result = await runMsapBrowserWorkflow({
+        ...request, script: "MSAP.py", files: [input], outputName: "", usesPathList: false,
+      });
+    } finally {
+      clearInterval(heartbeat);
+    }
+    showLocusProgress(index + 1, inputs.length, progressStarted, input.name);
     outputs.push(...result.files.map((file) => ({ name: file.name, content: file.content })));
   }
   outputs.push(...batchPathLists(outputs));

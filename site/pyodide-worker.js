@@ -282,7 +282,15 @@ self.addEventListener("message", async (event) => {
     if (request.type === "phyloprep-finalize") {
       self.postMessage({ type: "stage", runId, stage: "process", label: "Running PhyloPrep QC and matrix construction" });
       const manifest = stage.files.map(({ name, path, role, inputKey, fasta }) => ({ name, path, role, inputKey, fasta }));
-      const raw = await runtime.runPythonAsync(`run_phyloprep_finalize(${pythonJson(manifest)}, ${pythonJson(request.options)}, ${JSON.stringify(stage.outputRoot)})`);
+      runtime.globals.set("_phyloprep_progress_callback", (eventJson) => {
+        self.postMessage({ type: "progress", runId, progress: JSON.parse(eventJson) });
+      });
+      let raw;
+      try {
+        raw = await runtime.runPythonAsync(`run_phyloprep_finalize(${pythonJson(manifest)}, ${pythonJson(request.options)}, ${JSON.stringify(stage.outputRoot)}, progress_callback=_phyloprep_progress_callback)`);
+      } finally {
+        runtime.globals.delete("_phyloprep_progress_callback");
+      }
       const result = JSON.parse(raw);
       if (!result.ok && !result.recoverable) {
         throw new Error(result.user_error || result.error || "The browser PhyloPrep pipeline could not complete.");

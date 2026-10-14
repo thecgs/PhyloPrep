@@ -318,7 +318,7 @@ def _visible_output_files(root):
     ]
 
 
-def run_phyloprep_finalize(file_manifest, options, output_root, engine_root="/engine"):
+def run_phyloprep_finalize(file_manifest, options, output_root, engine_root="/engine", progress_callback=None):
     """Finish the browser pipeline with the repository's original downstream modules."""
     engine = Path(engine_root).resolve()
     root = Path(output_root).resolve()
@@ -410,6 +410,9 @@ def run_phyloprep_finalize(file_manifest, options, output_root, engine_root="/en
             allow_internal_stop=bool(options.get("allow_internal_stop", False)),
         )
         phyloprep.validate_pipeline_options(args)
+        from msap_progress import ProgressReporter, progress_context, report_phase
+        variants = ("raw",) if args.notrim else ("raw", "trimmed")
+        args._progress = ProgressReporter('PhyloPrep', len(variants) + 1, unit='stages', callback=progress_callback)
 
         original_run = phyloprep.run
 
@@ -422,10 +425,14 @@ def run_phyloprep_finalize(file_manifest, options, output_root, engine_root="/en
             variants = ("raw",) if args.notrim else ("raw", "trimmed")
             with tempfile.TemporaryDirectory(prefix=".matrices-", dir=root) as temporary:
                 matrix_root = Path(temporary)
-                with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
-                    for variant in variants:
+                with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr), progress_context(args._progress):
+                    for index, variant in enumerate(variants):
+                        report_phase(args, f'{variant}: QC and matrix preparation')
                         phyloprep.prepare_variant(args, root, matrix_root, variant)
+                        args._progress.update(f'{variant}: complete', completed=index + 1)
+                    report_phase(args, 'Publishing matrices')
                     phyloprep.publish_matrices(matrix_root, root, variants, block_signals=False)
+                    args._progress.update('Complete', completed=len(variants) + 1)
         finally:
             phyloprep.run = original_run
 
