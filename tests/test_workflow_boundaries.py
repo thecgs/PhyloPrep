@@ -109,3 +109,29 @@ def test_browser_publishes_requested_variants_together(tmp_path, monkeypatch, fa
         assert old.read_text().startswith('>a')
         assert (root/'matrices/prot/trimmed/supermatrix.fasta').is_file()
     assert not list(root.glob('.matrices-*'))
+
+
+def test_identical_independent_and_paired_sets_reuse_matrix_products(tmp_path, monkeypatch):
+    from sequence_audit import normalize_workflow
+    root = tmp_path/'results'
+    alignments = root/'alignments'
+    lists = alignments/'path-lists'
+    lists.mkdir(parents=True)
+    for kind, sequence in [('codon', 'GCT'), ('prot', 'A')]:
+        path = alignments/f'gene.mafft.{kind}.aln'
+        path.write_text(f'>a\n{sequence}\n>b\n{sequence}\n')
+        phyloprep.write_paths(lists/f'all.{kind}.aln.pathlist', [path])
+    args = phyloprep.build_parser().parse_args(['-i', 'unused.fa', '--notrim', '-t', '1'])
+    normalize_workflow(args)
+    args.taxon_mapping = None
+    calls = []
+    build = phyloprep.build_group_matrices
+    def record(*arguments):
+        calls.append(arguments[2]['stage'])
+        return build(*arguments)
+    monkeypatch.setattr(phyloprep, 'build_group_matrices', record)
+    stage = tmp_path/'stage'
+    phyloprep.prepare_variant(args, root, stage, 'raw')
+    assert len(calls) == 2
+    for kind in ('codon', 'prot'):
+        assert (stage/kind/'raw/supermatrix.fasta').read_bytes() == (stage/'paired'/kind/'raw/supermatrix.fasta').read_bytes()

@@ -48,19 +48,24 @@ nucl/codon accept RNA: U is normalized to T and IUPAC ambiguity codes to N,
 with audit rows; outputs use the canonical DNA alphabet. prot removes trailing
 stops and masks internal stops, ambiguous and non-standard residues as X.
 Use --protein-stop-symbol '.' for dot-encoded stops (default: '*'); edits are audited.
-Raw and trimmed alignments are QC-checked with provenance-aware paired codon/protein filtering;
+Raw and trimmed alignments are QC-checked once, then independently and jointly filtered;
 --notrim processes raw alignments only. Codon mode also exports protein
-supermatrices. Codon matrices additionally undergo position splitting and
+supermatrices. Independent matrices use each representation's own QC/PIS passing loci;
+additional paired matrices use the selected paired PIS policy and shared loci.
+Paired outputs are under matrices/paired/ (matrices/pseudogene/paired/ for pseudogenes).
+Codon matrices additionally undergo position splitting and
 four-fold extraction. FASTA, PHYLIP and NEXUS outputs are written under
 matrices/<seqtype>/<raw|trimmed>/. Non-PIS QC is evaluated separately for codon
-and protein and both sides must pass; paired PIS retention is then controlled by
+and protein. Both sides must pass non-PIS QC only for the paired matrices;
+paired PIS retention is then controlled by
 --paired-pis-policy with independent codon/protein thresholds when requested.
 Pseudogene mode selects MACSE and writes matrices/pseudogene/<codon|prot>/<raw|trimmed>/.
 It preserves native alignments and change reports, and automatically generates
 codon-position and four-fold matrices from inferred coding positions. These do
 not establish functional coding or synonymous-site neutrality. Empty four-fold
 results are skipped with a message. See reports/ for audit TSVs.
-No passing genes or no four-fold sites in normal codon mode is an error; final
+No loci in any independent/paired dataset, or no four-fold sites in a nonempty
+normal codon dataset, is an error; final
 matrices are published only after all requested conversions succeed.
 """
     for action in parser._actions:
@@ -396,10 +401,12 @@ def prepare(args, inputs, root):
     print(f"[phyloprep] Complete: {root / 'matrices'}", flush=True)
 
 
-def _group_stage(stage_root, workflow, seqtype, variant):
+def _group_stage(stage_root, workflow, seqtype, variant, paired=False):
     base = Path(stage_root)
     if workflow == "pseudogene":
         base = base / "pseudogene"
+    if paired:
+        base = base / "paired"
     return base / seqtype / variant
 
 
@@ -600,28 +607,28 @@ def synchronize_paired_qc(args, root, variant, codon_context, protein_context):
                 ";".join(reasons) or "NA",
             ])
 
-    retained = {}
+    for context, passing, pis, threshold in (
+            (codon_context, codon_pass, codon_pis, codon_threshold),
+            (protein_context, protein_pass, protein_pis, protein_threshold)):
+        independent_path = context["prefix"].parent / "independent.retained.tsv"
+        independent = sorted(locus for locus in passing if pis[locus] >= threshold)
+        write_paths(independent_path, [passing[locus].resolve() for locus in independent])
+        context["independent_retained"] = independent_path
+
     for context, passing in ((codon_context, codon_pass), (protein_context, protein_pass)):
         retained_path = paired_dir / f"{context['seqtype']}.retained.tsv"
         with atomic_output(retained_path) as handle:
             for locus in common:
                 handle.write(str(passing[locus].resolve()) + "\n")
-        retained[context["seqtype"]] = retained_path
-        context["retained"] = retained_path
+        context["paired_retained"] = retained_path
 
-    if not common:
-        raise ValueError(
-            f"No paired codon/protein alignments passed QC for {variant}; "
-            f"paired PIS policy={policy}, minimum codon PIS={codon_threshold}, "
-            f"minimum protein PIS={protein_threshold}. "
-            f"See {report} and the representation-specific alignment.details.tsv reports."
-        )
     print(
         f"[phyloprep] Paired QC {variant}: retained {len(common)} locus/loci "
         f"(PIS policy={policy}, codon minimum={codon_threshold}, "
-        f"protein minimum={protein_threshold}) in both codon and protein matrices",
+        f"protein minimum={protein_threshold})",
         flush=True,
     )
+    return common
 
 
 def _require_passing_group(args, context):
@@ -657,6 +664,8 @@ def build_group_matrices(args, root, context):
                 "see the original get_supergenes error above."
             ) from error
         label = "renamed" if args.mapping else "original_ids"
+        if context.get("paired"):
+            label = "paired_" + label
         report = preserve_concat_report(stage, root, seqtype, variant, label)
         if not args.mapping:
             location = f" See {report}." if report else ""
@@ -706,9 +715,39 @@ def prepare_variant(args, root, stage_root, variant):
         for seqtype in ("codon", "prot"):
             stage = _group_stage(stage_root, args.seqtype, seqtype, variant)
             contexts[seqtype] = run_group_qc(args, root, stage, seqtype, variant)
-        synchronize_paired_qc(args, root, variant, contexts["codon"], contexts["prot"])
+        paired_loci = synchronize_paired_qc(
+            args, root, variant, contexts["codon"], contexts["prot"])
+        if not paired_loci and not any(
+                context["independent_retained"].read_text().strip()
+                for context in contexts.values()):
+            raise ValueError(f"No codon/protein alignments passed independent or paired QC for {variant}")
+        built = False
         for seqtype in ("codon", "prot"):
-            build_group_matrices(args, root, contexts[seqtype])
+            context = contexts[seqtype]
+            for paired in (False, True):
+                selected = context["paired_retained" if paired else "independent_retained"]
+                stage = _group_stage(stage_root, args.seqtype, seqtype, variant, paired=paired)
+                if not selected.read_text().strip():
+                    stage.mkdir(parents=True, exist_ok=True)
+                    (stage / "skipped.txt").write_text(
+                        "No loci passed " + ("paired" if paired else "independent") + " QC.\n")
+                    continue
+                independent_stage = context["stage"]
+                if (paired and selected.read_text() == context["independent_retained"].read_text()
+                        and (independent_stage / "supermatrix.fasta").is_file()):
+                    shutil.copytree(independent_stage, stage)
+                    built = True
+                    continue
+                try:
+                    build_group_matrices(args, root, {**context, "stage": stage,
+                                                     "retained": selected, "paired": paired})
+                except NoGenesIncludedError as error:
+                    # An empty missing-taxon selection does not invalidate other datasets.
+                    (stage / "skipped.txt").write_text(str(error) + "\n")
+                else:
+                    built = True
+        if not built:
+            raise NoGenesIncludedError(f"No independent or paired matrices could be built for {variant}")
         return
 
     stage = _group_stage(stage_root, args.seqtype, args.seqtype, variant)

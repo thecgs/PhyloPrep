@@ -98,7 +98,7 @@ const modules = [
       { key: "inputs", label: "Input FASTA files", flag: "-i, --input", multiple: true, pathList: true },
       { key: "mapping", label: "Taxon mapping table", flag: "-m, --mapping", accept: ".tsv,.txt,.csv", required: false },
     ],
-    outputs: ["Per-locus alignments and audit reports", "QC reports", "Optional renamed alignments", "Raw/trimmed supermatrices", "Codon-position and four-fold matrices", "FASTA/PHYLIP/NEXUS exports"],
+    outputs: ["Per-locus alignments and audit reports", "QC reports", "Optional renamed alignments", "Independent and paired raw/trimmed supermatrices", "Codon-position and four-fold matrices", "FASTA/PHYLIP/NEXUS exports"],
     outputLabel: "Pipeline output", outputHelp: "Browser output is collected as downloadable files or written into the selected local folder.", defaultOutput: "", hideOutputName: true,
     parameters: [
       { flag: "-st", label: "Sequence type", description: "Browser pipeline supports codon, protein, and nucleotide modes. Pseudogene/MACSE remains CLI-only.", type: "select", value: "codon", options: [["codon", "Codon / CDS"], ["prot", "Protein"], ["nucl", "Nucleotide"]], token: "seqtype" },
