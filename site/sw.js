@@ -1,4 +1,4 @@
-const CACHE_NAME = "phyloprep-web-v41";
+const CACHE_NAME = "phyloprep-web-v42";
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -6,6 +6,7 @@ const APP_SHELL = [
   "./app.js",
   "./browser-inputs.js",
   "./browser-downloads.js",
+  "./browser-results.js",
   "./pyodide-worker.js",
   "./alignment-worker.js",
   "./browser_runner.py",

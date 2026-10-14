@@ -211,3 +211,4 @@ if (app.includes('revokeObjectURL(link.href), 1000')) throw new Error('Download 
 
 const alignerControls = app.split("\n").filter(line => line.includes('token: "align_software"'));
 if (alignerControls.length !== 2 || alignerControls.some(line => !line.includes('value: "mafft"'))) throw new Error("Both browser workflows must default to MAFFT.");
+await import('./result-test.mjs');

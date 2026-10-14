@@ -27,6 +27,12 @@ const elements = {
   implementationNote: document.querySelector("#implementation-note"),
   outputFilesList: document.querySelector("#output-files-list"),
   resultCount: document.querySelector("#result-count"),
+  resultControls: document.querySelector("#result-controls"),
+  resultFolder: document.querySelector("#result-folder"),
+  resultSearch: document.querySelector("#result-search"),
+  resultPrev: document.querySelector("#result-prev"),
+  resultNext: document.querySelector("#result-next"),
+  resultPage: document.querySelector("#result-page"),
   downloadSelected: document.querySelector("#download-selected"),
   downloadAll: document.querySelector("#download-all"),
   preview: document.querySelector("#output-preview"),
@@ -365,6 +371,8 @@ let activeModuleIndex = 0;
 let outputDirectoryHandle;
 let generatedFiles = [];
 let selectedGeneratedFileIndex = 0;
+let resultEntries = [];
+let resultPageNumber = 0;
 let pyodideWorker;
 let activeWorkerRun;
 let nextRunId = 0;
@@ -876,6 +884,9 @@ function setRunStage(stage = 0, label = "Ready to run", failed = false) {
 }
 
 function renderEmptyOutputFiles() {
+  elements.resultControls.hidden = true;
+  resultEntries = [];
+  resultPageNumber = 0;
   elements.outputFilesList.replaceChildren();
   elements.downloadSelected.hidden = true;
   elements.downloadAll.hidden = true;
@@ -1322,15 +1333,34 @@ async function saveGeneratedFile(file) {
 }
 
 function renderGeneratedFiles() {
-  elements.outputFilesList.replaceChildren();
-  selectedGeneratedFileIndex = 0;
-  elements.resultCount.textContent = generatedFiles.length === 1 ? "1 output file" : `${generatedFiles.length} output files`;
+  resultEntries = PhyloPrepResults.createEntries(generatedFiles);
+  resultPageNumber = 0;
+  elements.resultFolder.value = "all";
+  elements.resultSearch.value = "";
+  elements.resultControls.hidden = !generatedFiles.length;
+  elements.resultCount.textContent = `${generatedFiles.length.toLocaleString()} output files`;
   elements.downloadSelected.hidden = !generatedFiles.length;
   elements.downloadAll.hidden = generatedFiles.length < 2;
-  generatedFiles.forEach((file, index) => {
+  selectedGeneratedFileIndex = resultEntries[0]?.index ?? 0;
+  renderGeneratedPage();
+}
+
+function renderGeneratedPage() {
+  elements.outputFilesList.replaceChildren();
+  const result = PhyloPrepResults.pageEntries(resultEntries, {
+    folder: elements.resultFolder.value, query: elements.resultSearch.value, page: resultPageNumber,
+  });
+  resultPageNumber = result.page;
+  elements.resultPrev.disabled = result.page === 0;
+  elements.resultNext.disabled = result.page + 1 >= result.pages;
+  elements.resultPage.textContent = result.total ? `${result.start + 1}–${result.start + result.entries.length} of ${result.total.toLocaleString()} matching files · page ${result.page + 1}/${result.pages}` : "No matching files";
+  if (!result.entries.some(entry => entry.index === selectedGeneratedFileIndex) && result.entries.length) {
+    selectedGeneratedFileIndex = result.entries[0].index;
+  }
+  result.entries.forEach(({ file, index }) => {
     const button = document.createElement("button");
     button.type = "button";
-    button.className = `output-file-button${index === 0 ? " active" : ""}`;
+    button.className = `output-file-button${index === selectedGeneratedFileIndex ? " active" : ""}`;
     const fileName = document.createElement("span");
     fileName.className = "output-file-name";
     fileName.textContent = file.name;
@@ -1352,7 +1382,8 @@ function renderGeneratedFiles() {
     });
     elements.outputFilesList.append(button);
   });
-  elements.preview.textContent = previewOutput(generatedFiles[0]?.content || "");
+  elements.preview.textContent = result.entries.length ? previewOutput(generatedFiles[selectedGeneratedFileIndex]?.content || "") : "No files match the current filter.";
+  elements.downloadSelected.hidden = !result.entries.length;
 }
 
 function previewOutput(content) {
@@ -1817,6 +1848,11 @@ elements.cancelRun.addEventListener("click", cancelActiveRun);
 elements.copyCommand.addEventListener("click", copyEquivalentCommand);
 elements.downloadSelected.addEventListener("click", downloadSelectedOutput);
 elements.downloadAll.addEventListener("click", downloadAllOutputs);
+for (const control of [elements.resultFolder, elements.resultSearch]) {
+  control.addEventListener("input", () => { resultPageNumber = 0; renderGeneratedPage(); });
+}
+elements.resultPrev.addEventListener("click", () => { resultPageNumber--; renderGeneratedPage(); });
+elements.resultNext.addEventListener("click", () => { resultPageNumber++; renderGeneratedPage(); });
 
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {
