@@ -49,8 +49,23 @@ def expand_input_paths(items):
             if not first:
                 raise ValueError(f"Empty input FASTA or path list: {path}")
             if not first.startswith(">"):
-                paths.extend(line.strip() for line in lines
-                             if line.strip() and not line.lstrip().startswith(("#", ";")))
+                for line in lines:
+                    entry = line.strip()
+                    if not entry or entry.startswith(("#", ";")):
+                        continue
+                    referenced = Path(entry)
+                    # Relative entries belong to the list's directory. Existing
+                    # absolute references retain their meaning after relocation.
+                    candidate = referenced if referenced.is_absolute() else path.parent / referenced
+                    if not candidate.is_file() and not referenced.is_absolute() and referenced.is_file():
+                        candidate = referenced
+                    if not candidate.is_file():
+                        basename = entry.replace("\\", "/").rsplit("/", 1)[-1]
+                        candidate = path.parent / basename
+                    if not candidate.is_file():
+                        raise ValueError(f"Missing FASTA referenced by {path}: {entry}; "
+                                         f"also checked {path.parent / basename}")
+                    paths.append(str(candidate.resolve()))
                 continue
         paths.append(str(path))
     return paths

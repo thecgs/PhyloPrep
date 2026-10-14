@@ -191,3 +191,6 @@ if (!browserRunner.includes('path_lists = alignments / "path-lists"') ||
 if (!app.includes('hide("allow_internal_stop", seqtype === "nucl");')) {
   throw new Error("Protein workflows must expose the audited internal-stop retention option.");
 }
+
+// Exercise real pathlist resolution and bounded reads without a browser runtime.
+await import("./input-test.mjs");

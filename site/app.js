@@ -1,3 +1,8 @@
+const inputFolderHandles = new Map();
+const inputFolderFiles = new Map();
+const resolvedFolderFiles = new Map();
+let preflightGeneration = 0;
+let pathlistNoticeGeneration = 0;
 const elements = {
   runtimeStatus: document.querySelector("#runtime-status"),
   scriptList: document.querySelector("#script-list"),
@@ -635,14 +640,14 @@ function browserInputFiles() {
 }
 
 function fileIdentity(file) {
-  return `${file.name}\u0000${file.size}\u0000${file.lastModified}`;
+  return `${file.webkitRelativePath || file.name}\u0000${file.size}\u0000${file.lastModified}`;
 }
 
 function rememberInputFiles(control) {
   const selected = [...control.files];
   const existing = filesForInput(control);
   const files = control.multiple
-    ? [...existing, ...selected].filter((file, index, all) => all.findIndex((candidate) => fileIdentity(candidate) === fileIdentity(file)) === index)
+    ? [...new Map([...existing, ...selected].map(file => [fileIdentity(file), file])).values()]
     : selected.slice(0, 1);
   selectedInputFiles.set(control.dataset.inputKey, files);
   control.value = "";
@@ -675,6 +680,8 @@ function pathListPath(module = activeModule()) {
 function renderInputFileFields(module) {
   elements.inputFileFields.replaceChildren();
   selectedInputFiles = new Map();
+  inputFolderHandles.clear();
+  inputFolderFiles.clear();
   module.inputFields.forEach((field) => {
     const section = document.createElement("section");
     section.className = "workspace-section input-file-field";
@@ -708,6 +715,55 @@ function renderInputFileFields(module) {
     display.textContent = field.multiple ? "Select local files" : "Select a local file";
     picker.append(control, display);
     section.append(heading, picker);
+    if (field.pathList) {
+      const folderButton = document.createElement("button");
+      folderButton.type = "button";
+      folderButton.className = "folder-picker";
+      folderButton.dataset.pathlistFolderKey = field.key;
+      folderButton.textContent = "Select pathlist input folder";
+      folderButton.addEventListener("click", async () => {
+        try {
+          if ("showDirectoryPicker" in window) {
+            const handle = await window.showDirectoryPicker({ mode: "read" });
+            inputFolderHandles.set(field.key, handle);
+            folderButton.textContent = `Input folder: ${handle.name}`;
+            if (!filesForInput(control).length) {
+              const found = [];
+              for await (const [name, entry] of handle.entries()) {
+                if (entry.kind === "file" && /\.(pathlist|list|fa|faa|fas|fasta|aln|pep)$/i.test(name)) found.push(await entry.getFile());
+              }
+              const lists = found.filter(file => /\.(pathlist|list)$/i.test(file.name));
+              selectedInputFiles.set(field.key, lists.length ? lists : found);
+            }
+            await renderInputFiles();
+          } else {
+            directoryControl.click();
+          }
+        } catch (error) {
+          if (error.name !== "AbortError") setLog(`Cannot access input folder: ${error.message}`, "error");
+        }
+      });
+      const directoryControl = document.createElement("input");
+      directoryControl.type = "file";
+      directoryControl.multiple = true;
+      directoryControl.setAttribute("webkitdirectory", "");
+      directoryControl.hidden = true;
+      directoryControl.addEventListener("change", () => {
+        const files = [...directoryControl.files];
+        inputFolderFiles.set(field.key, files);
+        if (!filesForInput(control).length) {
+          const lists = files.filter(file => /\.(pathlist|list)$/i.test(file.name));
+          selectedInputFiles.set(field.key, lists.length ? lists : files.filter(file => /\.(fa|faa|fas|fasta|aln|pep)$/i.test(file.name)));
+        }
+        folderButton.textContent = "Input folder selected";
+        void renderInputFiles();
+      });
+      const notice = document.createElement("p");
+      notice.dataset.pathlistNoticeKey = field.key;
+      notice.setAttribute("role", "status");
+      notice.hidden = true;
+      section.append(folderButton, directoryControl, notice);
+    }
     elements.inputFileFields.append(section);
   });
 }
@@ -913,6 +969,52 @@ async function refreshTaxonSelectors() {
   });
 }
 
+async function updatePathlistFolderNotices() {
+  const generation = ++pathlistNoticeGeneration;
+  for (const control of inputControls()) {
+    const key = control.dataset.inputKey;
+    const section = control.closest(".input-file-field");
+    const notice = section.querySelector("[data-pathlist-notice-key]");
+    const button = section.querySelector("[data-pathlist-folder-key]");
+    if (!notice || !button) continue;
+    const selected = filesForInput(control);
+    const lists = selected.filter(file => /\.(pathlist|list)$/i.test(file.name));
+    notice.hidden = !lists.length;
+    if (!lists.length) {
+      if (!inputFolderHandles.has(key) && !inputFolderFiles.has(key)) button.textContent = "Select pathlist input folder";
+      continue;
+    }
+    notice.textContent = "Reading pathlist references…";
+    try {
+      const texts = await PhyloPrepInputs.readBounded(lists);
+      if (generation !== pathlistNoticeGeneration) return;
+      const parsed = texts.map(PhyloPrepInputs.pathlistFolders);
+      const folders = [...new Set(parsed.flatMap(item => item.folders))];
+      const count = parsed.reduce((total, item) => total + item.count, 0);
+      const folderSummary = folders.slice(0, 3).join("; ") + (folders.length > 3 ? `; and ${folders.length - 3} more` : "");
+      const references = `Pathlist contains ${count} reference(s). Recorded folders: ${folderSummary || "none"}. `;
+      if (inputFolderHandles.has(key) || inputFolderFiles.has(key)) {
+        notice.textContent = references + "Input folder selected. Preflight will check referenced files and same-folder basenames.";
+      } else {
+        let needsFolder = false;
+        try { await PhyloPrepInputs.resolveFiles(selected); }
+        catch { needsFolder = true; }
+        if (generation !== pathlistNoticeGeneration) return;
+        if (needsFolder) {
+          button.textContent = "Authorize pathlist input folder";
+          notice.textContent = references + "Click Authorize pathlist input folder and select the folder containing these FASTAs. If the data were moved, select their current folder (usually beside the pathlist). Browser permission requires your confirmation; the listed paths do not grant access.";
+        } else {
+          button.textContent = "Select pathlist input folder";
+          notice.textContent = references + "Referenced FASTAs are already selected; no additional folder access is needed.";
+        }
+      }
+    } catch (error) {
+      if (generation !== pathlistNoticeGeneration) return;
+      notice.textContent = error.message;
+    }
+  }
+}
+
 async function renderInputFiles() {
   const controls = inputControls();
   const names = selectedInputNames();
@@ -922,16 +1024,16 @@ async function renderInputFiles() {
     const display = control.closest(".input-file-picker")?.querySelector(".input-file-display");
     if (!display) return;
     display.textContent = selected.length
-      ? selected.map((file) => file.name).join(", ")
+      ? selected.length > 20 ? `${selected.length} files selected` : selected.map((file) => file.name).join(", ")
       : (control.multiple ? "Select local files" : "Select a local file");
-    display.title = selected.map((file) => file.name).join(", ");
+    display.title = selected.length > 20 ? `${selected.length} files selected` : selected.map((file) => file.name).join(", ");
   });
   elements.clearInputFiles.hidden = names.length === 0;
   if (!names.length) {
     elements.inputFilesList.textContent = "No files selected.";
   } else {
     controls.forEach((control) => {
-      filesForInput(control).forEach((file, index) => {
+      filesForInput(control).slice(0, 100).forEach((file, index) => {
         const chip = document.createElement("span");
         chip.className = "file-chip";
         chip.title = `${control.dataset.inputLabel}: ${file.name}`;
@@ -950,19 +1052,25 @@ async function renderInputFiles() {
       });
     });
   }
+  if (names.length > 100) {
+    const note = document.createElement("span");
+    note.textContent = "Showing the first 100 files per input; all selected files will be processed.";
+    elements.inputFilesList.append(note);
+  }
   const module = activeModule();
   const pathLists = browserInputFiles().filter((file) => /\.(pathlist|list)$/i.test(file.name));
   const fastaFiles = browserInputFiles().filter((file) => !/\.(pathlist|list)$/i.test(file.name));
   if (module.inputFields.some((field) => field.pathList) && names.length > 1) {
     const browserNote = pathLists.length && !fastaFiles.length
-      ? " Upload the referenced FASTA files as well to run them in the browser."
+      ? " Select the pathlist input folder or its referenced FASTA files."
       : "";
     elements.inputFilesHelp.textContent = `Multiple selections are merged into a browser pathlist for the CLI preview: ${pathListPath(module)}.${browserNote}`;
   } else if (module.inputFields.some((field) => field.pathList) && pathLists.length) {
-    elements.inputFilesHelp.textContent = "A .pathlist file is selected. Upload its referenced FASTA files as well for browser execution.";
+    elements.inputFilesHelp.textContent = "A .pathlist file is selected. Select its input folder or referenced FASTA files. Missing paths fall back to basenames beside the list.";
   } else {
     elements.inputFilesHelp.textContent = "Select the files required by this module."
   }
+  await updatePathlistFolderNotices();
   await refreshTaxonSelectors();
   await updatePreflight();
   resetGeneratedOutput();
@@ -976,10 +1084,34 @@ function formatBytes(bytes) {
 }
 
 async function updatePreflight() {
-  const files = browserInputFiles();
+  const generation = ++preflightGeneration;
+  let files = browserInputFiles();
   if (!files.length) {
     elements.preflightStatus.textContent = "Waiting for input";
     elements.preflightSummary.textContent = "Select input files to estimate browser load and validate basic FASTA structure.";
+    return;
+  }
+  try {
+    const expanded = [];
+    for (const control of inputControls()) {
+      if (generation !== preflightGeneration) return;
+      const field = activeModule().inputFields.find(field => field.key === control.dataset.inputKey);
+      const selected = filesForInput(control);
+      if (field?.pathList && selected.some(file => /\.(pathlist|list)$/i.test(file.name))) {
+        expanded.push(...await PhyloPrepInputs.resolveFiles([...selected, ...(inputFolderFiles.get(field.key) || [])], {
+          sibling: async (entry, list) => {
+            if (generation !== preflightGeneration) throw new Error("Preflight cancelled");
+            return readPathlistSibling(field.key, entry, list);
+          },
+        }));
+      } else expanded.push(...selected);
+    }
+    if (generation !== preflightGeneration) return;
+    files = expanded;
+  } catch (error) {
+    if (generation !== preflightGeneration) return;
+    elements.preflightStatus.textContent = "Input resolution needed";
+    elements.preflightSummary.textContent = error.message;
     return;
   }
   const totalBytes = files.reduce((sum, file) => sum + (file.size || 0), 0);
@@ -988,9 +1120,18 @@ async function updatePreflight() {
   let duplicateIds = 0;
   let malformedCodon = 0;
   const fastaIdSets = [];
-  for (const file of files) {
-    if (!/\.(fa|faa|fas|fasta|aln|pep)$/i.test(file.name)) continue;
-    const text = await file.text();
+  const sampled = files.filter(file => /\.(fa|faa|fas|fasta|aln|pep)$/i.test(file.name)).slice(0, 100);
+  for (const file of sampled) {
+    if (generation !== preflightGeneration) return;
+    let text;
+    try { text = await PhyloPrepInputs.readText(file); }
+    catch (error) {
+      if (generation !== preflightGeneration) return;
+      elements.preflightStatus.textContent = "File unreadable";
+      elements.preflightSummary.textContent = error.message;
+      return;
+    }
+    if (generation !== preflightGeneration) return;
     if (!text.trimStart().startsWith(">")) continue;
     fastaFiles += 1;
     const ids = text.split(/\r?\n/).filter((line) => line.startsWith(">")).map((line) => line.slice(1).trim().split(/\s+/, 1)[0]).filter(Boolean);
@@ -1020,6 +1161,7 @@ async function updatePreflight() {
   elements.preflightStatus.textContent = level;
   elements.preflightSummary.innerHTML = [
     `<strong>${files.length}</strong> file(s)`,
+    files.length > 100 ? "Preflight samples up to 100 FASTA files; RUN processes all inputs" : "",
     `<strong>${formatBytes(totalBytes)}</strong>`,
     fastaFiles ? `<strong>${fastaFiles}</strong> FASTA file(s) · <strong>${sequences}</strong> sequence(s)` : "",
     problems.length ? problems.join(" · ") : '<span class="preflight-ok">Basic structure checks passed</span>',
@@ -1509,6 +1651,33 @@ function prepareNextStep() {
   selectModule(index);
 }
 
+async function readPathlistSibling(inputKey, entry, list) {
+  const root = inputFolderHandles.get(inputKey);
+  if (!root) return undefined;
+  const normalized = PhyloPrepInputs.normalize(entry);
+  const paths = [];
+  if (!normalized.startsWith("/") && !/^[A-Za-z]:/.test(normalized)) paths.push(normalized);
+  paths.push(PhyloPrepInputs.basename(entry));
+  for (const path of [...new Set(paths)]) {
+    const parts = path.split("/").filter(part => part && part !== ".");
+    if (parts.includes("..")) continue;
+    try {
+      let directory = root;
+      for (const part of parts.slice(0, -1)) directory = await directory.getDirectoryHandle(part);
+      const cacheKey = `${inputKey}\u0000${parts.join("/")}`;
+      if (resolvedFolderFiles.has(cacheKey)) return resolvedFolderFiles.get(cacheKey);
+      const file = await (await directory.getFileHandle(parts.at(-1))).getFile();
+      resolvedFolderFiles.set(cacheKey, file);
+      return file;
+    } catch (error) {
+      if (error.name !== "NotFoundError" && error.name !== "TypeMismatchError") {
+        throw new Error(`Cannot read ${entry} from input folder: ${error.message}. Reselect the input folder.`);
+      }
+    }
+  }
+  return undefined;
+}
+
 async function runBrowserModule() {
   const module = activeModule();
   const files = browserInputFiles();
@@ -1525,13 +1694,31 @@ async function runBrowserModule() {
   setRunStage(1, "Reading input files");
   setLog("Preparing input for the local worker…");
   try {
-    const filePayload = await Promise.all(inputControls().flatMap((control) =>
-      filesForInput(control).map(async (file) => ({
-        name: file.name,
-        content: await file.text(),
-        inputKey: control.dataset.inputKey,
-      }))
-    ));
+    ++preflightGeneration;
+    resolvedFolderFiles.clear();
+    const filePayload = [];
+    for (const control of inputControls()) {
+      const field = module.inputFields.find(field => field.key === control.dataset.inputKey);
+      let inputs = filesForInput(control);
+      if (field?.pathList) {
+        const available = [...inputs, ...(inputFolderFiles.get(field.key) || [])];
+        inputs = await PhyloPrepInputs.resolveFiles(available, {
+          sibling: (entry, list) => readPathlistSibling(field.key, entry, list),
+        });
+      }
+      const contents = await PhyloPrepInputs.readBounded(inputs, async file => {
+        try { return await PhyloPrepInputs.readText(file); }
+        catch (error) {
+          if (!field?.pathList || !inputFolderHandles.has(field.key)) throw error;
+          const fresh = await readPathlistSibling(field.key, file.name, file);
+          if (!fresh) throw error;
+          return PhyloPrepInputs.readText(fresh);
+        }
+      });
+      for (let index = 0; index < inputs.length; index++) {
+        filePayload.push({ name: inputs[index].name, content: contents[index], inputKey: control.dataset.inputKey });
+      }
+    }
     const optionValues = rawParameterValues();
     setRunStage(stage, "Loading local workflow");
     elements.cancelRun.hidden = false;
