@@ -194,3 +194,10 @@ if (!app.includes('hide("allow_internal_stop", seqtype === "nucl");')) {
 
 // Exercise real pathlist resolution and bounded reads without a browser runtime.
 await import("./input-test.mjs");
+await import('./alignment-test.mjs');
+for (const flag of ['--min-nucl-pis', '--min-protein-pis']) {
+  const entries = app.split('\n').filter(line => line.includes(`flag: "${flag}"`));
+  if (entries.length !== 2 || entries.some(line => !line.includes('value: "0"'))) {
+    throw new Error(`${flag} must display a default of 0 in pipeline and standalone QC.`);
+  }
+}

@@ -31,6 +31,15 @@ async function createMafftCli() {
   ], { printInterleaved: false });
 }
 
+function memoryFailureMessage(tool, diagnostic, sequenceText) {
+  if (!/myalloc(?:64)?\([^\n]*failed|out of memory|cannot enlarge memory|allocation failed/i.test(diagnostic)) return null;
+  const sequences = String(sequenceText || "").split(/^>/m).slice(1).map(record => record.split(/\r?\n/).slice(1).join("").replace(/\s/g, "").length);
+  const longest = sequences.length ? sequences.reduce((max, length) => Math.max(max, length), 0) : 0;
+  return `${tool} could not allocate memory in the browser/WebAssembly runtime (${sequences.length} sequences; longest ${longest} residues/bases). ` +
+    "Long sequences can require large alignment matrices even with few taxa. Run this dataset with the native PhyloPrep CLI; alternatively, explicitly select MAFFT to try its browser implementation. " +
+    "The MUSCLE Biowasm banner's 100Mb RAM is a fixed reported value, not a measurement of your computer's RAM. The aligner was not switched automatically.\n\nOriginal diagnostic:\n" + diagnostic;
+}
+
 function validateAlignment(alignment, tool, execution) {
   if (typeof alignment === "string" && alignment.trimStart().startsWith(">")) return alignment;
   const stderr = String(execution?.stderr || "").trim();
@@ -81,6 +90,9 @@ self.addEventListener("message", async (event) => {
     if (tool === "muscle") {
       outputPath = `/shared/data/${token}.aligned.fasta`;
       const execution = await cli.exec("muscle -align " + inputPath + " -output " + outputPath + " -threads 1");
+      const diagnostic = [execution?.stderr, execution?.stdout].filter(Boolean).join("\n");
+      const memoryError = memoryFailureMessage("MUSCLE", diagnostic, request.sequenceText);
+      if (memoryError) throw new Error(memoryError);
       let alignment = await cli.cat(outputPath);
       if (typeof alignment !== "string") {
         const blob = await cli.downloadBlob(outputPath);
@@ -93,7 +105,10 @@ self.addEventListener("message", async (event) => {
 
     throw new Error(`Unsupported browser aligner: ${tool}`);
   } catch (error) {
-    self.postMessage({ type: "error", runId, message: error.message || String(error) });
+    const diagnostic = error.message || String(error);
+    const message = diagnostic.includes("Original diagnostic:") ? diagnostic
+      : memoryFailureMessage(tool === "muscle" ? "MUSCLE" : "MAFFT", diagnostic, request.sequenceText) || diagnostic;
+    self.postMessage({ type: "error", runId, message });
   } finally {
     if (cli) {
       try { if (outputPath) await cli.fs.unlink(outputPath); } catch {}
