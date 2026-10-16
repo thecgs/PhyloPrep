@@ -235,7 +235,7 @@ const modules = [
     script: "split_codon_seqence_alignment.py", title: "Split codon positions", category: "Alignment", browser: true,
     summary: "Splits a codon alignment into first-, second-, and third-position FASTA matrices.",
     inputs: ["Codon alignment FASTA"],
-    inputFields: [{ key: "input", label: "Codon alignment FASTA", flag: "-i, --input", accept: ".fa,.fas,.fasta,.aln" }],
+    inputFields: [{ key: "input", label: "Codon alignment FASTA", flag: "-i, --input", accept: ".fa,.fas,.fasta,.aln.fasta" }],
     outputs: ["codon1st.*.fasta", "codon2nd.*.fasta", "codon3rd.*.fasta"],
     outputLabel: "Output naming", outputHelp: "The original script derives all three output names from the input filename.", defaultOutput: "", hideOutputName: true,
     parameters: [],
@@ -339,7 +339,7 @@ const modules = [
     summary: "Removes low-quality columns or sequences from an alignment under explicit thresholds.",
     inputs: ["Alignment FASTA (-i, --input)", "Required sequence type (-st, --seqtype)"], outputs: ["Trimmed alignment FASTA (-o, --out; optional)"],
     inputFields: [{ key: "input", label: "Alignment FASTA", flag: "-i, --input" }],
-    outputLabel: "Output file name", outputHelp: "Trimmed FASTA written by -o when provided.", defaultOutput: "trimmed.aln",
+    outputLabel: "Output file name", outputHelp: "Trimmed FASTA written by -o when provided.", defaultOutput: "trimmed.aln.fasta",
     parameters: [
       { flag: "-st", label: "Sequence type", description: "Alignment sequence type.", type: "select", value: "codon", options: [["codon", "codon"], ["prot", "prot"], ["nucl", "nucl"]], token: "seqtype" },
       { flag: "-G", label: "Maximum gap proportion", description: "Column gap threshold for trimming. Range: 0–1.", type: "number", value: "0.2", step: "0.01", token: "gap_ratio" },
@@ -781,7 +781,7 @@ function renderInputFileFields(module) {
     control.dataset.inputRequired = String(field.required !== false);
     control.type = "file";
     control.multiple = Boolean(field.multiple);
-    const acceptedFiles = field.accept || ".fa,.fas,.fasta,.aln,.phy,.phylip,.nex,.nexus,.txt";
+    const acceptedFiles = field.accept || ".fa,.fas,.fasta,.aln.fasta,.phy,.phylip,.nex,.nexus,.txt";
     control.accept = field.pathList ? `${acceptedFiles},.pathlist,.list` : acceptedFiles;
     control.addEventListener("change", () => rememberInputFiles(control));
     const display = document.createElement("span");
@@ -1718,7 +1718,7 @@ function selectedInputPathList(inputs) {
 }
 
 function batchPathLists(files) {
-  const suffixes = ["nucl.aln", "prot.aln", "codon.aln", "nucl.trimmed.aln", "prot.trimmed.aln", "codon.trimmed.aln"];
+  const suffixes = ["nucl.aln.fasta", "prot.aln.fasta", "codon.aln.fasta", "nucl.trimmed.aln.fasta", "prot.trimmed.aln.fasta", "codon.trimmed.aln.fasta"];
   const outputs = [];
   suffixes.forEach((suffix) => {
     const names = files.filter((file) => file.name.endsWith(`.${suffix}`)).map((file) => file.name).sort();
@@ -1764,7 +1764,7 @@ async function runMsapBatchBrowserWorkflow(request) {
     engineMetadata = result.engineMetadata;
     outputs.push(...result.files.map((file) => ({ name: file.name, content: file.content })));
     const available = request.pipelineOutput
-      ? result.files.filter(file => !file.name.includes("/") && (file.name.endsWith(".aln") || file.name.endsWith(".sequence_changes.tsv")))
+      ? result.files.filter(file => !file.name.includes("/") && (file.name.endsWith(".aln.fasta") || file.name.endsWith(".sequence_changes.tsv")))
           .map(file => ({ name: `alignments/${file.name}`, content: file.content }))
       : result.files;
     await publishProducedFiles(available);
@@ -1789,7 +1789,7 @@ async function runPhyloPrepBrowserWorkflow(request) {
   const mapping = request.files.find((file) => file.inputKey === "mapping");
   const batch = await runMsapBatchBrowserWorkflow({ ...request, files: sources, pipelineOutput: true });
   const batchProducts = batch.files
-    .filter((file) => !file.name.includes("/") && (file.name.endsWith(".aln") || file.name.endsWith(".sequence_changes.tsv")))
+    .filter((file) => !file.name.includes("/") && (file.name.endsWith(".aln.fasta") || file.name.endsWith(".sequence_changes.tsv")))
     .map((file) => ({ ...file, role: "batch-output" }));
   const finalFiles = [
     ...sources.map((file) => ({ ...file, role: "source" })),

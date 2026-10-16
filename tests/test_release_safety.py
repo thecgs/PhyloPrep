@@ -109,7 +109,7 @@ def test_recovery_after_partial_backup_cleanup(tmp_path, monkeypatch, committed)
     key = 'gene_test'
     stage = tmp_path/'.msap-batch-staging'/key
     stage.mkdir(parents=True)
-    name = 'gene.mafft.prot.aln'
+    name = 'gene.mafft.prot.aln.fasta'
     (tmp_path/name).write_text('OLD')
     (stage/name).write_text('NEW')
     state = tmp_path/f'.msap-batch-state-{key}.json'
@@ -148,11 +148,11 @@ def test_recovery_after_partial_backup_cleanup(tmp_path, monkeypatch, committed)
 def test_missing_backup_is_never_interpreted_as_permission_to_delete(tmp_path, legacy):
     backup = tmp_path/'.msap-batch-backups/gene_test'
     backup.mkdir(parents=True)
-    output = tmp_path/'old.aln'
+    output = tmp_path/'old.aln.fasta'
     output.write_text('KEEP')
-    journal = {'names': ['old.aln'], 'outputs': {}, 'running_state': {}}
+    journal = {'names': ['old.aln.fasta'], 'outputs': {}, 'running_state': {}}
     if not legacy:
-        journal['original_files'] = ['old.aln']
+        journal['original_files'] = ['old.aln.fasta']
     (backup/'journal.json').write_text(json.dumps(journal))
     with pytest.raises(ValueError):
         batch._recover_publication(backup, tmp_path)

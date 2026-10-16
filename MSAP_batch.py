@@ -119,9 +119,9 @@ def _build_command(args: argparse.Namespace, infile: Path) -> list[str]:
 
 def _expected_alignment_outputs(args: argparse.Namespace, infile: Path, stage: Path) -> list[Path]:
     suffixes = ["prot", "codon"] if args.seqtype in {"codon", "pseudogene"} else [args.seqtype]
-    outputs = [stage / f"{infile.stem}.{args.align_software}.{suffix}.aln" for suffix in suffixes]
+    outputs = [stage / f"{infile.stem}.{args.align_software}.{suffix}.aln.fasta" for suffix in suffixes]
     if not args.notrim:
-        outputs.extend(stage / f"{infile.stem}.{args.align_software}.{suffix}.trimmed.aln" for suffix in suffixes)
+        outputs.extend(stage / f"{infile.stem}.{args.align_software}.{suffix}.trimmed.aln.fasta" for suffix in suffixes)
     return outputs
 
 
@@ -148,11 +148,11 @@ def _write_path_lists(root: Path, args: argparse.Namespace, inputs: list[Path]) 
     """Write absolute-path lists for each alignment type produced by the batch."""
     list_dir = root / "path-lists"
     list_dir.mkdir(parents=True, exist_ok=True)
-    suffixes = ["prot.aln", "codon.aln"] if args.seqtype in {"codon", "pseudogene"} else [f"{args.seqtype}.aln"]
+    suffixes = ["prot.aln.fasta", "codon.aln.fasta"] if args.seqtype in {"codon", "pseudogene"} else [f"{args.seqtype}.aln.fasta"]
     if not args.notrim:
-        suffixes += [suffix.replace(".aln", ".trimmed.aln") for suffix in list(suffixes)]
+        suffixes += [suffix.replace(".aln.fasta", ".trimmed.aln.fasta") for suffix in list(suffixes)]
     for kind in ('nucl', 'prot', 'codon'):
-        for variant in ('aln', 'trimmed.aln', 'trimal.aln'):
+        for variant in ('aln.fasta', 'trimmed.aln.fasta', 'trimal.aln.fasta'):
             suffix = f'{kind}.{variant}'
             if suffix not in suffixes:
                 (list_dir / f'all.{suffix}.pathlist').unlink(missing_ok=True)
@@ -344,7 +344,7 @@ def _run_one(args: argparse.Namespace, infile: Path, root: Path) -> tuple[str, s
         if process.returncode != 0:
             raise subprocess.CalledProcessError(process.returncode, command)
         for path in _expected_alignment_outputs(args, infile, stage):
-            read_fasta_alignment(path, codon=path.name.endswith((".codon.aln", ".codon.trimmed.aln")))
+            read_fasta_alignment(path, codon=path.name.endswith((".codon.aln.fasta", ".codon.trimmed.aln.fasta")))
         if _signature(infile) != signature:
             raise RuntimeError("Input changed during alignment; results were not promoted")
     except BaseException:
@@ -384,7 +384,7 @@ Batch-only options:
   Path lists include only validated, completed inputs from the current run;
   failed or interrupted replacements are excluded even if old files remain.
   After completion, all path lists are written under the output directory's
-  path-lists/ subdirectory (for example, path-lists/all.codon.aln.pathlist).
+  path-lists/ subdirectory (for example, path-lists/all.codon.aln.fasta.pathlist).
   Results are written directly into <output-dir> only after success; incomplete work remains in
   .msap-batch-staging and is restarted on the next run.""",
     )

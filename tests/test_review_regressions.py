@@ -129,14 +129,14 @@ def test_failed_rerun_excludes_stale_matrix(tmp_path, fake_aligner):
     args = ['-i', source, '-o', output, '-st', 'nucl', '--notrim', '-t', 1]
     first = cli('MSAP_batch.py', tmp_path, *args, env=env)
     assert first.returncode == 0, first.stderr
-    paths = output / 'path-lists/all.nucl.aln.pathlist'
+    paths = output / 'path-lists/all.nucl.aln.fasta.pathlist'
     assert paths.read_text().strip()
     source.write_text('>a\nTTTT\n>b\nTTTA\n')
     result = cli('MSAP_batch.py', tmp_path, *args, env={**env, 'MSAP_TEST_FAIL': '1'})
     assert result.returncode != 0
     assert paths.read_text() == ''
     # Failed replacement keeps the old matrix for recovery, but never lists it.
-    assert 'ACGT' in (output / 'gene.mafft.nucl.aln').read_text()
+    assert 'ACGT' in (output / 'gene.mafft.nucl.aln.fasta').read_text()
 
 
 @pytest.mark.parametrize('interrupt', [signal.SIGINT, signal.SIGTERM])

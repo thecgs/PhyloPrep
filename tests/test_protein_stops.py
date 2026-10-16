@@ -66,7 +66,7 @@ def test_custom_stop_through_all_entrypoints(tmp_path, fake_aligner, script):
     assert all(r['input_file'] == str(source) and r['original'] == '.' for r in edits)
     assert all(r['source_aa_positions'] != 'NA' for r in edits)
     alignment_dir = tmp_path if script == 'MSAP.py' else (output/'alignments' if script == 'phyloprep.py' else output)
-    assert {r.id: str(r.seq) for r in SeqIO.parse(alignment_dir/'protein.mafft.prot.aln', 'fasta')} == {'a': 'MAXG', 'b': 'MAAG'}
+    assert {r.id: str(r.seq) for r in SeqIO.parse(alignment_dir/'protein.mafft.prot.aln.fasta', 'fasta')} == {'a': 'MAXG', 'b': 'MAAG'}
     assert not (alignment_dir/'protein.protein.cleaned.fasta').exists()
     if script != 'MSAP.py':
         repeated = subprocess.run(args, cwd=tmp_path, env=env, capture_output=True, text=True)
@@ -107,7 +107,7 @@ def test_stop_option_invalidates_resume_and_trimming_uses_cleaned_protein(tmp_pa
     source.write_text('>a\nMA.G..\n>b\nMAAG.\n')
     result = subprocess.run(args + ['--protein-stop-symbol', '.'], cwd=tmp_path, env=env, capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
-    assert {str(r.seq) for r in SeqIO.parse(output/'protein.mafft.prot.trimmed.aln', 'fasta')} == {'MAG'}
+    assert {str(r.seq) for r in SeqIO.parse(output/'protein.mafft.prot.trimmed.aln.fasta', 'fasta')} == {'MAG'}
     assert len(rows(output/'reports/sequence_changes.tsv')) == 4
 
 

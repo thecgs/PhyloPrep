@@ -192,8 +192,8 @@ python MSAP.py -i proteins.fa -st prot --protein-stop-symbol .
 python MSAP.py -i pseudo.fa -st pseudogene --macse-jar macse_v2.07.jar
 ```
 
-Outputs use `GENE.ALIGNER.{nucl|prot|codon}[.trimmed].aln`; audit reports are retained. In codon mode, default trimming uses one shared site mask for the paired protein and back-translated codon alignments. For each amino-acid/codon site, gap, codon-N, and protein-X fractions are evaluated together; if any selected threshold rejects the site, the amino-acid column and its complete codon triplet are removed together. trimAl codon mode likewise transfers retained protein columns to complete codon triplets.
-Trimmed FASTA alignments always end in `.trimmed.aln`, for both trimming programs and all sequence types (including MACSE outputs). Batch path lists use `all.TYPE.trimmed.aln.pathlist`. Raw alignments retain `.aln`.
+Outputs use `GENE.ALIGNER.{nucl|prot|codon}[.trimmed].aln.fasta`; audit reports are retained. In codon mode, default trimming uses one shared site mask for the paired protein and back-translated codon alignments. For each amino-acid/codon site, gap, codon-N, and protein-X fractions are evaluated together; if any selected threshold rejects the site, the amino-acid column and its complete codon triplet are removed together. trimAl codon mode likewise transfers retained protein columns to complete codon triplets.
+Trimmed FASTA alignments always end in `.trimmed.aln.fasta`, for both trimming programs and all sequence types (including MACSE outputs). Batch path lists use `all.TYPE.trimmed.aln.fasta.pathlist`. Raw alignments retain `.aln.fasta`.
 
 ### `MSAP_batch.py` — concurrent, resumable alignment
 
@@ -258,7 +258,7 @@ python extract_4-fold_degenerated_sites.py -i supermatrix.fasta -o fourfold.fast
 Maps each non-gap protein position to its matching CDS codon. IDs must match exactly. `-g` validates translations.
 
 ```bash
-python AA2Codon.py -c CDS.fa -p protein.aln.fa -o codon.aln.fa -g 1
+python AA2Codon.py -c CDS.fa -p protein.aln.fasta -o codon.aln.fasta -g 1
 ```
 
 ### `trimAlnSeq.py` — threshold trimming
@@ -266,7 +266,7 @@ python AA2Codon.py -c CDS.fa -p protein.aln.fa -o codon.aln.fa -g 1
 Trims nucleotide/protein sites or whole codon triplets using gap and N/X ratios. `-ra` removes invariant sites. `-i -` reads stdin; no `-o` writes stdout. Zero retained sites is an error.
 
 ```bash
-python trimAlnSeq.py -i gene.aln.fa -o gene.trimmed.aln -st codon -G 0.2 -N 0.2
+python trimAlnSeq.py -i gene.aln.fasta -o gene.trimmed.aln.fasta -st codon -G 0.2 -N 0.2
 ```
 
 ### `filter_sequences.py` — taxon filtering

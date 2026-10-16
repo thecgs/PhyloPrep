@@ -28,7 +28,7 @@ function fakeFolder() {
   return { root: directory(''), disk, calls, get peak() { return peak; }, fail(name) { failName = name; } };
 }
 const folder = fakeFolder(), writer = createWriter(folder.root);
-const files = Array.from({length:100}, (_,i) => ({name:`alignments/codon/gene${i}.aln`,content:`seq${i}`}));
+const files = Array.from({length:100}, (_,i) => ({name:`alignments/codon/gene${i}.aln.fasta`,content:`seq${i}`}));
 for (const file of files) writer.save(file);
 assert.notEqual(writer.stats().saved, 100, 'Must wait for close before reporting completion');
 await writer.settle();
@@ -45,7 +45,7 @@ assert.equal(folder.disk.get('/matrices/result.fa'), 'second');
 assert.ok(writer.saved({name:'matrices/result.fa',content:'second'}));
 assert.ok(!writer.saved({name:'matrices/result.fa',content:'first'}));
 
-const broken = fakeFolder(); broken.fail('gene0.aln');
+const broken = fakeFolder(); broken.fail('gene0.aln.fasta');
 const retry = createWriter(broken.root);
 files.forEach(file => retry.save(file));
 await retry.settle();
@@ -71,16 +71,16 @@ const context = vm.createContext({
   externalAlignerLabel:()=> 'MAFFT', batchPathLists:()=>[], mergeTsvContents:()=>'',
   publishProducedFiles:async files => {for (const file of files) published.set(file.name,file.content);},
   runMsapBrowserWorkflow:async request => {
-    if (processed) assert.equal(published.get('alignments/first.codon.aln'),'aligned');
+    if (processed) assert.equal(published.get('alignments/first.codon.aln.fasta'),'aligned');
     processed++;
-    return {files:[{name:`${request.files[0].name.split('.')[0]}.codon.aln`,content:'aligned'}]};
+    return {files:[{name:`${request.files[0].name.split('.')[0]}.codon.aln.fasta`,content:'aligned'}]};
   },
 });
 vm.runInContext(slice('async function runMsapBatchBrowserWorkflow(', 'async function runPhyloPrepBrowserWorkflow('),context);
 context.request={pipelineOutput:true,options:{},files:[{inputKey:'inputs',name:'first.fa',content:'>a\nATG'},{inputKey:'inputs',name:'second.fa',content:'>a\nATG'}]};
 const batch=await vm.runInContext('runMsapBatchBrowserWorkflow(request)',context);
-assert.ok(batch.files.some(file => file.name === 'first.codon.aln'), 'Internal batch names must stay unchanged');
-assert.ok(published.has('alignments/second.codon.aln'));
+assert.ok(batch.files.some(file => file.name === 'first.codon.aln.fasta'), 'Internal batch names must stay unchanged');
+assert.ok(published.has('alignments/second.codon.aln.fasta'));
 console.log('Four-writer bound, directory caching, deduplication, overwrite serialization, failure retry and per-locus export checks passed.');
 
 // Exercise the actual app saving helpers, completion warnings and manual retry.
@@ -131,11 +131,11 @@ await vm.runInContext('downloadAllOutputs()',integration);
 assert.equal(other.disk.size,3,'A new destination needs its own save session');
 
 integration.runInWorker=async()=>{
-  await integration.publishProducedFiles([{name:'alignments/partial.aln',content:'ATG'}]);
+  await integration.publishProducedFiles([{name:'alignments/partial.aln.fasta',content:'ATG'}]);
   throw new Error('analysis interrupted');
 };
 await vm.runInContext('runBrowserModule()',integration);
 assert.equal(logs.at(-1).text,'analysis interrupted');
 assert.equal(integration.generatedFiles.length,1,'Produced files must survive analysis errors');
-assert.equal(other.disk.get('/alignments/partial.aln'),'ATG');
+assert.equal(other.disk.get('/alignments/partial.aln.fasta'),'ATG');
 console.log('No-folder behavior, full workflow save completion, paused-save warning, manual retry, destination changes and partial-result retention passed.');

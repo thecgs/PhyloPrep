@@ -15,7 +15,7 @@ from msap_io import atomic_output, expand_input_paths, check_output_path, NoGene
 def tidy_name(file):
     # Strip only the current PhyloPrep alignment suffix.
     file = re.sub(
-        r'\.(?:mafft|muscle|clustalw2|prank|macse)\.(?:nucl|codon|prot)(?:\.trimmed)?\.aln$',
+        r'\.(?:mafft|muscle|clustalw2|prank|macse)\.(?:nucl|codon|prot)(?:\.trimmed)?\.aln\.fasta$',
         '', os.path.basename(file),
     ).replace('.', '_').replace('-', '_')
 

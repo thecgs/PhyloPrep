@@ -427,13 +427,13 @@ def _phyloprep_finalize_steps(file_manifest, options, output_root, engine_root="
         path_lists = alignments / "path-lists"
         path_lists.mkdir(parents=True, exist_ok=True)
         for kind in ("nucl", "prot", "codon"):
-            for variant, suffix in (("raw", f".{kind}.aln"), ("trimmed", f".{kind}.trimmed.aln")):
+            for variant, suffix in (("raw", f".{kind}.aln.fasta"), ("trimmed", f".{kind}.trimmed.aln.fasta")):
                 files = sorted(
                     path.resolve() for path in alignments.iterdir()
                     if path.is_file() and path.name.endswith(suffix)
                 )
                 if files:
-                    list_name = f"all.{kind}.aln.pathlist" if variant == "raw" else f"all.{kind}.trimmed.aln.pathlist"
+                    list_name = f"all.{kind}.aln.fasta.pathlist" if variant == "raw" else f"all.{kind}.trimmed.aln.fasta.pathlist"
                     phyloprep.write_paths(path_lists / list_name, files)
 
         reports = root / "reports"

@@ -124,12 +124,12 @@ def test_trimmed_alignment_suffix_preserves_locus_names():
     from get_supergenes import tidy_name
     for aligner in ('mafft', 'muscle', 'prank', 'clustalw2', 'macse'):
         for seqtype in ('nucl', 'prot', 'codon'):
-            for variant in ('aln', 'trimmed.aln'):
+            for variant in ('aln.fasta', 'trimmed.aln.fasta'):
                 assert tidy_name(f'/work/ND5.{aligner}.{seqtype}.{variant}') == 'ND5'
 
 
 def test_pipeline_can_defer_phylip_output(tmp_path):
-    source = tmp_path / 'gene.mafft.nucl.aln'
+    source = tmp_path / 'gene.mafft.nucl.aln.fasta'
     write_alignment(source, [('a', 'ACGT'), ('b', 'ACGT')])
     prefix = tmp_path / 'supermatrix'
     result = subprocess.run([sys.executable, str(SCRIPT), '-i', str(source),

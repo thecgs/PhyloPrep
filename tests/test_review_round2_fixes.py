@@ -58,7 +58,7 @@ def test_msap_internal_ambiguous_stop_backtranslates(tmp_path, fake_aligner):
     source.write_text('>a\nATGTARGCT\n>b\nATGGCTGCT\n')
     result = cli(tmp_path, 'MSAP.py', '-i', source, '-st', 'codon', '--notrim', '-t', 1, env=env)
     assert result.returncode == 0, result.stderr
-    assert 'ATGNNNGCT' in (tmp_path / 'gene.mafft.codon.aln').read_text()
+    assert 'ATGNNNGCT' in (tmp_path / 'gene.mafft.codon.aln.fasta').read_text()
 
 
 @pytest.mark.parametrize('suffix', ['pass', 'fail', 'details'])

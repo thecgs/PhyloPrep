@@ -240,7 +240,7 @@ def normalize_workflow(args):
 def macse_align(args, infile, prefix, java):
     original_nt = prefix + '.macse_original.NT.fasta'
     original_aa = prefix + '.macse_original.AA.fasta'
-    nt, aa = prefix + '.macse.codon.aln', prefix + '.macse.prot.aln'
+    nt, aa = prefix + '.macse.codon.aln.fasta', prefix + '.macse.prot.aln.fasta'
     base = [java, '-Xmx' + args.macse_memory, '-jar', args.macse_jar]
     subprocess.run([*base, '-prog', 'alignSequences', '-seq', infile,
                     '-gc_def', str(args.genetic_code), '-out_NT', original_nt, '-out_AA', original_aa], check=True)
