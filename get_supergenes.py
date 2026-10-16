@@ -5,8 +5,12 @@ import os
 import sys
 import argparse
 import re
+import tempfile
+from pathlib import Path
+from collections import OrderedDict
+from contextlib import ExitStack
 from Bio import SeqIO
-from msap_io import atomic_output, expand_input_paths, check_output_path, NoGenesIncludedError
+from msap_io import atomic_output, expand_input_paths, check_output_path, NoGenesIncludedError, file_signature
 
 def tidy_name(file):
     # Strip only the current PhyloPrep alignment suffix.
@@ -23,24 +27,95 @@ def tidy_name(file):
 
 def read_alignment(file):
     """Read one FASTA alignment and validate its IDs and sequence lengths."""
-    records = list(SeqIO.parse(file, "fasta"))
-    if not records:
-        return None, "empty alignment"
-
     sequences = {}
-    expected_length = len(records[0].seq)
-    for record in records:
+    expected_length = None
+    for record in SeqIO.parse(file, "fasta"):
         if record.id in sequences:
             raise ValueError(f"{file}: duplicate sequence ID: {record.id}")
+        if expected_length is None:
+            expected_length = len(record.seq)
         if len(record.seq) != expected_length:
-            raise ValueError(
-                f"{file}: {record.id} has length {len(record.seq)}, "
-                f"expected {expected_length}"
-            )
+            raise ValueError(f"{file}: {record.id} has length {len(record.seq)}, expected {expected_length}")
         sequences[record.id] = str(record.seq)
+    if expected_length is None:
+        return None, "empty alignment"
     if expected_length == 0:
         return None, "zero-column alignment"
     return sequences, None
+
+
+def scan_alignment(file):
+    """Validate one record at a time, retaining identifiers but no sequences."""
+    taxa = []
+    seen = set()
+    length = None
+    for record in SeqIO.parse(file, "fasta"):
+        if record.id in seen:
+            raise ValueError(f"{file}: duplicate sequence ID: {record.id}")
+        seen.add(record.id)
+        taxa.append(record.id)
+        if length is None:
+            length = len(record.seq)
+        if len(record.seq) != length:
+            raise ValueError(f"{file}: {record.id} has length {len(record.seq)}, expected {length}")
+    return taxa, length
+
+
+class TaxonSpool:
+    """Append taxon fragments to temporary files with a bounded handle cache."""
+    chunk_size = 65536
+
+    def __init__(self, directory, taxa):
+        self.paths = {taxon: Path(directory) / str(i) for i, taxon in enumerate(taxa)}
+        self.handles = OrderedDict()
+
+    def append(self, taxon, sequence, length):
+        handle = self.handles.pop(taxon, None)
+        if handle is None:
+            if len(self.handles) >= 32:
+                _, oldest = self.handles.popitem(last=False)
+                oldest.close()
+            handle = self.paths[taxon].open('a', encoding='utf-8')
+        self.handles[taxon] = handle
+        if sequence is not None:
+            handle.write(sequence)
+        else:
+            # Do not allocate an entire missing-gene sequence.
+            while length:
+                count = min(length, self.chunk_size)
+                handle.write('-' * count)
+                length -= count
+
+    def close(self):
+        for handle in self.handles.values():
+            handle.close()
+        self.handles.clear()
+
+    def write_outputs(self, prefix, taxa, length, write_phylip):
+        self.close()
+        with ExitStack() as stack:
+            fasta = stack.enter_context(atomic_output(prefix + '.fasta'))
+            phylip = stack.enter_context(atomic_output(prefix + '.phy')) if write_phylip else None
+            if phylip:
+                phylip.write(f'{len(taxa)} {length}\n')
+            for taxon in taxa:
+                fasta.write(f'>{taxon}\n')
+                if phylip:
+                    phylip.write(taxon + ' ')
+                with self.paths[taxon].open(encoding='utf-8') as source:
+                    while True:
+                        chunk = source.read(self.chunk_size)
+                        if not chunk:
+                            break
+                        fasta.write(chunk)
+                        if phylip:
+                            phylip.write(chunk)
+                fasta.write('\n')
+                if phylip:
+                    phylip.write('\n')
+                # In Pyodide these files also occupy memory; release each one
+                # as its final outputs are written instead of keeping all spools.
+                self.paths[taxon].unlink()
 
 
 def get_supergenes(infiles, prefix, missing_taxa="skip-gene", input_lists=(), write_phylip=True):
@@ -57,43 +132,58 @@ def get_supergenes(infiles, prefix, missing_taxa="skip-gene", input_lists=(), wr
     taxa_seen = set()
     report_rows = []
 
+    # First pass retains only file metadata and the global taxon order.
     for file in infiles:
         if os.path.getsize(file) == 0:
             report_rows.append((file, "skipped", "empty file"))
             continue
-
-        sequences, error = read_alignment(file)
-        if error:
-            report_rows.append((file, "skipped", error))
+        signature = file_signature(file)
+        taxa, length = scan_alignment(file)
+        if signature != file_signature(file):
+            raise ValueError(f"Input changed while scanning: {file}")
+        if not taxa or not length:
+            report_rows.append((file, "skipped", "empty alignment" if not taxa else "zero-column alignment"))
             continue
-
-        for taxon in sequences:
+        for taxon in taxa:
             if taxon not in taxa_seen:
                 taxa_order.append(taxon)
                 taxa_seen.add(taxon)
-        alignments.append((file, sequences))
+        alignments.append((file, length, signature))
 
-    selected_alignments = []
-    supergenes = {taxon: [] for taxon in taxa_order}
+    # A single locus is loaded at a time in the second pass. Spools use actual
+    # disk on the CLI and reduce duplicated Python strings in browser MEMFS.
+    with tempfile.TemporaryDirectory(prefix='.supergenes-', dir=Path(prefix).absolute().parent) as directory:
+        spool = TaxonSpool(directory, taxa_order)
+        try:
+            selected_alignments = []
+            for file, alignment_length, signature in alignments:
+                if signature != file_signature(file):
+                    raise ValueError(f"Input changed before concatenation: {file}")
+                sequences, error = read_alignment(file)
+                if error or signature != file_signature(file):
+                    raise ValueError(f"Input changed during concatenation: {file}")
+                missing = [taxon for taxon in taxa_order if taxon not in sequences]
+                if missing and missing_taxa == "skip-gene":
+                    reason = "missing taxa: " + ", ".join(missing)
+                    report_rows.append((file, "skipped", reason))
+                    print(f"Skipping {file}: {reason}", file=sys.stderr)
+                    del sequences
+                    continue
+                report_rows.append((file, "padded" if missing else "included",
+                                    "missing taxa: " + ", ".join(missing) if missing else ""))
+                selected_alignments.append((file, alignment_length))
+                for taxon in taxa_order:
+                    spool.append(taxon, sequences.get(taxon), alignment_length)
+                del sequences
+            spool.close()
+            _write_supermatrix_products(prefix, report_rows, selected_alignments,
+                                        taxa_order, spool, write_phylip)
+        finally:
+            spool.close()
+    return None
 
-    for file, sequences in alignments:
-        missing = [taxon for taxon in taxa_order if taxon not in sequences]
-        if missing and missing_taxa == "skip-gene":
-            reason = "missing taxa: " + ", ".join(missing)
-            report_rows.append((file, "skipped", reason))
-            print(f"Skipping {file}: {reason}", file=sys.stderr)
-            continue
 
-        alignment_length = len(next(iter(sequences.values())))
-        if missing:
-            report_rows.append((file, "padded", "missing taxa: " + ", ".join(missing)))
-        else:
-            report_rows.append((file, "included", ""))
-
-        selected_alignments.append((file, alignment_length))
-        for taxon in taxa_order:
-            supergenes[taxon].append(sequences.get(taxon, "-" * alignment_length))
-
+def _write_supermatrix_products(prefix, report_rows, selected_alignments, taxa_order, spool, write_phylip):
     report_file = prefix + ".report.tsv"
     with atomic_output(report_file) as report:
         print("gene\tstatus\tdetails", file=report)
@@ -166,21 +256,8 @@ model_selection = BIC;
 search = greedy;    
 """, file=partition)
 
-    #part_raxml.close()
-    supermatrix = {
-        species: "".join(supergenes[species]) for species in taxa_order
-    }
-    supermatrix_length = len(supermatrix[taxa_order[0]])
-
-    with atomic_output(prefix+".fasta") as out:
-        for species in taxa_order:
-            print(f'>{species}\n{supermatrix[species]}', file=out)
-
-    if write_phylip:
-        with atomic_output(prefix+".phy") as out:
-            print(f"{len(taxa_order)} {supermatrix_length}", file=out)
-            for species in taxa_order:
-                print(f"{species} {supermatrix[species]}", file=out)
+    supermatrix_length = sum(length for _, length in selected_alignments)
+    spool.write_outputs(prefix, taxa_order, supermatrix_length, write_phylip)
     return None
     
     

@@ -44,3 +44,39 @@ def test_finalize_serializes_metadata_not_large_matrix(tmp_path, monkeypatch):
     assert matrix['size'] > 8 * 1024 * 1024
     assert 'content' not in matrix
     assert Path(matrix['path']).exists()
+
+
+def test_bounded_logs_retain_diagnostics_without_full_history():
+    browser = browser_module()
+    log = browser.BoundedLog(limit=100)
+    for _ in range(10000):
+        log.write('old message\n')
+    log.write('last diagnostic')
+    assert log.length <= 100
+    assert log.getvalue().startswith('[Earlier log output truncated]\n')
+    assert log.getvalue().endswith('last diagnostic')
+    log = browser.BoundedLog()
+    for _ in range(10000):
+        log.write('x')
+    assert len(log.parts) <= 1024
+    log.write('A' * 1000000)
+    assert log.length == 65536
+
+
+def test_finalize_memory_failure_uses_prebuilt_response(tmp_path, monkeypatch):
+    browser = browser_module()
+    source = tmp_path / 'source.fa'
+    source.write_text('>a\nMA\n>b\nMA\n')
+    def fail(*args, **kwargs):
+        raise MemoryError('simulated memory exhaustion')
+    monkeypatch.setattr(phyloprep, 'prepare_variant', fail)
+    monkeypatch.setattr(browser.BoundedLog, 'getvalue', fail)
+    monkeypatch.setattr(browser.traceback, 'print_exc', fail)
+    monkeypatch.setattr(browser.json, 'dumps', fail)
+    raw = browser.run_phyloprep_finalize(
+        [dict(role='source', path=str(source), name=source.name)],
+        dict(seqtype='prot', notrim=True), str(tmp_path / 'out'), str(ROOT), manifest_only=True)
+    assert raw is browser._MEMORY_ERROR_RESULT
+    result = json.loads(raw)
+    assert not result['ok']
+    assert 'Python/Pyodide' in result['error']
