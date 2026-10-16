@@ -188,3 +188,56 @@ def test_x_rejects_ambiguous_map_ids_across_different_orthogroups(tmp_path):
     assert 'maps to multiple taxa across orthogroups' in result.stderr
     assert not (output / 'map.tsv').exists()
     assert not list(output.glob('*.fasta'))
+
+
+def test_longest_copy_retains_one_per_taxon_and_records_candidates(tmp_path):
+    table, cds = write_inputs(tmp_path)
+    (cds / 'Human.fa').write_text('>gene:1\nATG\n>gene:4\nATG\n>gene:5\nATGAAA\n>gene:6\nATG\n')
+    output = tmp_path / 'out'
+    result = run(tmp_path, '-og', table, '-i', cds, '-o', output,
+                 '--copy-mode', 'all-copies', '--longest-copy')
+    assert result.returncode == 0, result.stderr
+    records = list(SeqIO.parse(output / 'OG0002.fasta', 'fasta'))
+    assert [r.id for r in records] == ['Human_gene_5', 'Mouse_gene_4', 'Fish_gene_8']
+    assert str(records[0].seq) == 'ATGAAA'
+    mapping = (output / 'map.tsv').read_text()
+    assert 'Human_gene_5\tHuman\n' in mapping
+    assert 'Human_gene_4\tHuman\n' not in mapping
+    assert len((output / 'orthogroups.pathlist').read_text().splitlines()) == 2
+    selection = (output / 'copy_selection.tsv').read_text()
+    assert selection.startswith('orthogroup\ttaxon\tgene_id\tlength\tselected\n')
+    assert 'OG0002\tHuman\tgene_4\t3\tno\n' in selection
+    assert 'OG0002\tHuman\tgene_5\t6\tyes\n' in selection
+
+
+def test_longest_copy_ties_are_independent_of_cell_order(tmp_path):
+    table, cds = write_inputs(tmp_path)
+    for index, genes in enumerate(['Human_gene:4, Human_gene:5', 'Human_gene:5, Human_gene:4']):
+        contents = table.read_text()
+        contents = contents.replace('Human_gene:4, Human_gene:5', genes).replace('Human_gene:5, Human_gene:4', genes)
+        table.write_text(contents)
+        out = tmp_path / f'out{index}'
+        result = run(tmp_path, '-og', table, '-i', cds, '-o', out,
+                     '--copy-mode', 'all-copies', '--longest-copy')
+        assert result.returncode == 0, result.stderr
+        assert next(SeqIO.parse(out / 'OG0002.fasta', 'fasta')).id == 'Human_gene_4'
+
+
+def test_longest_copy_requires_all_copies(tmp_path):
+    table, cds = write_inputs(tmp_path)
+    result = run(tmp_path, '-og', table, '-i', cds, '-o', tmp_path / 'out', '--longest-copy')
+    assert result.returncode == 2
+    assert '--longest-copy requires --copy-mode all-copies' in result.stderr
+    assert not (tmp_path / 'out').exists()
+
+
+def test_longest_copy_does_not_hide_missing_candidate_sequence(tmp_path):
+    table, cds = write_inputs(tmp_path)
+    (cds / 'Human.fa').write_text('>gene:1\nATG\n>gene:4\nATGAAAAAA\n>gene:6\nATG\n')
+    output = tmp_path / 'out'
+    result = run(tmp_path, '-og', table, '-i', cds, '-o', output,
+                 '--copy-mode', 'all-copies', '--longest-copy')
+    assert result.returncode == 2
+    assert "sequence ID 'gene_5'" in result.stderr
+    assert not list(output.glob('*.fasta'))
+    assert not (output / 'copy_selection.tsv').exists()

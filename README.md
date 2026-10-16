@@ -309,6 +309,11 @@ python extract_orthofinder_orthogroups.py \
 | --- | --- | --- | --- |
 | `--copy-mode single-copy` (default) | The OG cell contains exactly one gene. | One gene for each occupied taxon. | Concatenation, conventional one-to-one species-tree workflows. |
 | `--copy-mode all-copies` | The OG cell contains one or more genes. | Every listed gene, including paralogs. | Per-OG gene trees followed by ASTRAL-Pro3 or another duplication-aware method. |
+| `--copy-mode all-copies --longest-copy` | The OG cell contains one or more genes. | One longest input sequence per occupied taxon. | Representative sequence selection; does not establish orthology. |
+
+To retain one representative per taxon within each OG, add `--longest-copy` to `--copy-mode all-copies`. Occupancy still counts taxa, not copies. Length is measured from the input FASTA sequence as supplied (including N/X, stop and gap symbols); no translation or sequence cleaning is performed for this choice. Equal lengths choose the lexicographically smallest OrthoFinder-normalized source gene ID, independent of table order. Every listed candidate must exist in the source FASTA. `map.tsv` contains only exported representatives, and `copy_selection.tsv` records each candidate's OG, taxon, normalized gene ID, length and selection status.
+
+This option can prefer a longer sequence over a short fragment and produce at most one representative per taxon for matrix preparation. It does not distinguish isoforms from paralogs, verify orthology or exclude long chimeric/fusion sequences. Selecting the longest copy in each species can select different paralogs across species; these OGs must not be described as inferred single-copy orthologs. Without the option, all-copies continues to export every listed copy. The browser exposes the same optional checkbox only when all-copies is selected.
 
 `--min-taxa` is evaluated under the selected mode. Its upper bound is the number of taxa remaining after `--keep-taxa` and `--drop-taxa`; omitting it requires every selected taxon to meet the mode definition. Both taxon options accept names or a one-name-per-line text file and may be combined. An overlap—for example `--keep-taxa Human Mouse --drop-taxa Mouse`—is an error.
 

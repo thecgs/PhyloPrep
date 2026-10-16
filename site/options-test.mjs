@@ -72,3 +72,17 @@ vm.runInContext('elements.parameterList = testPanel', context);
 assert.equal(vm.runInContext('rawParameterValues().min_taxa', context), undefined);
 controls.get('min_taxa').dataset.autoDefault = 'false'; controls.get('min_taxa').value = '2';
 assert.equal(vm.runInContext('rawParameterValues().min_taxa', context), '2');
+controls.get('longest_copy').checked = true;
+controls.get('copy_mode').value = 'single-copy';
+assert.equal(vm.runInContext('rawParameterValues().longest_copy', context), undefined);
+controls.get('copy_mode').value = 'all-copies';
+assert.equal(vm.runInContext('rawParameterValues().longest_copy', context), true);
+workerContext.runtime = { FS: { mkdirTree() {}, writeFile() {} } };
+workerContext.stage = { optionsRoot:'/opts', outputRoot:'/out', files:[
+  {inputKey:'orthogroups',path:'/og.tsv'},
+  {inputKey:'sequences',name:'Human.fa',fasta:true,content:'>g\nAAA'},
+] };
+workerContext.request = { options:{copy_mode:'all-copies',longest_copy:true}, outputName:'results' };
+assert.ok(vm.runInContext('orthofinderArguments(runtime, request, stage)', workerContext).includes('--longest-copy'));
+workerContext.request.options.copy_mode = 'single-copy';
+assert.ok(!vm.runInContext('orthofinderArguments(runtime, request, stage)', workerContext).includes('--longest-copy'));

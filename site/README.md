@@ -142,3 +142,5 @@ The web catalog and selected-tool details load each script version from `engine/
 ### Self-hosted 4 GiB aligners
 
 Pages builds now compile the three alignment programs with a 4 GiB memory-growth ceiling and load them from `aligners/` on the same site. Build them before running `build-engine.mjs` for local previews. See [build instructions and limits](../docs/browser-aligner-builds.md). The ceiling is not a memory reservation or a guarantee of successful alignment; the browser may provide less. Aligner failures stop immediately, and diagnostics are specific to MAFFT or MUSCLE.
+
+The OrthoFinder extractor offers an optional **Keep longest copy per taxon** checkbox in `all-copies` mode (`--longest-copy`). It selects separately within each OG and taxon, using input sequence character counts and gene-ID order to break ties. Switching to single-copy omits the option from both execution and the CLI preview. `copy_selection.tsv` audits candidates and choices. Longest-copy selection does not infer orthology or identify paralogs.

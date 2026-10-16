@@ -167,7 +167,10 @@ def extract_orthologs(orthogroups: Path, sequence_directory: Path, outdir: Path,
                       keep_taxa: list[str] | None = None, drop_taxa: list[str] | None = None,
                       min_taxa: int | None = None, no_species_prefix: bool = False,
                       map_output: Path | None = None, copy_mode: str = "single-copy",
-                      pathlist_output: Path | None = None, orthofinder_id_style: str = "auto") -> int:
+                      pathlist_output: Path | None = None, orthofinder_id_style: str = "auto",
+                      longest_copy: bool = False) -> int:
+    if longest_copy and copy_mode != "all-copies":
+        raise ValueError("--longest-copy requires --copy-mode all-copies")
     all_taxa, rows = read_orthogroups(orthogroups)
     taxa = select_taxa(all_taxa, keep_taxa, drop_taxa)
     id_style = detect_orthofinder_id_style(rows, taxa, orthofinder_id_style)
@@ -182,7 +185,7 @@ def extract_orthologs(orthogroups: Path, sequence_directory: Path, outdir: Path,
     selected = [(og, cells, occupied_taxa(cells, taxa, og, copy_mode)) for og, cells in rows]
     selected = [(og, cells, present_taxa) for og, cells, present_taxa in selected if len(present_taxa) >= min_taxa]
     if not selected:
-        raise ValueError("No orthogroups meet the one-copy --min-taxa threshold after taxon filtering")
+        raise ValueError("No orthogroups meet the --min-taxa threshold after taxon filtering")
     sequences_by_taxon = {taxon: load_sequences(sequence_files[taxon]) for taxon in taxa}
     outdir.mkdir(parents=True, exist_ok=True)
     if not outdir.is_dir():
@@ -192,15 +195,19 @@ def extract_orthologs(orthogroups: Path, sequence_directory: Path, outdir: Path,
     inputs = [orthogroups, *[sequence_files[taxon] for taxon in taxa]]
     check_output_path(map_output, inputs=inputs)
     check_output_path(pathlist_output, inputs=inputs + [map_output])
-    prepared, map_rows = [], []
+    selection_output = outdir / "copy_selection.tsv" if longest_copy else None
+    if selection_output:
+        check_output_path(selection_output, inputs=inputs + [map_output, pathlist_output])
+    prepared, map_rows, selection_rows = [], [], []
     mapped_taxa = {}
     # Validate every orthogroup before publishing any output, so a missing sequence
     # cannot leave a partially updated output directory.
     for orthogroup, cells, present_taxa in selected:
         output = outdir / f"{orthogroup}.fasta"
-        check_output_path(output, inputs=inputs + [map_output])
+        check_output_path(output, inputs=inputs + [map_output, pathlist_output] + ([selection_output] if selection_output else []))
         output_rows, seen_ids = [], set()
         for taxon in present_taxa:
+            candidates = []
             for table_id in genes_in_cell(cells[taxon], orthogroup, taxon):
                 _normalized_table_id, gene_id = table_gene_id(table_id, taxon, id_style)
                 if gene_id not in sequences_by_taxon[taxon]:
@@ -208,6 +215,15 @@ def extract_orthologs(orthogroups: Path, sequence_directory: Path, outdir: Path,
                         f"{orthogroup}: sequence ID '{gene_id}' for taxon '{taxon}' was not found in {sequence_files[taxon]}. "
                         "Check that the input FASTAs and Orthogroups.tsv use identical OrthoFinder-normalized IDs."
                     )
+                candidates.append(gene_id)
+            if longest_copy:
+                if len(set(candidates)) != len(candidates):
+                    raise ValueError(f"{orthogroup}: duplicate candidate gene IDs for taxon '{taxon}'")
+                chosen = min(candidates, key=lambda gene: (-len(sequences_by_taxon[taxon][gene]), gene))
+                selection_rows.extend((orthogroup, taxon, gene, len(sequences_by_taxon[taxon][gene]),
+                                       'yes' if gene == chosen else 'no') for gene in candidates)
+                candidates = [chosen]
+            for gene_id in candidates:
                 export_id = gene_id if no_species_prefix else orthofinder_safe_id(taxon) + "_" + gene_id
                 if any(char.isspace() for char in export_id):
                     raise ValueError(f"{orthogroup}: output ID contains whitespace: {export_id!r}")
@@ -238,6 +254,11 @@ def extract_orthologs(orthogroups: Path, sequence_directory: Path, outdir: Path,
     with atomic_output(pathlist_output, inputs=inputs + [map_output, *output_fastas]) as handle:
         for output in output_fastas:
             handle.write(str(output.resolve()) + "\n")
+    if selection_output:
+        with atomic_output(selection_output, inputs=inputs + output_fastas + [map_output, pathlist_output]) as handle:
+            writer = csv.writer(handle, delimiter="\t", lineterminator="\n")
+            writer.writerow(["orthogroup", "taxon", "gene_id", "length", "selected"])
+            writer.writerows(selection_rows)
     return len(prepared)
 
 
@@ -251,6 +272,7 @@ def main(argv: list[str] | None = None) -> int:
   extract_orthofinder_orthogroups.py -og Orthogroups.tsv -i cds/ --drop-taxa Fruit_fly Frog
   extract_orthofinder_orthogroups.py -og Orthogroups.tsv -i cds/ --min-taxa 8 -X
   extract_orthofinder_orthogroups.py -og Orthogroups.tsv -i cds/ --copy-mode all-copies --min-taxa 8
+  extract_orthofinder_orthogroups.py -og Orthogroups.tsv -i cds/ --copy-mode all-copies --longest-copy
 
 The input sequence directory follows OrthoFinder -f conventions: one FASTA per taxon;
 the filename stem must exactly equal the taxon column in Orthogroups.tsv. Accepted
@@ -261,7 +283,12 @@ one-name-per-line text file. Default: retain all taxa in Orthogroups.tsv.
 an error. --copy-mode single-copy (default) counts a taxon only when its cell
 has exactly one gene and writes that gene. --copy-mode all-copies counts a taxon
 when it has at least one gene and writes every listed copy; this mode preserves
-paralogs for gene-tree methods such as ASTRAL-Pro3. --min-taxa is evaluated
+paralogs for gene-tree methods such as ASTRAL-Pro3. With --longest-copy, retain
+only the longest input sequence within each OG and taxon; length ties choose the
+lexicographically smallest normalized gene ID. Length is the input FASTA character
+count, including ambiguous and stop symbols. copy_selection.tsv records all candidates
+and selections. This is representative selection, not orthology inference.
+--min-taxa still counts occupied taxa, not copies, and is evaluated
 under the chosen mode. Its maximum is the number of taxa remaining after taxon
 filtering; its default is that maximum. The default --orthofinder-id-style auto
 detects taxon-prefixed table IDs (normal OrthoFinder output) or unprefixed IDs
@@ -284,6 +311,8 @@ absolute output FASTA paths and can be passed directly to phyloprep.py -i.
                         help="Exclude these taxa; overlapping --keep-taxa entries are errors.")
     parser.add_argument('-m',"--copy-mode", choices=("single-copy", "all-copies"), default="single-copy",
                         help="single-copy: require exactly one gene per counted taxon (default); all-copies: retain every copy and count taxa with >=1 gene, for e.g. ASTRAL-Pro3.")
+    parser.add_argument("--longest-copy", action="store_true",
+                        help="all-copies only: retain the longest sequence per taxon within each OG; ties use gene ID order. This does not establish orthology.")
     parser.add_argument("--min-taxa", type=int, metavar="N",
                         help="Require N occupied taxa after filtering; occupancy follows --copy-mode (default: all selected taxa).")
     parser.add_argument("-X", action="store_true", dest="no_species_prefix",
@@ -303,7 +332,7 @@ absolute output FASTA paths and can be passed directly to phyloprep.py -i.
                                   Path(args.map_output) if args.map_output else None,
                                   args.copy_mode,
                                   Path(args.pathlist_output) if args.pathlist_output else None,
-                                  args.orthofinder_id_style)
+                                  args.orthofinder_id_style, args.longest_copy)
     except (OSError, ValueError) as error:
         print(f"extract_orthofinder_orthogroups: {error}", file=sys.stderr)
         return 2

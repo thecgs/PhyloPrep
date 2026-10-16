@@ -166,19 +166,20 @@ const modules = [
       { key: "orthogroups", label: "Orthogroups.tsv", flag: "-og, --orthogroups", accept: ".tsv,.txt" },
       { key: "sequences", label: "Per-taxon FASTA files", flag: "-i, -f, --sequence-dir", multiple: true, accept: ".fa,.faa,.fasta,.fas,.pep" },
     ],
-    outputs: ["One FASTA per retained orthogroup", "map.tsv", "orthogroups.pathlist"],
+    outputs: ["One FASTA per retained orthogroup", "map.tsv", "orthogroups.pathlist", "copy_selection.tsv when longest-copy selection is enabled"],
     outputLabel: "Output directory name", outputHelp: "Equivalent to -o/--outdir. Browser-selected FASTA files are staged as a temporary sequence directory.", defaultOutput: "one-to-one_orthologs",
     parameters: [
-      { flag: "-m, --copy-mode", label: "Copy mode", description: "single-copy requires exactly one gene in each counted taxon; all-copies retains every listed copy.", type: "select", value: "single-copy", options: [["single-copy", "single-copy"], ["all-copies", "all-copies"]], token: "copy_mode" },
+      { flag: "-m, --copy-mode", label: "Copy mode", description: "single-copy requires exactly one gene in each counted taxon; all-copies retains every listed copy unless longest-copy selection is enabled.", type: "select", value: "single-copy", options: [["single-copy", "single-copy"], ["all-copies", "all-copies"]], token: "copy_mode" },
       { flag: "--min-taxa", label: "Minimum occupied taxa", description: "CLI default: all selected taxa. Filled from Orthogroups.tsv and keep/drop filters. Editing overrides the default; use the reset button to restore it.", type: "number", value: "", token: "min_taxa" },
       { flag: "-k, --keep-taxa", label: "Keep taxa", description: "Default: all taxa. Optional taxon names separated by commas or whitespace.", type: "text", value: "", placeholder: "All taxa (default)", token: "keep_taxa_text" },
       { flag: "-d, --drop-taxa", label: "Drop taxa", description: "Default: remove none. Optional taxon names separated by commas or whitespace.", type: "text", value: "", placeholder: "None (default)", token: "drop_taxa_text" },
+      { flag: "--longest-copy", label: "Keep longest copy per taxon", description: "Within each OG, retain the longest input sequence per taxon. Length ties use gene ID order. This selects representatives; it does not establish orthology. Writes copy_selection.tsv.", type: "checkbox", value: false, token: "longest_copy" },
       { flag: "-X", label: "Write unprefixed gene IDs", description: "Checked: write geneID. Unchecked: always write Taxon_geneID, regardless of table ID style. Matching map.tsv IDs are updated automatically.", type: "checkbox", value: false, token: "no_species_prefix" },
       { flag: "--orthofinder-id-style", label: "Orthogroup ID style", description: "Input ID style for sequence lookup only; exported prefixes are controlled by -X.", type: "select", value: "auto", options: [["auto", "auto"], ["prefixed", "prefixed"], ["unprefixed", "unprefixed"]], token: "orthofinder_id_style" },
       { flag: "-mo, --map-output", label: "Map file name", description: "Written inside the selected output directory.", type: "text", value: "map.tsv", token: "map_output_name" },
       { flag: "--pathlist-output", label: "Pathlist file name", description: "Written inside the selected output directory.", type: "text", value: "orthogroups.pathlist", token: "pathlist_output_name" },
     ],
-    command: "python extract_orthofinder_orthogroups.py -og {orthogroups} -i SEQUENCE_DIR -o {output}{orthofinder_keep_taxa_option}{orthofinder_drop_taxa_option} -m {copy_mode}{min_taxa_option}{no_species_prefix_option} --orthofinder-id-style {orthofinder_id_style} -mo {map_output_name} --pathlist-output {pathlist_output_name}",
+    command: "python extract_orthofinder_orthogroups.py -og {orthogroups} -i SEQUENCE_DIR -o {output}{orthofinder_keep_taxa_option}{orthofinder_drop_taxa_option} -m {copy_mode}{longest_copy_option}{min_taxa_option}{no_species_prefix_option} --orthofinder-id-style {orthofinder_id_style} -mo {map_output_name} --pathlist-output {pathlist_output_name}",
   },
   {
     script: "oma_to_orthogroups.py", title: "Convert OMA orthogroups", category: "Orthology", browser: true,
@@ -672,6 +673,7 @@ function updateContextualParameters() {
     if (card) card.dataset.contextHidden = String(Boolean(hidden));
   };
   hide("genetic_code", script === "AA2Codon.py" ? !elements.parameterList.querySelector('[data-parameter="validate_translation"]')?.checked : seqtype === "prot" || seqtype === "nucl");
+  hide("longest_copy", elements.parameterList.querySelector('[data-parameter="copy_mode"]')?.value !== "all-copies");
   hide("protein_stop_symbol", seqtype !== "prot");
   hide("n_ratio", seqtype === "prot" || Boolean(notrim));
   hide("x_ratio", seqtype === "nucl" || Boolean(notrim));
@@ -852,6 +854,7 @@ function rawParameterValues() {
     delete parameterValues.min_protein_pis;
   }
   if (elements.parameterList.querySelector('[data-parameter="min_taxa"]')?.dataset.autoDefault === "true") delete parameterValues.min_taxa;
+  if (parameterValues.copy_mode !== "all-copies") delete parameterValues.longest_copy;
   return parameterValues;
 }
 
@@ -908,6 +911,7 @@ function valuesForCommand() {
     allow_duplicate_ids_option: parameterValues.allow_duplicate_ids ? " --allow-duplicate-ids" : "",
     notrim_option: parameterValues.notrim ? " -n" : "",
     strip_taxon_prefix_option: parameterValues.strip_taxon_prefix ? " --strip-taxon-prefix" : "",
+    longest_copy_option: parameterValues.longest_copy ? " --longest-copy" : "",
     no_species_prefix_option: parameterValues.no_species_prefix ? " -X" : "",
     min_taxa_option: parameterValues.min_taxa ? ` --min-taxa ${parameterValues.min_taxa}` : "",
     orthofinder_keep_taxa_option: parameterValues.keep_taxa_text
