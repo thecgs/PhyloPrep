@@ -2,6 +2,10 @@ const AIOLI_URL = "https://biowasm.com/cdn/v3/aioli.js";
 let muscleCliPromise;
 let aioliLoaded = false;
 
+function localAligner(config) {
+  return { ...config, urlPrefix: new URL(`aligners/${config.tool}/${config.version}`, self.location.href).href };
+}
+
 function ensureAioliLoaded() {
   if (!aioliLoaded) {
     importScripts(AIOLI_URL);
@@ -16,7 +20,7 @@ async function ensureMuscleCli() {
       ensureAioliLoaded();
       return await new globalThis.Aioli([
         "base/1.0.0",
-        { tool: "muscle", version: "5.1.0", program: "muscle", reinit: true },
+        localAligner({ tool: "muscle", version: "5.1.0", program: "muscle", reinit: true }),
       ], { printInterleaved: false });
     })();
   }
@@ -26,18 +30,34 @@ async function ensureMuscleCli() {
 async function createMafftCli() {
   ensureAioliLoaded();
   return await new globalThis.Aioli([
-    { tool: "mafft", version: "7.520", program: "tbfast", reinit: false },
-    { tool: "mafft", version: "7.520", program: "dvtditr", reinit: false },
+    localAligner({ tool: "mafft", version: "7.520", program: "tbfast", reinit: false }),
+    localAligner({ tool: "mafft", version: "7.520", program: "dvtditr", reinit: false }),
   ], { printInterleaved: false });
 }
 
 function memoryFailureMessage(tool, diagnostic, sequenceText) {
-  if (!/myalloc(?:64)?\([^\n]*failed|out of memory|cannot enlarge memory|allocation failed/i.test(diagnostic)) return null;
+  if (!/myalloc(?:64)?\([^\n]*failed|out of memory|cannot enlarge memory|allocation (?:failed|error)|memory access out of bounds|Array buffer allocation failed/i.test(diagnostic)) return null;
   const sequences = String(sequenceText || "").split(/^>/m).slice(1).map(record => record.split(/\r?\n/).slice(1).join("").replace(/\s/g, "").length);
-  const longest = sequences.length ? sequences.reduce((max, length) => Math.max(max, length), 0) : 0;
-  return `${tool} could not allocate memory in the browser/WebAssembly runtime (${sequences.length} sequences; longest ${longest} residues/bases). ` +
-    "Long sequences can require large alignment matrices even with few taxa. Run this dataset with the native PhyloPrep CLI; alternatively, explicitly select MAFFT to try its browser implementation. " +
-    "The MUSCLE Biowasm banner's 100Mb RAM is a fixed reported value, not a measurement of your computer's RAM. The aligner was not switched automatically.\n\nOriginal diagnostic:\n" + diagnostic;
+  const longest = sequences.reduce((max, length) => Math.max(max, length), 0);
+  const limit = /(?:the )?limit is (\d+) bytes/i.exec(diagnostic);
+  const limitNote = limit ? ` The runtime reported a limit of ${(Number(limit[1]) / 1073741824).toFixed(2)} GiB.` : "";
+  const alternative = tool === "MUSCLE"
+    ? " Alternatively, explicitly select MAFFT to try its browser implementation. The MUSCLE RAM banner is a build-reported value, not a measurement of your computer's RAM."
+    : " MAFFT has already failed; selecting MAFFT again will not increase the available memory.";
+  return `${tool} could not allocate memory in the browser/WebAssembly runtime (${sequences.length} sequences; longest ${longest} residues/bases).` +
+    limitNote + " Long sequences can require large alignment matrices even with few taxa. The self-hosted aligner builds permit growth up to 4 GiB per module, but the browser may provide less and the task may require more. " +
+    "Run this dataset with the native PhyloPrep CLI." + alternative +
+    " The aligner was not switched automatically.\n\nOriginal diagnostic:\n" + diagnostic;
+}
+
+function checkExecution(execution, tool, sequenceText) {
+  const diagnostic = [execution?.stderr, execution?.stdout].filter(Boolean).join("\n");
+  const memoryError = memoryFailureMessage(tool, diagnostic, sequenceText);
+  if (memoryError) throw new Error(memoryError);
+  // Aioli 3 returns captured streams rather than a process exit-code field.
+  if (/---Fatal error---|Allocation error|program exited \(with status: [1-9]\d*\)|Aborted\(|RuntimeError:/i.test(diagnostic)) {
+    throw new Error(`${tool} failed. Original diagnostic:\n${diagnostic}`);
+  }
 }
 
 function validateAlignment(alignment, tool, execution) {
@@ -73,11 +93,15 @@ self.addEventListener("message", async (event) => {
         "-O -6.00 -E -0.000 -N -Z _ -+ 16 -W 0.00001 -V -1.53 -s 0.0 -O -C 0 " +
         "-b 62 -f -1.53 -Q 100.0 -h 0.000 -l 2.7 -X 0.1 " + seqFlag + " -i " + inputPath
       );
+      checkExecution(tbfast, "MAFFT", request.sequenceText);
+      // Do not refine a partial or missing pre file after a failed first stage.
+      validateAlignment(await cli.cat(prePath), "MAFFT", tbfast);
       const refine = await cli.exec(
         "dvtditr -W 0.00001 -E 0.0 -s 0.0 -C 0 -t 0 -F -l 2.7 -z 50 -b 62 " +
         "-f -1.53 -Q 100.0 -h 0.000 -I 16 -X 0.1 " + seqFlag +
         " -p BAATARI2 -K 0 -i " + prePath
       );
+      checkExecution(refine, "MAFFT", request.sequenceText);
       let alignment = await cli.cat(prePath);
       alignment = validateAlignment(alignment, "MAFFT", {
         stdout: refine?.stdout || tbfast?.stdout,
@@ -90,9 +114,7 @@ self.addEventListener("message", async (event) => {
     if (tool === "muscle") {
       outputPath = `/shared/data/${token}.aligned.fasta`;
       const execution = await cli.exec("muscle -align " + inputPath + " -output " + outputPath + " -threads 1");
-      const diagnostic = [execution?.stderr, execution?.stdout].filter(Boolean).join("\n");
-      const memoryError = memoryFailureMessage("MUSCLE", diagnostic, request.sequenceText);
-      if (memoryError) throw new Error(memoryError);
+      checkExecution(execution, "MUSCLE", request.sequenceText);
       let alignment = await cli.cat(outputPath);
       if (typeof alignment !== "string") {
         const blob = await cli.downloadBlob(outputPath);
@@ -109,6 +131,10 @@ self.addEventListener("message", async (event) => {
     const message = diagnostic.includes("Original diagnostic:") ? diagnostic
       : memoryFailureMessage(tool === "muscle" ? "MUSCLE" : "MAFFT", diagnostic, request.sequenceText) || diagnostic;
     self.postMessage({ type: "error", runId, message });
+    if (tool === "muscle") {
+      try { await cli?.close(); } catch {}
+      muscleCliPromise = undefined;
+    }
   } finally {
     if (cli) {
       try { if (outputPath) await cli.fs.unlink(outputPath); } catch {}

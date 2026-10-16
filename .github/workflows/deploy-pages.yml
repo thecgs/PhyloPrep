@@ -38,10 +38,19 @@ jobs:
           python -m pip install --upgrade pytest biopython
       - name: Run Python test suite
         run: python -m pytest -q
+      - name: Compile 4 GiB MAFFT and MUSCLE WebAssembly builds
+        run: |
+          docker run --rm -u "$(id -u):$(id -g)" -e HOME=/tmp -v "$PWD:/src" -w /src emscripten/emsdk:2.0.25 python3 scripts/build_browser_aligners.py
+          node site/aligner-build-test.mjs
       - name: Bundle original browser scripts
         run: node site/build-engine.mjs
       - name: Run browser bundle smoke checks
         run: node site/smoke-test.mjs
+      - name: Test memory growth and real browser alignments
+        run: |
+          npm install --prefix "$RUNNER_TEMP/aligner-tests" playwright@1.56.1
+          "$RUNNER_TEMP/aligner-tests/node_modules/.bin/playwright" install --with-deps chromium
+          NODE_PATH="$RUNNER_TEMP/aligner-tests/node_modules" node site/aligner-browser-test.cjs
       - name: Upload static site artifact
         uses: actions/upload-pages-artifact@v3
         with:

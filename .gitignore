@@ -16,3 +16,7 @@ example/run-results/
 example/*.tsv
 docs/.~*
 .DS_Store
+
+# Rebuilt WebAssembly programs and compiler checkouts
+site/aligners/
+.cache/

@@ -397,7 +397,8 @@ function scriptVersionLabel(script) {
 function externalAlignerLabel(tool, defaultLabel = false) {
   const name = tool === "mafft" ? "MAFFT E-INS-i" : "MUSCLE";
   const version = versionManifest?.aligners?.[tool]?.packageVersion;
-  return `${name} (Biowasm${version ? ` package ${version}` : ""}${defaultLabel ? ", default" : ""})`;
+  const ceiling = versionManifest?.aligners?.[tool]?.maximumMemoryBytes;
+  return `${name} (Biowasm${version ? ` package ${version}` : ""}${ceiling ? `, max ${ceiling / 1073741824} GiB` : ""}${defaultLabel ? ", default" : ""})`;
 }
 function refreshVersionDisplay() {
   const entry = scriptMetadata(activeModule().script);

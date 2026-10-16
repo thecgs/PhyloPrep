@@ -494,3 +494,5 @@ git diff --check
 | Batch unexpectedly resumes | Add `--no-resume` after confirming recomputation is intended. |
 
 The web catalog and selected-tool details load each script version from `engine/manifest.json`. The build reads the scripts’ own `--version` declarations and records their source SHA256 hashes; version strings are not duplicated in the interface. `phyloprep-run.json` records the version and hashes of the engine bundle actually used. Biowasm package versions come from the alignment-worker configuration and are labeled as package versions; a program’s own banner can report a different version. A missing declaration or failed manifest request is shown explicitly.
+
+The browser's self-hosted MAFFT and MUSCLE builds permit WebAssembly memory growth up to 4 GiB per module. This raises the previous build ceiling without changing the alignment strategy; actual available memory can be lower. See [browser aligner build details](docs/browser-aligner-builds.md) for compilation, validation and remaining limits.

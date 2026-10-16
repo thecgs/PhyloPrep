@@ -51,8 +51,13 @@ const metadata = JSON.parse(metadataProcess.stdout);
 for (const file of files) file.version = metadata[file.name]?.version || null;
 const alignmentWorkerSource = await readFile(join(siteDirectory, "alignment-worker.js"), "utf8");
 const aligners = {};
+const alignerBuild = JSON.parse(await readFile(join(siteDirectory, "aligners/manifest.json"), "utf8"));
 for (const match of alignmentWorkerSource.matchAll(/tool:\s*"(mafft|muscle)",\s*version:\s*"([^"]+)"/g)) {
-  aligners[match[1]] = { packageVersion: match[2], provider: "Biowasm" };
+  const metadata = alignerBuild.tools[match[1]];
+  if (metadata?.packageVersion !== match[2]) throw new Error(`Aligner version mismatch: ${match[1]}`);
+  aligners[match[1]] = { ...metadata, provider: "Biowasm", distribution: "self-hosted",
+    maximumMemoryBytes: alignerBuild.maximumMemoryBytes, emscripten: alignerBuild.emscripten,
+    biowasmRevision: alignerBuild.biowasmRevision };
 }
 
 const bundleSha256 = createHash("sha256")
