@@ -196,7 +196,7 @@ function orthofinderArguments(runtime, request, stage) {
   if (keep.length) args.push("-k", ...keep);
   if (drop.length) args.push("-d", ...drop);
   if (values.min_taxa) args.push("--min-taxa", String(values.min_taxa));
-  if (values.copy_mode === "all-copies" && values.longest_copy) args.push("--longest-copy", "--sequence-type", option(values.copy_sequence_type, "nucl"));
+  if (values.copy_mode === "all-copies" && values.longest_copy) args.push("--longest-copy", "-st", option(values.seqtype, "codon"));
   if (values.no_species_prefix) args.push("-X");
   const mapName = safeRelativePath(values.map_output_name || "map.tsv", "map.tsv").split("/").at(-1);
   const pathlistName = safeRelativePath(values.pathlist_output_name || "orthogroups.pathlist", "orthogroups.pathlist").split("/").at(-1);

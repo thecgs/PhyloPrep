@@ -175,7 +175,7 @@ const modules = [
       { flag: "-k, --keep-taxa", label: "Keep taxa", description: "Default: all taxa. Optional taxon names separated by commas or whitespace.", type: "text", value: "", placeholder: "All taxa (default)", token: "keep_taxa_text" },
       { flag: "-d, --drop-taxa", label: "Drop taxa", description: "Default: remove none. Optional taxon names separated by commas or whitespace.", type: "text", value: "", placeholder: "None (default)", token: "drop_taxa_text" },
       { flag: "--longest-copy", label: "Keep longest copy per taxon", description: "Within each OG, retain the sequence with the most non-ambiguous characters per taxon, using the selected sequence type. Effective-length ties use gene ID order. Different species may retain different paralogs. This selects representatives; it does not establish orthology. Writes copy_selection.tsv.", type: "checkbox", value: false, token: "longest_copy" },
-      { flag: "--sequence-type", label: "Sequence type for copy selection", description: "nucl counts A/C/G/T/U; prot counts the 20 standard amino acids (including N). Ambiguity, gaps and stops do not count. Select prot for protein inputs; sequences are not modified.", type: "select", value: "nucl", options: [["nucl", "nucl"], ["prot", "prot"]], token: "copy_sequence_type" },
+      { flag: "-st, --seqtype, --seq-type", label: "Sequence type for copy selection", description: "codon (default), nucl and pseudogene count A/C/G/T/U; prot counts the 20 standard amino acids (including N). Ambiguity, gaps and stops do not count. Select prot for protein inputs; sequences are not modified.", type: "select", value: "codon", options: [["codon", "codon"], ["prot", "prot"], ["nucl", "nucl"], ["pseudogene", "pseudogene"]], token: "seqtype" },
       { flag: "-X", label: "Write unprefixed gene IDs", description: "Checked: write geneID. Unchecked: always write Taxon_geneID, regardless of table ID style. Matching map.tsv IDs are updated automatically.", type: "checkbox", value: false, token: "no_species_prefix" },
       { flag: "--orthofinder-id-style", label: "Orthogroup ID style", description: "Input ID style for sequence lookup only; exported prefixes are controlled by -X.", type: "select", value: "auto", options: [["auto", "auto"], ["prefixed", "prefixed"], ["unprefixed", "unprefixed"]], token: "orthofinder_id_style" },
       { flag: "-mo, --map-output", label: "Map file name", description: "Written inside the selected output directory.", type: "text", value: "map.tsv", token: "map_output_name" },
@@ -676,7 +676,7 @@ function updateContextualParameters() {
   };
   hide("genetic_code", script === "AA2Codon.py" ? !elements.parameterList.querySelector('[data-parameter="validate_translation"]')?.checked : seqtype === "prot" || seqtype === "nucl");
   hide("longest_copy", elements.parameterList.querySelector('[data-parameter="copy_mode"]')?.value !== "all-copies");
-  hide("copy_sequence_type", script !== "extract_orthofinder_orthogroups.py" || elements.parameterList.querySelector('[data-parameter="copy_mode"]')?.value !== "all-copies" || !elements.parameterList.querySelector('[data-parameter="longest_copy"]')?.checked);
+  if (script === "extract_orthofinder_orthogroups.py") hide("seqtype", elements.parameterList.querySelector('[data-parameter="copy_mode"]')?.value !== "all-copies" || !elements.parameterList.querySelector('[data-parameter="longest_copy"]')?.checked);
   hide("protein_stop_symbol", seqtype !== "prot");
   hide("n_ratio", seqtype === "prot" || Boolean(notrim));
   hide("x_ratio", seqtype === "nucl" || Boolean(notrim));
@@ -859,7 +859,7 @@ function rawParameterValues() {
   }
   if (elements.parameterList.querySelector('[data-parameter="min_taxa"]')?.dataset.autoDefault === "true") delete parameterValues.min_taxa;
   if (parameterValues.copy_mode !== "all-copies") delete parameterValues.longest_copy;
-  if (!parameterValues.longest_copy) delete parameterValues.copy_sequence_type;
+  if (module.script === "extract_orthofinder_orthogroups.py" && !parameterValues.longest_copy) delete parameterValues.seqtype;
   return parameterValues;
 }
 
@@ -916,7 +916,7 @@ function valuesForCommand() {
     allow_duplicate_ids_option: parameterValues.allow_duplicate_ids ? " --allow-duplicate-ids" : "",
     notrim_option: parameterValues.notrim ? " -n" : "",
     strip_taxon_prefix_option: parameterValues.strip_taxon_prefix ? " --strip-taxon-prefix" : "",
-    longest_copy_option: parameterValues.longest_copy ? ` --longest-copy --sequence-type ${parameterValues.copy_sequence_type || "nucl"}` : "",
+    longest_copy_option: parameterValues.longest_copy ? ` --longest-copy -st ${parameterValues.seqtype || "codon"}` : "",
     no_species_prefix_option: parameterValues.no_species_prefix ? " -X" : "",
     min_taxa_option: parameterValues.min_taxa ? ` --min-taxa ${parameterValues.min_taxa}` : "",
     orthofinder_keep_taxa_option: parameterValues.keep_taxa_text

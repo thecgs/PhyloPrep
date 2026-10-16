@@ -14,9 +14,9 @@ from msap_io import atomic_output, check_output_path
 ORTHOFINDER_FASTA_SUFFIXES = (".fa", ".faa", ".fasta", ".fas", ".pep")
 
 
-def non_ambiguous_length(sequence: str, sequence_type: str) -> int:
+def non_ambiguous_length(sequence: str, seqtype: str) -> int:
     """Count unambiguous bases/residues without modifying the source sequence."""
-    alphabet = "ACGTU" if sequence_type == "nucl" else "ACDEFGHIKLMNPQRSTVWY"
+    alphabet = "ACGTU" if seqtype != "prot" else "ACDEFGHIKLMNPQRSTVWY"
     return sum(char in alphabet for char in sequence.upper())
 
 
@@ -174,9 +174,9 @@ def extract_orthologs(orthogroups: Path, sequence_directory: Path, outdir: Path,
                       min_taxa: int | None = None, no_species_prefix: bool = False,
                       map_output: Path | None = None, copy_mode: str = "single-copy",
                       pathlist_output: Path | None = None, orthofinder_id_style: str = "auto",
-                      longest_copy: bool = False, sequence_type: str = "nucl") -> int:
-    if sequence_type not in ("nucl", "prot"):
-        raise ValueError("sequence_type must be nucl or prot")
+                      longest_copy: bool = False, seqtype: str = "codon") -> int:
+    if seqtype not in ("codon", "prot", "nucl", "pseudogene"):
+        raise ValueError("seqtype must be codon, prot, nucl or pseudogene")
     if longest_copy and copy_mode != "all-copies":
         raise ValueError("--longest-copy requires --copy-mode all-copies")
     all_taxa, rows = read_orthogroups(orthogroups)
@@ -243,12 +243,12 @@ def extract_orthologs(orthogroups: Path, sequence_directory: Path, outdir: Path,
                 if len(set(candidates)) != len(candidates):
                     raise ValueError(f"{orthogroup}: duplicate candidate gene IDs for taxon '{taxon}'")
                 effective_lengths = {
-                    gene: non_ambiguous_length(sequences_by_taxon[taxon][gene], sequence_type)
+                    gene: non_ambiguous_length(sequences_by_taxon[taxon][gene], seqtype)
                     for gene in candidates
                 }
                 chosen = min(candidates, key=lambda gene: (-effective_lengths[gene], gene))
                 selection_rows.extend((orthogroup, taxon, gene, len(sequences_by_taxon[taxon][gene]),
-                                       effective_lengths[gene], sequence_type,
+                                       effective_lengths[gene], seqtype,
                                        'yes' if gene == chosen else 'no') for gene in candidates)
                 candidates = [chosen]
             for gene_id in candidates:
@@ -313,7 +313,7 @@ has exactly one gene and writes that gene. --copy-mode all-copies counts a taxon
 when it has at least one gene and writes every listed copy; this mode preserves
 paralogs for gene-tree methods such as ASTRAL-Pro3. With --longest-copy, retain
 the sequence with the most non-ambiguous characters within each OG and taxon.
---sequence-type nucl (default) counts A/C/G/T/U; prot counts the 20 standard amino
+-st codon (default), nucl and pseudogene count A/C/G/T/U; prot counts the 20 standard amino
 acids, including N. Counting is case-insensitive; ambiguity, gap, stop and other
 symbols do not contribute. Effective-length ties choose the lexicographically
 smallest normalized gene ID, without using raw length as a secondary criterion.
@@ -345,8 +345,8 @@ absolute output FASTA paths and can be passed directly to phyloprep.py -i.
                         help="single-copy: require exactly one gene per counted taxon (default); all-copies: retain every copy and count taxa with >=1 gene, for e.g. ASTRAL-Pro3.")
     parser.add_argument("--longest-copy", action="store_true",
                         help="all-copies only: retain the sequence with most non-ambiguous characters per taxon within each OG; ties use gene ID order. This does not establish orthology.")
-    parser.add_argument("--sequence-type", choices=("nucl", "prot"), default="nucl",
-                        help="Alphabet for --longest-copy scoring: nucl counts A/C/G/T/U (default); prot counts the 20 standard amino acids. Does not modify sequences.")
+    parser.add_argument("-st", "--seqtype", "--seq-type", choices=("codon", "prot", "nucl", "pseudogene"), default="codon",
+                        help="Alphabet for --longest-copy scoring: codon (default), nucl and pseudogene count A/C/G/T/U; prot counts the 20 standard amino acids. No translation or codon grouping is performed. Does not modify sequences.")
     parser.add_argument("--min-taxa", type=int, metavar="N",
                         help="Require N occupied taxa after filtering; occupancy follows --copy-mode (default: all selected taxa).")
     parser.add_argument("-X", action="store_true", dest="no_species_prefix",
@@ -366,7 +366,7 @@ absolute output FASTA paths and can be passed directly to phyloprep.py -i.
                                   Path(args.map_output) if args.map_output else None,
                                   args.copy_mode,
                                   Path(args.pathlist_output) if args.pathlist_output else None,
-                                  args.orthofinder_id_style, args.longest_copy, args.sequence_type)
+                                  args.orthofinder_id_style, args.longest_copy, args.seqtype)
     except (OSError, ValueError) as error:
         print(f"extract_orthofinder_orthogroups: {error}", file=sys.stderr)
         return 2

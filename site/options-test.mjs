@@ -84,11 +84,12 @@ workerContext.stage = { optionsRoot:'/opts', outputRoot:'/out', files:[
 ] };
 workerContext.request = { options:{copy_mode:'all-copies',longest_copy:true}, outputName:'results' };
 assert.ok(vm.runInContext('orthofinderArguments(runtime, request, stage)', workerContext).includes('--longest-copy'));
-assert.ok(vm.runInContext('orthofinderArguments(runtime, request, stage)', workerContext).includes('nucl'));
-workerContext.request.options.copy_sequence_type = 'prot';
+assert.ok(vm.runInContext('orthofinderArguments(runtime, request, stage)', workerContext).includes('codon'));
+workerContext.request.options.seqtype = 'prot';
 assert.ok(vm.runInContext('orthofinderArguments(runtime, request, stage)', workerContext).includes('prot'));
 workerContext.request.options.copy_mode = 'single-copy';
 assert.ok(!vm.runInContext('orthofinderArguments(runtime, request, stage)', workerContext).includes('--longest-copy'));
+assert.ok(!vm.runInContext('orthofinderArguments(runtime, request, stage)', workerContext).includes('-st'));
 const policyWarnings = defaultsContext.PhyloPrepOrthogroupDefaults.policyWarnings;
 assert.match(policyWarnings('single-copy', 80, 100, false).join(' '), /--missing-taxa pad-gaps/);
 assert.equal(policyWarnings('single-copy', 80, 80, false).length, 0);

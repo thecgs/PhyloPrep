@@ -206,8 +206,8 @@ def test_longest_copy_retains_one_per_taxon_and_records_candidates(tmp_path):
     assert len((output / 'orthogroups.pathlist').read_text().splitlines()) == 2
     selection = (output / 'copy_selection.tsv').read_text()
     assert selection.startswith('orthogroup\ttaxon\tgene_id\tlength\teffective_length\tsequence_type\tselected\n')
-    assert 'OG0002\tHuman\tgene_4\t3\t3\tnucl\tno\n' in selection
-    assert 'OG0002\tHuman\tgene_5\t6\t6\tnucl\tyes\n' in selection
+    assert 'OG0002\tHuman\tgene_4\t3\t3\tcodon\tno\n' in selection
+    assert 'OG0002\tHuman\tgene_5\t6\t6\tcodon\tyes\n' in selection
 
 
 def test_longest_copy_ties_are_independent_of_cell_order(tmp_path):
@@ -275,6 +275,8 @@ def test_longest_copy_warns_about_paralog_selection(tmp_path):
     ('nucl', 'aCgTuNRYWSKMBDHVX?*-.', 'ACGTAC', 5, 6),
     ('prot', 'aCDEFGHIKLMNPQRSTVWYnbzjxuo?*-.', 'ACDEFGHIKLMNPQRSTVWYNN', 21, 22),
     ('nucl', 'NNNNNNNNNN', 'ACG', 0, 3),
+    ('codon', 'NNNNNNNNNN', 'ACG', 0, 3),
+    ('pseudogene', 'NNNNNNNNNN', 'ACG', 0, 3),
     ('prot', 'XXXXXXXXXX', 'NNN', 0, 3),
 ])
 def test_longest_copy_counts_only_non_ambiguous_characters(tmp_path, sequence_type, first, second, first_score, second_score):
@@ -283,7 +285,7 @@ def test_longest_copy_counts_only_non_ambiguous_characters(tmp_path, sequence_ty
     (cds / 'Human.fa').write_text(f'>gene:1\nATG\n>gene:4\n{first}\n>gene:5\n{second}\n>gene:6\nATG\n')
     output = tmp_path / 'out'
     result = run(tmp_path, '-og', table, '-i', cds, '-o', output,
-                 '--copy-mode', 'all-copies', '--longest-copy', '--sequence-type', sequence_type)
+                 '--copy-mode', 'all-copies', '--longest-copy', '-st', sequence_type)
     assert result.returncode == 0, result.stderr
     records = list(SeqIO.parse(output / 'OG0002.fasta', 'fasta'))
     assert records[0].id == 'Human_gene_5'
@@ -306,3 +308,13 @@ def test_longest_copy_effective_length_ties_ignore_raw_length(tmp_path, first, s
     record = next(SeqIO.parse(tmp_path / 'out' / 'OG0002.fasta', 'fasta'))
     assert record.id == 'Human_gene_4'
     assert str(record.seq) == first
+
+
+@pytest.mark.parametrize('flag', ['-st', '--seqtype', '--seq-type'])
+def test_longest_copy_sequence_type_aliases(tmp_path, flag):
+    table, cds = write_inputs(tmp_path)
+    (cds / 'Human.fa').write_text('>gene:1\nATG\n>gene:4\nXXXXX\n>gene:5\nNNN\n>gene:6\nATG\n')
+    result = run(tmp_path, '-og', table, '-i', cds, '-o', tmp_path / 'out',
+                 '--copy-mode', 'all-copies', '--longest-copy', flag, 'prot')
+    assert result.returncode == 0, result.stderr
+    assert next(SeqIO.parse(tmp_path / 'out' / 'OG0002.fasta', 'fasta')).id == 'Human_gene_5'
