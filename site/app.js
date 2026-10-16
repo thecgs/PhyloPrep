@@ -174,6 +174,7 @@ const modules = [
       { flag: "--min-taxa", label: "Minimum occupied taxa", description: "Integer taxon count, not a percentage or copy count. single-copy counts taxa with exactly one listed gene; all-copies counts taxa with at least one listed gene, once per taxon, including when --longest-copy is enabled. This is OG membership, not sequence-quality filtering. CLI default: all selected taxa. Filled from Orthogroups.tsv and keep/drop filters. Editing overrides the default; use the reset button to restore it. If fewer taxa are required, use --missing-taxa pad-gaps downstream to retain incomplete loci.", type: "number", value: "", token: "min_taxa" },
       { flag: "-k, --keep-taxa", label: "Keep taxa", description: "Default: all taxa. Optional taxon names separated by commas or whitespace.", type: "text", value: "", placeholder: "All taxa (default)", token: "keep_taxa_text" },
       { flag: "-d, --drop-taxa", label: "Drop taxa", description: "Default: remove none. Optional taxon names separated by commas or whitespace.", type: "text", value: "", placeholder: "None (default)", token: "drop_taxa_text" },
+      { flag: "--max-copies-per-taxon", label: "Maximum copies per taxon", description: "all-copies only. Exclude the entire OG if any selected taxon has more than this many listed genes. Counts are checked after keep/drop filtering and before longest-copy selection. The bound is inclusive. 0 = unlimited (CLI default); copies are not truncated and taxa are not omitted.", type: "number", value: "0", step: "1", token: "max_copies_per_taxon" },
       { flag: "--longest-copy", label: "Keep copy with greatest non-ambiguous length", description: "Within each OG, retain the sequence with the most non-ambiguous characters per taxon, using the selected sequence type. Effective-length ties use gene ID order. Different species may retain different paralogs. This selects representatives; it does not establish orthology. Writes copy_selection.tsv.", type: "checkbox", value: false, token: "longest_copy" },
       { flag: "-st, --seqtype, --seq-type", label: "Sequence type for copy selection", description: "codon (default), nucl and pseudogene count A/C/G/T/U; prot counts the 20 standard amino acids (including N). Ambiguity, gaps and stops do not count. Select prot for protein inputs; sequences are not modified.", type: "select", value: "codon", options: [["codon", "codon"], ["prot", "prot"], ["nucl", "nucl"], ["pseudogene", "pseudogene"]], token: "seqtype" },
       { flag: "-X", label: "Write unprefixed gene IDs", description: "Checked: write geneID. Unchecked: always write Taxon_geneID, regardless of table ID style. Matching map.tsv IDs are updated automatically.", type: "checkbox", value: false, token: "no_species_prefix" },
@@ -181,7 +182,7 @@ const modules = [
       { flag: "-mo, --map-output", label: "Map file name", description: "Written inside the selected output directory.", type: "text", value: "map.tsv", token: "map_output_name" },
       { flag: "--pathlist-output", label: "Pathlist file name", description: "Written inside the selected output directory.", type: "text", value: "orthogroups.pathlist", token: "pathlist_output_name" },
     ],
-    command: "python extract_orthofinder_orthogroups.py -og {orthogroups} -i SEQUENCE_DIR -o {output}{orthofinder_keep_taxa_option}{orthofinder_drop_taxa_option} -m {copy_mode}{longest_copy_option}{min_taxa_option}{no_species_prefix_option} --orthofinder-id-style {orthofinder_id_style} -mo {map_output_name} --pathlist-output {pathlist_output_name}",
+    command: "python extract_orthofinder_orthogroups.py -og {orthogroups} -i SEQUENCE_DIR -o {output}{orthofinder_keep_taxa_option}{orthofinder_drop_taxa_option} -m {copy_mode}{max_copies_per_taxon_option}{longest_copy_option}{min_taxa_option}{no_species_prefix_option} --orthofinder-id-style {orthofinder_id_style} -mo {map_output_name} --pathlist-output {pathlist_output_name}",
   },
   {
     script: "oma_to_orthogroups.py", title: "Convert OMA orthogroups", category: "Orthology", browser: true,
@@ -596,6 +597,7 @@ function renderParameterControl(parameter) {
       description.append(reference);
     }
     card.append(label, description, control);
+    if (parameterToken(parameter) === "max_copies_per_taxon") control.min = "0";
     if (parameterToken(parameter) === "min_taxa") {
       control.dataset.autoDefault = "true";
       control.placeholder = "All selected taxa (select table first)";
@@ -675,6 +677,7 @@ function updateContextualParameters() {
     if (card) card.dataset.contextHidden = String(Boolean(hidden));
   };
   hide("genetic_code", script === "AA2Codon.py" ? !elements.parameterList.querySelector('[data-parameter="validate_translation"]')?.checked : seqtype === "prot" || seqtype === "nucl");
+  hide("max_copies_per_taxon", elements.parameterList.querySelector('[data-parameter="copy_mode"]')?.value !== "all-copies");
   hide("longest_copy", elements.parameterList.querySelector('[data-parameter="copy_mode"]')?.value !== "all-copies");
   if (script === "extract_orthofinder_orthogroups.py") hide("seqtype", elements.parameterList.querySelector('[data-parameter="copy_mode"]')?.value !== "all-copies" || !elements.parameterList.querySelector('[data-parameter="longest_copy"]')?.checked);
   hide("protein_stop_symbol", seqtype !== "prot");
@@ -858,7 +861,10 @@ function rawParameterValues() {
     delete parameterValues.min_protein_pis;
   }
   if (elements.parameterList.querySelector('[data-parameter="min_taxa"]')?.dataset.autoDefault === "true") delete parameterValues.min_taxa;
-  if (parameterValues.copy_mode !== "all-copies") delete parameterValues.longest_copy;
+  if (parameterValues.copy_mode !== "all-copies") {
+    delete parameterValues.longest_copy;
+    delete parameterValues.max_copies_per_taxon;
+  }
   if (module.script === "extract_orthofinder_orthogroups.py" && !parameterValues.longest_copy) delete parameterValues.seqtype;
   return parameterValues;
 }
@@ -916,6 +922,7 @@ function valuesForCommand() {
     allow_duplicate_ids_option: parameterValues.allow_duplicate_ids ? " --allow-duplicate-ids" : "",
     notrim_option: parameterValues.notrim ? " -n" : "",
     strip_taxon_prefix_option: parameterValues.strip_taxon_prefix ? " --strip-taxon-prefix" : "",
+    max_copies_per_taxon_option: parameterValues.max_copies_per_taxon !== undefined ? ` --max-copies-per-taxon ${parameterValues.max_copies_per_taxon}` : "",
     longest_copy_option: parameterValues.longest_copy ? ` --longest-copy -st ${parameterValues.seqtype || "codon"}` : "",
     no_species_prefix_option: parameterValues.no_species_prefix ? " -X" : "",
     min_taxa_option: parameterValues.min_taxa ? ` --min-taxa ${parameterValues.min_taxa}` : "",

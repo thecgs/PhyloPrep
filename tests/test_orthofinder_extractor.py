@@ -361,3 +361,61 @@ def test_filtered_sequence_loading_distinguishes_no_matches_from_empty_file(tmp_
     source.write_text('')
     with pytest.raises(ValueError, match='No sequences found'):
         load_sequences(source, {'missing'})
+
+
+@pytest.mark.parametrize('limit,expected', [(0, 2), (1, 1), (2, 2)])
+@pytest.mark.parametrize('longest', [False, True])
+def test_max_copies_filters_entire_og_before_copy_selection(tmp_path, limit, expected, longest):
+    table, cds = write_inputs(tmp_path)
+    output = tmp_path / 'out'
+    flags = ['--longest-copy'] if longest else []
+    result = run(tmp_path, '-og', table, '-i', cds, '-o', output,
+                 '--copy-mode', 'all-copies', '--max-copies-per-taxon', limit, *flags)
+    assert result.returncode == 0, result.stderr
+    assert len(list(output.glob('*.fasta'))) == expected
+    assert (output / 'OG0002.fasta').exists() == (limit != 1)
+    if limit == 1:
+        assert 'OG0002' not in (output / 'orthogroups.pathlist').read_text()
+        assert 'gene_4' not in (output / 'map.tsv').read_text()
+        if longest:
+            assert 'OG0002' not in (output / 'copy_selection.tsv').read_text()
+
+
+def test_max_copies_ignores_taxa_removed_by_filtering(tmp_path):
+    table, cds = write_inputs(tmp_path)
+    result = run(tmp_path, '-og', table, '-i', cds, '-o', tmp_path / 'out',
+                 '--copy-mode', 'all-copies', '--max-copies-per-taxon', 1, '--drop-taxa', 'Human')
+    assert result.returncode == 0, result.stderr
+    assert (tmp_path / 'out/OG0002.fasta').exists()
+
+
+@pytest.mark.parametrize('flags,error', [
+    (['--copy-mode', 'all-copies', '--max-copies-per-taxon', '-1'], 'must be >= 0'),
+    (['--max-copies-per-taxon', '2'], 'requires --copy-mode all-copies'),
+    (['--copy-mode', 'all-copies', '--max-copies-per-taxon', '1.5'], 'invalid int value'),
+])
+def test_max_copies_rejects_invalid_parameters(tmp_path, flags, error):
+    table, cds = write_inputs(tmp_path)
+    result = run(tmp_path, '-og', table, '-i', cds, '-o', tmp_path / 'out', *flags)
+    assert result.returncode == 2
+    assert error in result.stderr
+    assert not (tmp_path / 'out').exists()
+
+
+def test_max_copies_no_passing_ogs_reports_both_filters(tmp_path):
+    table, cds = write_inputs(tmp_path)
+    table.write_text('Orthogroup\tHuman\tMouse\tFish\nOG0002\tHuman_gene:4, Human_gene:5\tMouse_gene:4\tFish_gene:8\n')
+    result = run(tmp_path, '-og', table, '-i', cds, '-o', tmp_path / 'out',
+                 '--copy-mode', 'all-copies', '--max-copies-per-taxon', 1)
+    assert result.returncode == 2
+    assert '--min-taxa and --max-copies-per-taxon' in result.stderr
+    assert not (tmp_path / 'out').exists()
+
+
+def test_copy_cap_excludes_og_instead_of_omitting_over_limit_taxon(tmp_path):
+    table, cds = write_inputs(tmp_path)
+    result = run(tmp_path, '-og', table, '-i', cds, '-o', tmp_path / 'out',
+                 '--copy-mode', 'all-copies', '--min-taxa', 2, '--max-copies-per-taxon', 1)
+    assert result.returncode == 0, result.stderr
+    assert not (tmp_path / 'out/OG0002.fasta').exists()
+    assert (tmp_path / 'out/OG0003.fasta').exists()
