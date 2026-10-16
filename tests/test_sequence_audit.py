@@ -468,3 +468,49 @@ def test_source_filename_can_look_like_an_alignment_suffix(tmp_path):
     audit = load_sequence_changes([report])
     assert set(audit) == {source.stem}
     assert _audit_for_alignment(f'{source.stem}.mafft.codon.aln.fasta', audit)['a']['internal']
+
+
+def test_merge_reports_streams_rows_and_preserves_mixed_schema(tmp_path, monkeypatch):
+    import csv
+    import sequence_audit as audit
+    first, second, merged = (tmp_path / name for name in ('nt.tsv', 'aa.tsv', 'merged.tsv'))
+    audit.write_report(first, [dict(event='internal_stop', taxa_id='a') for _ in range(2000)])
+    audit.write_report(second, [dict(event='internal_stop', taxa_id='b', source_aa_positions='7')], protein=True)
+    reader, writer = csv.DictReader, csv.DictWriter
+    counts = {'read': 0, 'written': 0}
+
+    def streaming_reader(*args, **kwargs):
+        for row in reader(*args, **kwargs):
+            assert counts['read'] == counts['written'], 'Rows must be written before reading the next row'
+            counts['read'] += 1
+            yield row
+
+    class CountingWriter(writer):
+        def writerow(self, row):
+            if row.get('event') == 'internal_stop':
+                counts['written'] += 1
+            return super().writerow(row)
+
+    monkeypatch.setattr(audit.csv, 'DictReader', streaming_reader)
+    monkeypatch.setattr(audit.csv, 'DictWriter', CountingWriter)
+    audit.merge_reports([first, second], merged)
+    with merged.open() as handle:
+        rows = list(reader(handle, delimiter='\t'))
+    assert len(rows) == 2001
+    assert rows[0]['source_aa_positions'] == 'NA'
+    assert rows[-1]['source_aa_positions'] == '7'
+    assert [rows[0]['taxa_id'], rows[-1]['taxa_id']] == ['a', 'b']
+
+
+def test_merge_reports_failure_preserves_previous_output(tmp_path, monkeypatch):
+    import sequence_audit as audit
+    source, output = tmp_path / 'source.tsv', tmp_path / 'merged.tsv'
+    audit.write_report(source, [dict(event='internal_stop')])
+    output.write_text('previous complete report\n')
+    def broken_reader(*args, **kwargs):
+        yield dict(event='internal_stop')
+        raise OSError('read interrupted')
+    monkeypatch.setattr(audit.csv, 'DictReader', broken_reader)
+    with pytest.raises(OSError, match='read interrupted'):
+        audit.merge_reports([source], output)
+    assert output.read_text() == 'previous complete report\n'

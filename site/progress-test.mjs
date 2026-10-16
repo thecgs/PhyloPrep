@@ -32,7 +32,7 @@ Object.assign(context, {
   preflightGeneration: 0, resolvedFolderFiles: new Map(), generatedFiles: [],
   runInWorker: async () => ({files:[{name:'a.fa',content:'A'},{name:'b.fa',content:'B'}], summary:'Completed'}),
   buildRunManifest: async () => '{}',
-  outputDirectoryHandle: undefined, outputSaveSession: undefined, producedFiles: new Map(),
+  localSaveBusy:false, outputDirectoryHandle: undefined, outputSaveSession: undefined, producedFiles: new Map(),
   publishProducedFiles: async files => { saved += files.length; },
   savedDestination: () => 'browser workspace',
   renderGeneratedFiles: () => {}, transferTarget: () => undefined,

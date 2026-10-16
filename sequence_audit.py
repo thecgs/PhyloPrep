@@ -313,18 +313,20 @@ def macse_align(args, infile, prefix, java):
 
 
 def merge_reports(paths, output):
-    rows = []
+    # Inspect only headers first, preserving mixed nucleotide/protein schemas.
+    paths = [Path(path) for path in paths if Path(path).is_file()]
     protein = False
     for path in paths:
-        if not Path(path).is_file():
-            continue
-        with open(path, newline='') as handle:
-            reader = csv.DictReader(handle, delimiter='\t')
-            has_aa = 'source_aa_positions' in (reader.fieldnames or [])
-            protein |= has_aa
-            for row in reader:
-                rows.append({field: row.get(field, 'NA') for field in FIELDS + (['source_aa_positions'] if has_aa else [])})
-    write_report(output, rows, protein=protein)
+        with path.open(newline='') as handle:
+            protein |= 'source_aa_positions' in (next(csv.reader(handle, delimiter='\t'), []))
+    fields = FIELDS + (['source_aa_positions'] if protein else [])
+    with atomic_output(output, inputs=paths) as handle:
+        writer = csv.DictWriter(handle, fieldnames=fields, delimiter='\t', restval='NA')
+        writer.writeheader()
+        for path in paths:
+            with path.open(newline='') as source:
+                for row in csv.DictReader(source, delimiter='\t'):
+                    writer.writerow({field: row.get(field, 'NA') for field in fields})
 
 
 def relocate_change_report(report, source_dir, destination_dir):

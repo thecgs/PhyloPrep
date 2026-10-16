@@ -382,6 +382,7 @@ let outputDirectoryHandle;
 let generatedFiles = [];
 let producedFiles = new Map();
 let outputSaveSession;
+let localSaveBusy = false;
 let selectedGeneratedFileIndex = 0;
 let resultEntries = [];
 let resultPageNumber = 0;
@@ -1304,6 +1305,7 @@ async function updatePreflight() {
 }
 
 async function chooseOutputFolder() {
+  if (localSaveBusy || elements.run.disabled) return;
   if (!("showDirectoryPicker" in window)) {
     setLog("This browser does not support local folder selection. Results remain in the browser workspace for manual download.", "error");
     return;
@@ -1326,108 +1328,118 @@ function cancellationError() {
 }
 
 function setRunControls(running) {
-  elements.run.disabled = running;
+  elements.run.disabled = running || localSaveBusy;
   elements.run.textContent = running ? "Running…" : "Run";
   elements.cancelRun.hidden = !running;
-  elements.chooseFolder.disabled = running;
-  elements.downloadAll.disabled = running;
-  elements.downloadSelected.disabled = running;
+  elements.chooseFolder.disabled = running || localSaveBusy;
+  elements.downloadAll.disabled = running || localSaveBusy;
+  elements.downloadSelected.disabled = running || localSaveBusy;
 }
 
 function createPyodideWorker() {
   const worker = new Worker("pyodide-worker.js");
+  function fail(error) {
+    // Ignore late errors from an instance already replaced or cancelled.
+    if (pyodideWorker !== worker) return;
+    const run = activeWorkerRun;
+    clearInterval(run?.progressTimer);
+    activeWorkerRun = undefined;
+    pyodideWorker = undefined;
+    worker.terminate();
+    elements.cancelRun.hidden = true;
+    elements.runtimeStatus.textContent = "Local worker stopped";
+    run?.reject(error instanceof Error ? error : new Error(String(error)));
+  }
   worker.addEventListener("message", (event) => {
     const message = event.data;
-    if (!activeWorkerRun || message.runId !== activeWorkerRun.id) return;
-    if (message.type === "output-file-reuse") {
-      const previous = producedFiles.get(message.name);
-      if (!previous) {
-        activeWorkerRun.reject(new Error(`Missing previously received output: ${message.name}`));
+    if (pyodideWorker !== worker || !activeWorkerRun || message.runId !== activeWorkerRun.id) return;
+    try {
+      if (message.type === "output-file-reuse") {
+        const previous = producedFiles.get(message.name);
+        if (!previous) {
+          fail(new Error(`Missing previously received output: ${message.name}`));
+          return;
+        }
+        if (!message.transferId) activeWorkerRun.streamedOutputs.set(`final:${message.index}`, previous);
         return;
       }
-      if (!message.transferId) activeWorkerRun.streamedOutputs.set(`final:${message.index}`, previous);
-      return;
-    }
-    if (message.type === "output-chunk" || message.type === "output-file-end") {
-      clearInterval(activeWorkerRun.progressTimer);
-      const outputs = activeWorkerRun.streamedOutputs;
-      const transferKey = `${message.transferId || "final"}:${message.index}`;
-      let file = outputs.get(transferKey);
-      if (!file) {
-        file = { decoder: new TextDecoder(), parts: [], name: message.name };
-        outputs.set(transferKey, file);
-      }
-      if (message.type === "output-chunk") {
-        file.parts.push(file.decoder.decode(message.bytes, { stream: true }));
-        setRunStage(3, `Receiving output ${message.index + 1}/${message.fileCount}: ${message.name}`);
-        worker.postMessage({ type: "output-chunk-ack", runId: message.runId, sequence: message.sequence });
-      } else {
-        file.parts.push(file.decoder.decode());
-        file.content = file.parts.join("");
-        file.parts = [];
-        file.decoder = undefined;
-        // Only fully received files are eligible for saving. Keep engine files intact.
-        void (activeWorkerRun.deferPublish ? Promise.resolve() : publishProducedFiles([{ name: file.name, content: file.content }])).then(() => {
-          if (message.sequence !== undefined) worker.postMessage({ type: "output-chunk-ack", runId: message.runId, sequence: message.sequence });
-        });
-        if (message.transferId) outputs.delete(transferKey);
-      }
-      return;
-    }
-    if (message.type === "stage") {
-      if (message.stage === "runtime") {
-        elements.runtimeStatus.textContent = `${message.label}…`;
-        setRunStage(2, message.label);
-      } else if (message.stage === "process") {
-        elements.runtimeStatus.textContent = "Local worker running";
-        setRunStage(2, message.label);
-      }
-      return;
-    }
-    if (message.type === "progress") {
-      const progress = message.progress;
-      const received = performance.now();
-      const render = () => {
-        const elapsed = progress.elapsed_seconds + (performance.now() - received) / 1000;
-        const label = `${progress.completed}/${progress.total} ${progress.unit} · ${progress.label} · ${Math.round(elapsed)}s elapsed`;
-        elements.runtimeStatus.textContent = label;
-        setRunStage(2, label);
-      };
-      clearInterval(activeWorkerRun.progressTimer);
-      render();
-      activeWorkerRun.progressTimer = setInterval(render, 1000);
-      return;
-    }
-    const run = activeWorkerRun;
-    clearInterval(run.progressTimer);
-    activeWorkerRun = undefined;
-    elements.cancelRun.hidden = true;
-    if (message.type === "result") {
-      elements.runtimeStatus.textContent = "Local worker ready";
-      try {
-        if (message.result.files?.some(file => file.path)) {
-          message.result.files = message.result.files.map((file, index) => {
-            const streamed = run.streamedOutputs.get(`final:${index}`);
-            if (!streamed || streamed.content === undefined) throw new Error(`Incomplete output received: ${file.name}`);
-            return { name: file.name, content: streamed.content };
-          });
+      if (message.type === "output-chunk" || message.type === "output-file-end") {
+        clearInterval(activeWorkerRun.progressTimer);
+        const outputs = activeWorkerRun.streamedOutputs;
+        const transferKey = `${message.transferId || "final"}:${message.index}`;
+        let file = outputs.get(transferKey);
+        if (!file) {
+          file = { decoder: new TextDecoder(), parts: [], name: message.name };
+          outputs.set(transferKey, file);
         }
-        run.resolve(message.result);
-      } catch (error) {
-        run.reject(error);
+        if (message.type === "output-chunk") {
+          file.parts.push(file.decoder.decode(message.bytes, { stream: true }));
+          setRunStage(3, `Receiving output ${message.index + 1}/${message.fileCount}: ${message.name}`);
+          worker.postMessage({ type: "output-chunk-ack", runId: message.runId, sequence: message.sequence });
+        } else {
+          file.parts.push(file.decoder.decode());
+          file.content = file.parts.join("");
+          file.parts = [];
+          file.decoder = undefined;
+          // Only fully received files are eligible for saving. Keep engine files intact.
+          void (activeWorkerRun.deferPublish ? Promise.resolve() : publishProducedFiles([{ name: file.name, content: file.content }])).then(() => {
+            if (message.sequence !== undefined) worker.postMessage({ type: "output-chunk-ack", runId: message.runId, sequence: message.sequence });
+          }).catch(fail);
+          if (message.transferId) outputs.delete(transferKey);
+        }
+        return;
       }
-    } else if (message.type === "error") {
-      run.reject(new Error(message.message || "The local workflow could not be completed."));
-    }
+      if (message.type === "stage") {
+        if (message.stage === "runtime") {
+          elements.runtimeStatus.textContent = `${message.label}…`;
+          setRunStage(2, message.label);
+        } else if (message.stage === "process") {
+          elements.runtimeStatus.textContent = "Local worker running";
+          setRunStage(2, message.label);
+        }
+        return;
+      }
+      if (message.type === "progress") {
+        const progress = message.progress;
+        const received = performance.now();
+        const render = () => {
+          const elapsed = progress.elapsed_seconds + (performance.now() - received) / 1000;
+          const label = `${progress.completed}/${progress.total} ${progress.unit} · ${progress.label} · ${Math.round(elapsed)}s elapsed`;
+          elements.runtimeStatus.textContent = label;
+          setRunStage(2, label);
+        };
+        clearInterval(activeWorkerRun.progressTimer);
+        render();
+        activeWorkerRun.progressTimer = setInterval(render, 1000);
+        return;
+      }
+      if (message.type === "error") {
+        fail(new Error(message.message || "The local workflow could not be completed."));
+        return;
+      }
+      const run = activeWorkerRun;
+      clearInterval(run.progressTimer);
+      if (message.type === "result") {
+        elements.runtimeStatus.textContent = "Local worker ready";
+        try {
+          if (message.result.files?.some(file => file.path)) {
+            message.result.files = message.result.files.map((file, index) => {
+              const streamed = run.streamedOutputs.get(`final:${index}`);
+              if (!streamed || streamed.content === undefined) throw new Error(`Incomplete output received: ${file.name}`);
+              return { name: file.name, content: streamed.content };
+            });
+          }
+          activeWorkerRun = undefined;
+          elements.cancelRun.hidden = true;
+          run.resolve(message.result);
+        } catch (error) {
+          fail(error);
+        }
+      }
+    } catch (error) { fail(error); }
   });
-  worker.addEventListener("error", (event) => {
-    if (!activeWorkerRun) return;
-    const run = activeWorkerRun;
-    clearInterval(run.progressTimer);
-    activeWorkerRun = undefined;
-    elements.cancelRun.hidden = true;
-    run.reject(new Error(event.message || "The local worker stopped unexpectedly."));
-  });
+  worker.addEventListener("error", event => fail(new Error(event.message || "The local worker stopped unexpectedly.")));
+  worker.addEventListener("messageerror", () => fail(new Error("Could not decode the local worker response.")));
   pyodideWorker = worker;
   return worker;
 }
@@ -1437,7 +1449,14 @@ function runInWorker(payload) {
   const runId = ++nextRunId;
   return new Promise((resolve, reject) => {
     activeWorkerRun = { id: runId, resolve, reject, streamedOutputs: new Map(), deferPublish: Boolean(payload.deferPublish) };
-    worker.postMessage({ type: payload.type || "run", runId, ...payload, incrementalSave: Boolean(outputSaveSession) });
+    try {
+      worker.postMessage({ type: payload.type || "run", runId, ...payload, incrementalSave: Boolean(outputSaveSession) });
+    } catch (error) {
+      activeWorkerRun = undefined;
+      pyodideWorker = undefined;
+      worker.terminate();
+      reject(error);
+    }
   });
 }
 
@@ -1471,31 +1490,40 @@ function createOutputSaveSession(root) {
 }
 
 async function publishProducedFiles(files) {
+  const session = outputSaveSession, produced = producedFiles;
   for (const file of files) {
-    producedFiles.set(file.name, file);
-    if (outputSaveSession) {
-      outputSaveSession.save(file);
-      await outputSaveSession.ready();
+    produced.set(file.name, file);
+    if (session) {
+      session.save(file);
+      await session.ready();
     }
   }
 }
 
-function savedDestination(file) {
-  if (!outputSaveSession) return "browser workspace";
-  if (outputSaveSession.saved(file)) return "selected local folder";
-  return outputSaveSession.state(file) === "failed" ? "browser workspace · local save failed" : "browser workspace · local save pending";
+function savedDestination(file, session = outputSaveSession) {
+  if (!session) return "browser workspace";
+  if (session.saved(file)) return "selected local folder";
+  return session.state(file) === "failed" ? "browser workspace · local save failed" : "browser workspace · local save pending";
+}
+
+function setLocalSaveBusy(busy) {
+  localSaveBusy = busy;
+  for (const control of [elements.run, elements.chooseFolder, elements.downloadAll, elements.downloadSelected]) control.disabled = busy;
 }
 
 async function saveOutputCollection(files, retry = false) {
   if (!outputDirectoryHandle) return;
   if (!outputSaveSession || outputSaveSession.root !== outputDirectoryHandle) outputSaveSession = createOutputSaveSession(outputDirectoryHandle);
-  if (retry) await outputSaveSession.retry();
-  for (const file of files) {
-    outputSaveSession.save(file);
-    await outputSaveSession.ready();
+  const session = outputSaveSession;
+  const collection = [...files];
+  if (retry) await session.retry();
+  for (const file of collection) {
+    session.save(file);
+    await session.ready();
   }
-  await outputSaveSession.settle();
-  for (const file of files) file.destination = savedDestination(file);
+  await session.settle();
+  for (const file of collection) file.destination = savedDestination(file, session);
+  return session;
 }
 
 function renderGeneratedFiles() {
@@ -1608,35 +1636,34 @@ async function copyEquivalentCommand() {
 }
 
 async function downloadAllOutputs() {
-  if (generatedFiles.length < 2) return;
+  if (localSaveBusy || elements.run.disabled || generatedFiles.length < 2) return;
+  const files = [...generatedFiles];
   const stem = (elements.outputName.value.trim() || activeModule().script.replace(/\.py$/i, "outputs")).replace(/\.[^.]+$/, "").replace(/[^a-z0-9._-]+/gi, "-");
+  setLocalSaveBusy(true);
   try {
     if (outputDirectoryHandle) {
-      elements.downloadAll.disabled = true;
-      try {
-        setLog("Saving remaining files to the selected output folder…", "info");
-        await saveOutputCollection(generatedFiles, true);
-        renderGeneratedFiles();
-        if (outputSaveSession.error) throw new Error(`Local save incomplete: ${outputSaveSession.error.message}. Saved files are retained; retry Save remaining to folder.`);
-        setLog(`All ${generatedFiles.length} files are saved to the selected output folder.`, "success");
-      } finally { elements.downloadAll.disabled = false; }
+      setLog("Saving remaining files to the selected output folder…", "info");
+      const session = await saveOutputCollection(files, true);
+      renderGeneratedFiles();
+      if (session.error) throw new Error(`Local save incomplete: ${session.error.message}. Saved files are retained; retry Save remaining to folder.`);
+      setLog(`All ${files.length} files are saved to the selected output folder.`, "success");
       return;
     }
-    PhyloPrepDownloads.checkZipCount(generatedFiles);
+    PhyloPrepDownloads.checkZipCount(files);
     const name = `${stem || "phyloprep"}-outputs.zip`;
     if ("showSaveFilePicker" in window) {
       const handle = await window.showSaveFilePicker({ suggestedName: name });
       const writable = await handle.createWritable();
       setLog("Writing ZIP archive to the selected file…", "info");
-      await PhyloPrepDownloads.writeZip(generatedFiles, writable);
-      setLog(`Saved ${generatedFiles.length} files as a ZIP archive.`, "success");
+      await PhyloPrepDownloads.writeZip(files, writable);
+      setLog(`Saved ${files.length} files as a ZIP archive.`, "success");
     } else {
-      PhyloPrepDownloads.requestDownload(() => new Blob([...PhyloPrepDownloads.zipParts(generatedFiles)], { type: "application/zip" }), name, generatedFiles);
-      setLog(`ZIP download requested for ${generatedFiles.length} files; check your browser downloads for completion.`, "success");
+      PhyloPrepDownloads.requestDownload(() => new Blob([...PhyloPrepDownloads.zipParts(files)], { type: "application/zip" }), name, files);
+      setLog(`ZIP download requested for ${files.length} files; check your browser downloads for completion.`, "success");
     }
   } catch (error) {
     setLog(error.name === "AbortError" ? "Save cancelled; results remain available." : `Unable to save outputs: ${error.message}. Results remain available for retry.`, error.name === "AbortError" ? "warning" : "error");
-  }
+  } finally { setLocalSaveBusy(false); }
 }
 
 
@@ -1720,7 +1747,7 @@ function mergeTsvContents(files) {
     const lines = String(file.content || "").trim().split(/\r?\n/).filter(Boolean);
     if (!lines.length) return;
     if (!header) header = lines[0];
-    rows.push(...lines.slice(1));
+    for (let index = 1; index < lines.length; index++) rows.push(lines[index]);
   });
   return header ? `${header}\n${rows.join("\n")}${rows.length ? "\n" : ""}` : "";
 }
@@ -1933,6 +1960,7 @@ async function readPathlistSibling(inputKey, entry, list) {
 }
 
 async function runBrowserModule() {
+  if (localSaveBusy) return;
   const module = activeModule();
   const files = browserInputFiles();
   const missingInput = inputControls().find((control) => control.dataset.inputRequired !== "false" && !filesForInput(control).length);

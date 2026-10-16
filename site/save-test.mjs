@@ -86,12 +86,12 @@ console.log('Four-writer bound, directory caching, deduplication, overwrite seri
 // Exercise the actual app saving helpers, completion warnings and manual retry.
 let logs = [];
 const ui = {
-  run:{disabled:false},cancelRun:{},runtimeStatus:{},saveProgress:{},outputName:{value:''},useNextStep:{},downloadAll:{},
+  run:{disabled:false},cancelRun:{},runtimeStatus:{},saveProgress:{},outputName:{value:''},useNextStep:{},downloadAll:{},chooseFolder:{},downloadSelected:{},
 };
 const exported = [{name:'a.fa',content:'A'},{name:'b.fa',content:'B'}];
 const integration = vm.createContext({
   elements:ui,performance:{now:()=>Date.now()},PhyloPrepSave:scope.PhyloPrepSave,
-  outputDirectoryHandle:undefined,outputSaveSession:undefined,producedFiles:new Map(),generatedFiles:[],
+  localSaveBusy:false, outputDirectoryHandle:undefined,outputSaveSession:undefined,producedFiles:new Map(),generatedFiles:[],
   resolvedFolderFiles:new Map(),preflightGeneration:0,
   setInterval:()=>1,clearInterval:()=>{},
   activeModule:()=>({script:'tool.py',inputFields:[],defaultOutput:'results'}),
@@ -156,3 +156,43 @@ integration.runInWorker = async () => {throw new Error('early failure');};
 await vm.runInContext('runBrowserModule()', integration);
 assert.ok(cleared, 'Starting a failing run must clear the previous result list');
 console.log('Portable list naming, 60,000-input stem checking and stale-result clearing passed.');
+
+// A suspended save must keep its original session even if globals change.
+let releaseSave;
+const saveGate = new Promise(resolve => {releaseSave=resolve;});
+const sessionWrites=[];
+const sessionA={root:'A',save:file=>sessionWrites.push(`A:${file.name}`),ready:()=>saveGate,settle:async()=>{},saved:()=>true};
+const sessionB={root:'B',save:file=>sessionWrites.push(`B:${file.name}`),ready:async()=>{},settle:async()=>{},saved:()=>true};
+integration.outputDirectoryHandle='A';integration.outputSaveSession=sessionA;
+integration.snapshotFiles=[{name:'old1.fa',content:'old'},{name:'old2.fa',content:'old'}];
+const isolated=vm.runInContext('saveOutputCollection(snapshotFiles)',integration);
+integration.outputSaveSession=sessionB;integration.outputDirectoryHandle='B';releaseSave();
+assert.equal(await isolated,sessionA);
+assert.deepEqual(sessionWrites,['A:old1.fa','A:old2.fa']);
+
+// Manual retry locks all conflicting controls until writing settles.
+let releaseRetry;
+const retryGate=new Promise(resolve=>{releaseRetry=resolve;});
+integration.outputDirectoryHandle='locked';
+integration.outputSaveSession={root:'locked',retry:()=>retryGate,save:()=>{},ready:async()=>{},settle:async()=>{},saved:()=>true};
+integration.generatedFiles=exported;
+const retrying=vm.runInContext('downloadAllOutputs()',integration);
+assert.ok(integration.localSaveBusy);
+for(const control of [ui.run,ui.chooseFolder,ui.downloadAll,ui.downloadSelected]) assert.ok(control.disabled);
+let analyses=0;
+integration.activeModule=()=>{analyses++;return {script:'tool.py',inputFields:[]};};
+await vm.runInContext('runBrowserModule()',integration);
+assert.equal(analyses,0,'No analysis may start during manual saving');
+vm.runInContext(slice('async function chooseOutputFolder(', 'function cancellationError('),integration);
+await vm.runInContext('chooseOutputFolder()',integration); // Guard must return before opening any picker.
+releaseRetry();await retrying;
+assert.equal(integration.localSaveBusy,false);
+for(const control of [ui.run,ui.chooseFolder,ui.downloadAll,ui.downloadSelected]) assert.equal(control.disabled,false);
+
+vm.runInContext(slice('function mergeTsvContents(', 'function selectedInputPathList('),names);
+names.reports=[{content:'header\n'+'first\n'.repeat(150000)},{content:'header\nlast\n'}];
+const largeReport=vm.runInContext('mergeTsvContents(reports)',names);
+assert.equal(largeReport.split('\n').length,150003);
+assert.ok(largeReport.startsWith('header\nfirst\n'));
+assert.ok(largeReport.endsWith('last\n'));
+console.log('Save-session isolation, retry control locking and 150,001-row report merging passed.');

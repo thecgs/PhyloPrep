@@ -80,3 +80,46 @@ await Promise.resolve();
 assert.equal(published.length,0,'MSAP outputs must wait for the batch adapter to assign alignments/ paths');
 assert.equal(receiveContext.activeWorkerRun.streamedOutputs.get('final:1').content,'>a\nAA\n');
 console.log('Main-thread checkpoint reuse and deferred MSAP export paths passed.');
+
+// A failed worker is terminated; retry gets a new instance, and stale events are ignored.
+let terminated=0, rejected=[], created=0;
+receiveContext.Worker=class {
+  constructor(){this.handlers={};this.sent=[];receiver=this;created++;}
+  addEventListener(type,callback){this.handlers[type]=callback;}
+  postMessage(message){this.sent.push(message);}
+  terminate(){terminated++;}
+};
+receiveContext.pyodideWorker=undefined;
+vm.runInContext(app.slice(app.indexOf('function runInWorker('),app.indexOf('function cancelActiveRun(')),receiveContext);
+receiveContext.nextRunId=100;receiveContext.outputSaveSession=undefined;
+let pending=vm.runInContext('runInWorker({script:"test.py"})',receiveContext);
+pending.catch(error=>rejected.push(error.message));
+const dead=receiver;
+dead.handlers.error({message:'worker crashed'});
+await pending.catch(()=>{});
+assert.equal(receiveContext.pyodideWorker,undefined);
+assert.equal(receiveContext.activeWorkerRun,undefined);
+assert.equal(terminated,1);
+pending=vm.runInContext('runInWorker({script:"retry.py"})',receiveContext);
+pending.catch(error=>rejected.push(error.message));
+assert.equal(created,2);
+dead.handlers.error({message:'late old error'});
+assert.ok(receiveContext.activeWorkerRun,'An old worker must not reject a new run');
+receiver.handlers.messageerror({});await pending.catch(()=>{});
+assert.equal(terminated,2);
+assert.equal(rejected.length,2);
+
+pending=vm.runInContext('runInWorker({script:"incomplete.py"})',receiveContext);
+pending.catch(()=>{});
+receiver.handlers.message({data:{type:'result',runId:103,result:{files:[{name:'missing.fa',path:'/missing.fa'}]}}});
+await pending.catch(()=>{});
+assert.equal(terminated,3,'An incomplete result must also discard its worker');
+assert.equal(receiveContext.activeWorkerRun,undefined);
+console.log('Worker crash/decode/incomplete-output cleanup, retry recreation and stale-event isolation passed.');
+
+receiveContext.Worker.prototype.postMessage=()=>{throw new Error('cannot clone request');};
+pending=vm.runInContext('runInWorker({script:"clone-failure.py"})',receiveContext);
+await assert.rejects(pending,/cannot clone request/);
+assert.equal(terminated,4);
+assert.equal(receiveContext.pyodideWorker,undefined);
+assert.equal(receiveContext.activeWorkerRun,undefined);
