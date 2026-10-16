@@ -1,6 +1,8 @@
 import subprocess
 import sys
+import tracemalloc
 from pathlib import Path
+import pytest
 
 
 SCRIPT = Path(__file__).parents[1] / "get_supergenes.py"
@@ -136,3 +138,59 @@ def test_pipeline_can_defer_phylip_output(tmp_path):
     assert (tmp_path/'supermatrix.fasta').exists()
     assert not (tmp_path/'supermatrix.phy').exists()
     assert 'alignment = supermatrix.phy;' in (tmp_path/'supermatrix_partition_finder.cfg').read_text()
+
+
+def test_concatenation_peak_does_not_scale_with_total_matrix(tmp_path):
+    from get_supergenes import get_supergenes, read_alignment
+    inputs = []
+    for index in range(30):
+        source = tmp_path / f'gene{index}.fa'
+        write_alignment(source, [('a', 'A' * 100000), ('b', 'C' * 100000)])
+        inputs.append(str(source))
+    read_alignment(inputs[0])  # Warm the parser before measuring this operation.
+    tracemalloc.start()
+    try:
+        get_supergenes(inputs, str(tmp_path / 'matrix'))
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    # The matrix contains six million characters; the old implementation kept
+    # all locus sequences and joined matrices simultaneously (>12 MB).
+    assert peak < 3 * 1024 * 1024, f'Unexpected Python allocation peak: {peak}'
+    from Bio import SeqIO
+    records = list(SeqIO.parse(tmp_path / 'matrix.fasta', 'fasta'))
+    assert [(r.id, len(r.seq)) for r in records] == [('a', 3000000), ('b', 3000000)]
+    assert not list(tmp_path.glob('.supergenes-*'))
+
+
+def test_spool_handles_many_taxa_and_padding(tmp_path):
+    from get_supergenes import get_supergenes
+    records = [(f'sp{i}', 'AAA') for i in range(40)]
+    a, b = tmp_path / 'a.fa', tmp_path / 'b.fa'
+    write_alignment(a, records)
+    write_alignment(b, [('sp0', 'CCC')])
+    prefix = str(tmp_path / 'matrix')
+    get_supergenes([str(a), str(b)], prefix, missing_taxa='pad-gaps')
+    fasta = Path(prefix + '.fasta').read_text()
+    assert '>sp0\nAAACCC\n' in fasta
+    assert '>sp39\nAAA---\n' in fasta
+    assert Path(prefix + '.phy').read_text().startswith('40 6\nsp0 AAACCC\n')
+    assert 'b_fa = 4-6;' in Path(prefix + '_part_iqtree.txt').read_text()
+
+
+def test_input_change_preserves_old_matrix_and_cleans_spools(tmp_path, monkeypatch):
+    import get_supergenes as module
+    source = tmp_path / 'a.fa'
+    write_alignment(source, [('a', 'AAA'), ('b', 'CCC')])
+    prefix = str(tmp_path / 'matrix')
+    Path(prefix + '.fasta').write_text('old matrix')
+    original = module.read_alignment
+    def changing(path):
+        result = original(path)
+        source.write_text('>a\nTTT\n>b\nCCC\n')
+        return result
+    monkeypatch.setattr(module, 'read_alignment', changing)
+    with pytest.raises(ValueError, match='Input changed'):
+        module.get_supergenes([str(source)], prefix)
+    assert Path(prefix + '.fasta').read_text() == 'old matrix'
+    assert not list(tmp_path.glob('.supergenes-*'))

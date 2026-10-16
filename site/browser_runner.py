@@ -15,6 +15,65 @@ import sys
 import tempfile
 import traceback
 import types
+from collections import deque
+from functools import wraps
+
+
+_MEMORY_ERROR_RESULT = ('{"ok":false,"error":"PhyloPrep exhausted memory in the Python/Pyodide runtime. '
+                        'Try fewer loci or the native CLI. Raising the MAFFT/MUSCLE heap limit does not '
+                        'increase Pyodide memory. The original diagnostic may be unavailable.",'
+                        '"stdout":"","stderr":""}')
+
+
+class BoundedLog(io.TextIOBase):
+    """Keep only a bounded diagnostic tail, including for many skipped loci."""
+    def __init__(self, limit=65536):
+        super().__init__()
+        self.limit = limit
+        self.parts = deque()
+        self.length = 0
+        self.truncated = False
+
+    def write(self, text):
+        count = len(text)
+        if not count:
+            return 0
+        if count >= self.limit:
+            self.parts.clear()
+            self.parts.append(text[-self.limit:])
+            self.truncated = self.truncated or count > self.limit or self.length > 0
+            self.length = self.limit
+        else:
+            self.parts.append(text)
+            self.length += count
+            while self.length > self.limit:
+                first = self.parts.popleft()
+                excess = self.length - self.limit
+                if len(first) > excess:
+                    self.parts.appendleft(first[excess:])
+                    self.length -= excess
+                else:
+                    self.length -= len(first)
+                self.truncated = True
+            while len(self.parts) > 1024:
+                self.length -= len(self.parts.popleft())
+                self.truncated = True
+        return count
+
+    def getvalue(self):
+        return ('[Earlier log output truncated]\n' if self.truncated else '') + ''.join(self.parts)
+
+
+def memory_safe_result(function):
+    @wraps(function)
+    def wrapped(*args, **kwargs):
+        try:
+            return function(*args, **kwargs)
+        except MemoryError:
+            # Already serialized at import time: do not format a traceback,
+            # inspect files or allocate another JSON payload under pressure.
+            return _MEMORY_ERROR_RESULT
+    return wrapped
 
 
 def _exit_code(value):
@@ -36,6 +95,7 @@ def _output_files(output_root: Path):
     return files
 
 
+@memory_safe_result
 def run_original_module(module, argv, output_root, engine_root="/engine"):
     """Run an untouched source script as its CLI entry point and return its files."""
     engine = Path(engine_root).resolve()
@@ -46,7 +106,7 @@ def run_original_module(module, argv, output_root, engine_root="/engine"):
 
     output.mkdir(parents=True, exist_ok=True)
     old_argv, old_cwd = sys.argv, Path.cwd()
-    stdout, stderr = io.StringIO(), io.StringIO()
+    stdout, stderr = BoundedLog(), BoundedLog()
     code = 0
     try:
         if str(engine) not in sys.path:
@@ -145,7 +205,7 @@ def _browser_execute_msap(argv, output_root, handler, engine_root="/engine"):
 
     old_argv, old_cwd = sys.argv, Path.cwd()
     original_run = subprocess.run
-    stdout, stderr = io.StringIO(), io.StringIO()
+    stdout, stderr = BoundedLog(), BoundedLog()
     code = 0
     try:
         if str(engine) not in sys.path:
@@ -165,6 +225,7 @@ def _browser_execute_msap(argv, output_root, handler, engine_root="/engine"):
     return code, stdout.getvalue(), stderr.getvalue()
 
 
+@memory_safe_result
 def run_msap_probe(argv, output_root, engine_root="/engine"):
     """Run untouched MSAP.py until it requests a browser-supported aligner."""
     def handler(command, *args, **kwargs):
@@ -207,7 +268,7 @@ def run_msap_probe(argv, output_root, engine_root="/engine"):
             "command": command,
         })
     except Exception:
-        captured = io.StringIO()
+        captured = BoundedLog()
         traceback.print_exc(file=captured)
         return json.dumps({"ok": False, "error": captured.getvalue().strip()})
 
@@ -218,6 +279,7 @@ def run_msap_probe(argv, output_root, engine_root="/engine"):
     })
 
 
+@memory_safe_result
 def run_msap_complete(argv, output_root, alignment_file, engine_root="/engine"):
     """Rerun untouched MSAP.py and satisfy its browser-supported alignment call."""
     alignment = Path(alignment_file)
@@ -252,7 +314,7 @@ def run_msap_complete(argv, output_root, alignment_file, engine_root="/engine"):
     try:
         code, stdout, stderr = _browser_execute_msap(argv, output_root, handler, engine_root)
     except Exception:
-        captured = io.StringIO()
+        captured = BoundedLog()
         traceback.print_exc(file=captured)
         return json.dumps({"ok": False, "error": captured.getvalue().strip()})
     if code:
@@ -327,12 +389,13 @@ def _visible_output_files(root, manifest_only=False):
     return files
 
 
+@memory_safe_result
 def run_phyloprep_finalize(file_manifest, options, output_root, engine_root="/engine", progress_callback=None, manifest_only=False):
     """Finish the browser pipeline with the repository's original downstream modules."""
     engine = Path(engine_root).resolve()
     root = Path(output_root).resolve()
     root.mkdir(parents=True, exist_ok=True)
-    stdout, stderr = io.StringIO(), io.StringIO()
+    stdout, stderr = BoundedLog(), BoundedLog()
     mapping_supplied = False
     phyloprep = None
     try:
@@ -455,6 +518,8 @@ def run_phyloprep_finalize(file_manifest, options, output_root, engine_root="/en
             "stdout": stdout.getvalue(),
             "stderr": stderr.getvalue(),
         })
+    except MemoryError:
+        return _MEMORY_ERROR_RESULT
     except Exception as error:
         if phyloprep is not None and isinstance(error, phyloprep.NoAlignmentsPassedQCError):
             return json.dumps({

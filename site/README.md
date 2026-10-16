@@ -142,3 +142,7 @@ The web catalog and selected-tool details load each script version from `engine/
 ### Self-hosted 4 GiB aligners
 
 Pages builds now compile the three alignment programs with a 4 GiB memory-growth ceiling and load them from `aligners/` on the same site. Build them before running `build-engine.mjs` for local previews. See [build instructions and limits](../docs/browser-aligner-builds.md). The ceiling is not a memory reservation or a guarantee of successful alignment; the browser may provide less. Aligner failures stop immediately, and diagnostics are specific to MAFFT or MUSCLE.
+
+### Bounded concatenation and diagnostics
+
+Concatenation now uses two passes, temporary taxon spools and chunked output rather than retaining every locus plus complete joined matrices in Python. Spools are released taxon by taxon during final output. Browser MEMFS still consumes memory for temporary and final files. Captured stdout/stderr each retain only a tail of up to 65,536 characters (and at most 1,024 fragments), with an explicit truncation marker. Browser entry points return a pre-serialized short diagnostic on MemoryError, avoiding traceback/log collection and another JSON allocation while memory is exhausted. These changes reduce duplication; they do not guarantee that an arbitrarily large dataset fits in Pyodide.
