@@ -188,3 +188,235 @@ def test_x_rejects_ambiguous_map_ids_across_different_orthogroups(tmp_path):
     assert 'maps to multiple taxa across orthogroups' in result.stderr
     assert not (output / 'map.tsv').exists()
     assert not list(output.glob('*.fasta'))
+
+
+def test_longest_copy_retains_one_per_taxon_and_records_candidates(tmp_path):
+    table, cds = write_inputs(tmp_path)
+    (cds / 'Human.fa').write_text('>gene:1\nATG\n>gene:4\nATG\n>gene:5\nATGAAA\n>gene:6\nATG\n')
+    output = tmp_path / 'out'
+    result = run(tmp_path, '-og', table, '-i', cds, '-o', output,
+                 '--copy-mode', 'all-copies', '--longest-copy')
+    assert result.returncode == 0, result.stderr
+    records = list(SeqIO.parse(output / 'OG0002.fasta', 'fasta'))
+    assert [r.id for r in records] == ['Human_gene_5', 'Mouse_gene_4', 'Fish_gene_8']
+    assert str(records[0].seq) == 'ATGAAA'
+    mapping = (output / 'map.tsv').read_text()
+    assert 'Human_gene_5\tHuman\n' in mapping
+    assert 'Human_gene_4\tHuman\n' not in mapping
+    assert len((output / 'orthogroups.pathlist').read_text().splitlines()) == 2
+    selection = (output / 'copy_selection.tsv').read_text()
+    assert selection.startswith('orthogroup\ttaxon\tgene_id\tlength\teffective_length\tsequence_type\tselected\n')
+    assert 'OG0002\tHuman\tgene_4\t3\t3\tcodon\tno\n' in selection
+    assert 'OG0002\tHuman\tgene_5\t6\t6\tcodon\tyes\n' in selection
+
+
+def test_longest_copy_ties_are_independent_of_cell_order(tmp_path):
+    table, cds = write_inputs(tmp_path)
+    for index, genes in enumerate(['Human_gene:4, Human_gene:5', 'Human_gene:5, Human_gene:4']):
+        contents = table.read_text()
+        contents = contents.replace('Human_gene:4, Human_gene:5', genes).replace('Human_gene:5, Human_gene:4', genes)
+        table.write_text(contents)
+        out = tmp_path / f'out{index}'
+        result = run(tmp_path, '-og', table, '-i', cds, '-o', out,
+                     '--copy-mode', 'all-copies', '--longest-copy')
+        assert result.returncode == 0, result.stderr
+        assert next(SeqIO.parse(out / 'OG0002.fasta', 'fasta')).id == 'Human_gene_4'
+
+
+def test_longest_copy_requires_all_copies(tmp_path):
+    table, cds = write_inputs(tmp_path)
+    result = run(tmp_path, '-og', table, '-i', cds, '-o', tmp_path / 'out', '--longest-copy')
+    assert result.returncode == 2
+    assert '--longest-copy requires --copy-mode all-copies' in result.stderr
+    assert not (tmp_path / 'out').exists()
+
+
+def test_longest_copy_does_not_hide_missing_candidate_sequence(tmp_path):
+    table, cds = write_inputs(tmp_path)
+    (cds / 'Human.fa').write_text('>gene:1\nATG\n>gene:4\nATGAAAAAA\n>gene:6\nATG\n')
+    output = tmp_path / 'out'
+    result = run(tmp_path, '-og', table, '-i', cds, '-o', output,
+                 '--copy-mode', 'all-copies', '--longest-copy')
+    assert result.returncode == 2
+    assert "sequence ID 'gene_5'" in result.stderr
+    assert not list(output.glob('*.fasta'))
+    assert not (output / 'copy_selection.tsv').exists()
+
+
+def test_relaxed_single_copy_warns_about_downstream_missing_taxa(tmp_path):
+    table, cds = write_inputs(tmp_path)
+    result = run(tmp_path, '-og', table, '-i', cds, '-o', tmp_path / 'out',
+                 '--copy-mode', 'single-copy', '--min-taxa', 2)
+    assert result.returncode == 0, result.stderr
+    assert '--missing-taxa pad-gaps' in result.stderr
+    assert '3 selected taxa' in result.stderr
+    assert 'Multi-copy taxa are omitted' in result.stderr
+    assert 'skip-gene' in result.stderr
+
+
+def test_full_occupancy_does_not_warn_about_padding(tmp_path):
+    table, cds = write_inputs(tmp_path)
+    result = run(tmp_path, '-og', table, '-i', cds, '-o', tmp_path / 'out')
+    assert result.returncode == 0, result.stderr
+    assert '--missing-taxa pad-gaps' not in result.stderr
+
+
+def test_longest_copy_warns_about_paralog_selection(tmp_path):
+    table, cds = write_inputs(tmp_path)
+    result = run(tmp_path, '-og', table, '-i', cds, '-o', tmp_path / 'out',
+                 '--copy-mode', 'all-copies', '--longest-copy')
+    assert result.returncode == 0, result.stderr
+    assert 'Different species may retain different paralogs' in result.stderr
+    assert 'does not establish single-copy orthologs' in result.stderr
+    assert 'copy_selection.tsv' in result.stderr
+
+
+@pytest.mark.parametrize('sequence_type,first,second,first_score,second_score', [
+    ('nucl', 'aCgTuNRYWSKMBDHVX?*-.', 'ACGTAC', 5, 6),
+    ('prot', 'aCDEFGHIKLMNPQRSTVWYnbzjxuo?*-.', 'ACDEFGHIKLMNPQRSTVWYNN', 21, 22),
+    ('nucl', 'NNNNNNNNNN', 'ACG', 0, 3),
+    ('codon', 'NNNNNNNNNN', 'ACG', 0, 3),
+    ('pseudogene', 'NNNNNNNNNN', 'ACG', 0, 3),
+    ('prot', 'XXXXXXXXXX', 'NNN', 0, 3),
+])
+def test_longest_copy_counts_only_non_ambiguous_characters(tmp_path, sequence_type, first, second, first_score, second_score):
+    import csv
+    table, cds = write_inputs(tmp_path)
+    (cds / 'Human.fa').write_text(f'>gene:1\nATG\n>gene:4\n{first}\n>gene:5\n{second}\n>gene:6\nATG\n')
+    output = tmp_path / 'out'
+    result = run(tmp_path, '-og', table, '-i', cds, '-o', output,
+                 '--copy-mode', 'all-copies', '--longest-copy', '-st', sequence_type)
+    assert result.returncode == 0, result.stderr
+    records = list(SeqIO.parse(output / 'OG0002.fasta', 'fasta'))
+    assert records[0].id == 'Human_gene_5'
+    assert str(records[0].seq) == second
+    with (output / 'copy_selection.tsv').open() as handle:
+        rows = {r['gene_id']: r for r in csv.DictReader(handle, delimiter='\t') if r['orthogroup'] == 'OG0002' and r['taxon'] == 'Human'}
+    assert rows['gene_4']['length'] == str(len(first))
+    assert rows['gene_4']['effective_length'] == str(first_score)
+    assert rows['gene_5']['effective_length'] == str(second_score)
+    assert rows['gene_5']['sequence_type'] == sequence_type
+
+
+@pytest.mark.parametrize('first,second', [('ACG', 'ACGNNNN'), ('NN', 'NNNNNN')])
+def test_longest_copy_effective_length_ties_ignore_raw_length(tmp_path, first, second):
+    table, cds = write_inputs(tmp_path)
+    (cds / 'Human.fa').write_text(f'>gene:1\nATG\n>gene:4\n{first}\n>gene:5\n{second}\n>gene:6\nATG\n')
+    result = run(tmp_path, '-og', table, '-i', cds, '-o', tmp_path / 'out',
+                 '--copy-mode', 'all-copies', '--longest-copy')
+    assert result.returncode == 0, result.stderr
+    record = next(SeqIO.parse(tmp_path / 'out' / 'OG0002.fasta', 'fasta'))
+    assert record.id == 'Human_gene_4'
+    assert str(record.seq) == first
+
+
+@pytest.mark.parametrize('flag', ['-st', '--seqtype', '--seq-type'])
+def test_longest_copy_sequence_type_aliases(tmp_path, flag):
+    table, cds = write_inputs(tmp_path)
+    (cds / 'Human.fa').write_text('>gene:1\nATG\n>gene:4\nXXXXX\n>gene:5\nNNN\n>gene:6\nATG\n')
+    result = run(tmp_path, '-og', table, '-i', cds, '-o', tmp_path / 'out',
+                 '--copy-mode', 'all-copies', '--longest-copy', flag, 'prot')
+    assert result.returncode == 0, result.stderr
+    assert next(SeqIO.parse(tmp_path / 'out' / 'OG0002.fasta', 'fasta')).id == 'Human_gene_5'
+
+
+@pytest.mark.parametrize('copy_mode,longest_copy,expected_human', [
+    ('single-copy', False, {'gene_1'}),
+    ('all-copies', False, {'gene_1', 'gene_4', 'gene_5'}),
+    ('all-copies', True, {'gene_1', 'gene_4', 'gene_5'}),
+])
+def test_only_retained_og_candidates_are_loaded(tmp_path, monkeypatch, copy_mode, longest_copy, expected_human):
+    import extract_orthofinder_orthogroups as extractor
+    table, cds = write_inputs(tmp_path)
+    with (cds / 'Human.fa').open('a') as handle:
+        handle.write('>unused\n' + 'A' * 100000 + '\n')
+    calls = {}
+    original = extractor.load_sequences
+
+    def load(path, wanted_ids=None):
+        result = original(path, wanted_ids)
+        calls[path.stem] = (set(wanted_ids), set(result))
+        return result
+
+    monkeypatch.setattr(extractor, 'load_sequences', load)
+    extractor.extract_orthologs(table, cds, tmp_path / 'out', copy_mode=copy_mode, longest_copy=longest_copy)
+    assert calls['Human'] == (expected_human, expected_human)
+    assert len(calls) == 3
+    assert (tmp_path / 'out/map.tsv').is_file()
+
+
+def test_filtered_sequence_loading_keeps_existing_duplicate_validation(tmp_path):
+    from extract_orthofinder_orthogroups import load_sequences
+    source = tmp_path / 'source.fa'
+    source.write_text('>wanted\nATG\n>unused:1\nAAA\n>unused_1\nCCC\n')
+    with pytest.raises(ValueError, match='duplicate OrthoFinder-normalized sequence ID'):
+        load_sequences(source, {'wanted'})
+
+
+def test_filtered_sequence_loading_distinguishes_no_matches_from_empty_file(tmp_path):
+    from extract_orthofinder_orthogroups import load_sequences
+    source = tmp_path / 'source.fa'
+    source.write_text('>other\nATG\n')
+    assert load_sequences(source, {'missing'}) == {}
+    source.write_text('')
+    with pytest.raises(ValueError, match='No sequences found'):
+        load_sequences(source, {'missing'})
+
+
+@pytest.mark.parametrize('limit,expected', [('inf', 2), ('INF', 2), (1, 1), (2, 2)])
+@pytest.mark.parametrize('longest', [False, True])
+def test_max_copies_filters_entire_og_before_copy_selection(tmp_path, limit, expected, longest):
+    table, cds = write_inputs(tmp_path)
+    output = tmp_path / 'out'
+    flags = ['--longest-copy'] if longest else []
+    result = run(tmp_path, '-og', table, '-i', cds, '-o', output,
+                 '--copy-mode', 'all-copies', '--max-copies-per-taxon', limit, *flags)
+    assert result.returncode == 0, result.stderr
+    assert len(list(output.glob('*.fasta'))) == expected
+    assert (output / 'OG0002.fasta').exists() == (limit != 1)
+    if limit == 1:
+        assert 'OG0002' not in (output / 'orthogroups.pathlist').read_text()
+        assert 'gene_4' not in (output / 'map.tsv').read_text()
+        if longest:
+            assert 'OG0002' not in (output / 'copy_selection.tsv').read_text()
+
+
+def test_max_copies_ignores_taxa_removed_by_filtering(tmp_path):
+    table, cds = write_inputs(tmp_path)
+    result = run(tmp_path, '-og', table, '-i', cds, '-o', tmp_path / 'out',
+                 '--copy-mode', 'all-copies', '--max-copies-per-taxon', 1, '--drop-taxa', 'Human')
+    assert result.returncode == 0, result.stderr
+    assert (tmp_path / 'out/OG0002.fasta').exists()
+
+
+@pytest.mark.parametrize('flags,error', [
+    (['--copy-mode', 'all-copies', '--max-copies-per-taxon', '-1'], 'must be a positive integer or inf'),
+    (['--copy-mode', 'all-copies', '--max-copies-per-taxon', '0'], 'must be a positive integer or inf'),
+    (['--max-copies-per-taxon', '2'], 'requires --copy-mode all-copies'),
+    (['--copy-mode', 'all-copies', '--max-copies-per-taxon', '1.5'], 'must be a positive integer or inf'),
+])
+def test_max_copies_rejects_invalid_parameters(tmp_path, flags, error):
+    table, cds = write_inputs(tmp_path)
+    result = run(tmp_path, '-og', table, '-i', cds, '-o', tmp_path / 'out', *flags)
+    assert result.returncode == 2
+    assert error in result.stderr
+    assert not (tmp_path / 'out').exists()
+
+
+def test_max_copies_no_passing_ogs_reports_both_filters(tmp_path):
+    table, cds = write_inputs(tmp_path)
+    table.write_text('Orthogroup\tHuman\tMouse\tFish\nOG0002\tHuman_gene:4, Human_gene:5\tMouse_gene:4\tFish_gene:8\n')
+    result = run(tmp_path, '-og', table, '-i', cds, '-o', tmp_path / 'out',
+                 '--copy-mode', 'all-copies', '--max-copies-per-taxon', 1)
+    assert result.returncode == 2
+    assert '--min-taxa and --max-copies-per-taxon' in result.stderr
+    assert not (tmp_path / 'out').exists()
+
+
+def test_copy_cap_excludes_og_instead_of_omitting_over_limit_taxon(tmp_path):
+    table, cds = write_inputs(tmp_path)
+    result = run(tmp_path, '-og', table, '-i', cds, '-o', tmp_path / 'out',
+                 '--copy-mode', 'all-copies', '--min-taxa', 2, '--max-copies-per-taxon', 1)
+    assert result.returncode == 0, result.stderr
+    assert not (tmp_path / 'out/OG0002.fasta').exists()
+    assert (tmp_path / 'out/OG0003.fasta').exists()

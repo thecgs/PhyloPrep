@@ -10,6 +10,7 @@ const elements = {
   selectedSummary: document.querySelector("#selected-summary"),
   scriptVersion: document.querySelector("#script-version"),
   parameterList: document.querySelector("#parameter-list"),
+  orthogroupPolicyNote: document.querySelector("#orthogroup-policy-note"),
   workspaceScript: document.querySelector("#workspace-script"),
   workspaceMode: document.querySelector("#workspace-mode"),
   chooseFolder: document.querySelector("#choose-output-folder"),
@@ -166,19 +167,22 @@ const modules = [
       { key: "orthogroups", label: "Orthogroups.tsv", flag: "-og, --orthogroups", accept: ".tsv,.txt" },
       { key: "sequences", label: "Per-taxon FASTA files", flag: "-i, -f, --sequence-dir", multiple: true, accept: ".fa,.faa,.fasta,.fas,.pep" },
     ],
-    outputs: ["One FASTA per retained orthogroup", "map.tsv", "orthogroups.pathlist"],
+    outputs: ["One FASTA per retained orthogroup", "map.tsv", "orthogroups.pathlist", "copy_selection.tsv when longest-copy selection is enabled"],
     outputLabel: "Output directory name", outputHelp: "Equivalent to -o/--outdir. Browser-selected FASTA files are staged as a temporary sequence directory.", defaultOutput: "one-to-one_orthologs",
     parameters: [
-      { flag: "-m, --copy-mode", label: "Copy mode", description: "single-copy requires exactly one gene in each counted taxon; all-copies retains every listed copy.", type: "select", value: "single-copy", options: [["single-copy", "single-copy"], ["all-copies", "all-copies"]], token: "copy_mode" },
-      { flag: "--min-taxa", label: "Minimum occupied taxa", description: "CLI default: all selected taxa. Filled from Orthogroups.tsv and keep/drop filters. Editing overrides the default; use the reset button to restore it.", type: "number", value: "", token: "min_taxa" },
+      { flag: "-m, --copy-mode", label: "Copy mode", description: "single-copy requires exactly one gene in each counted taxon; all-copies retains every listed copy unless longest-copy selection is enabled.", type: "select", value: "single-copy", options: [["single-copy", "single-copy"], ["all-copies", "all-copies"]], token: "copy_mode" },
+      { flag: "--min-taxa", label: "Minimum occupied taxa", description: "Integer taxon count, not a percentage or copy count. single-copy counts taxa with exactly one listed gene; all-copies counts taxa with at least one listed gene, once per taxon, including when --longest-copy is enabled. This is OG membership, not sequence-quality filtering. CLI default: all selected taxa. Filled from Orthogroups.tsv and keep/drop filters. Editing overrides the default; use the reset button to restore it. If fewer taxa are required, use --missing-taxa pad-gaps downstream to retain incomplete loci.", type: "number", value: "", token: "min_taxa" },
       { flag: "-k, --keep-taxa", label: "Keep taxa", description: "Default: all taxa. Optional taxon names separated by commas or whitespace.", type: "text", value: "", placeholder: "All taxa (default)", token: "keep_taxa_text" },
       { flag: "-d, --drop-taxa", label: "Drop taxa", description: "Default: remove none. Optional taxon names separated by commas or whitespace.", type: "text", value: "", placeholder: "None (default)", token: "drop_taxa_text" },
+      { flag: "--max-copies-per-taxon", label: "Maximum copies per taxon", description: "all-copies only. Exclude the entire OG if any selected taxon has more than this many listed genes. Counts are checked after keep/drop filtering and before longest-copy selection. The bound is inclusive. inf = unlimited (CLI default); enter inf or a positive integer. copies are not truncated and taxa are not omitted.", type: "text", value: "inf", token: "max_copies_per_taxon" },
+      { flag: "--longest-copy", label: "Keep copy with greatest non-ambiguous length", description: "Within each OG, retain the sequence with the most non-ambiguous characters per taxon, using the selected sequence type. Effective-length ties use gene ID order. Different species may retain different paralogs. This selects representatives; it does not establish orthology. Writes copy_selection.tsv.", type: "checkbox", value: false, token: "longest_copy" },
+      { flag: "-st, --seqtype, --seq-type", label: "Sequence type for copy selection", description: "codon (default), nucl and pseudogene count A/C/G/T/U; prot counts the 20 standard amino acids (including N). Ambiguity, gaps and stops do not count. Select prot for protein inputs; sequences are not modified.", type: "select", value: "codon", options: [["codon", "codon"], ["prot", "prot"], ["nucl", "nucl"], ["pseudogene", "pseudogene"]], token: "seqtype" },
       { flag: "-X", label: "Write unprefixed gene IDs", description: "Checked: write geneID. Unchecked: always write Taxon_geneID, regardless of table ID style. Matching map.tsv IDs are updated automatically.", type: "checkbox", value: false, token: "no_species_prefix" },
       { flag: "--orthofinder-id-style", label: "Orthogroup ID style", description: "Input ID style for sequence lookup only; exported prefixes are controlled by -X.", type: "select", value: "auto", options: [["auto", "auto"], ["prefixed", "prefixed"], ["unprefixed", "unprefixed"]], token: "orthofinder_id_style" },
       { flag: "-mo, --map-output", label: "Map file name", description: "Written inside the selected output directory.", type: "text", value: "map.tsv", token: "map_output_name" },
       { flag: "--pathlist-output", label: "Pathlist file name", description: "Written inside the selected output directory.", type: "text", value: "orthogroups.pathlist", token: "pathlist_output_name" },
     ],
-    command: "python extract_orthofinder_orthogroups.py -og {orthogroups} -i SEQUENCE_DIR -o {output}{orthofinder_keep_taxa_option}{orthofinder_drop_taxa_option} -m {copy_mode}{min_taxa_option}{no_species_prefix_option} --orthofinder-id-style {orthofinder_id_style} -mo {map_output_name} --pathlist-output {pathlist_output_name}",
+    command: "python extract_orthofinder_orthogroups.py -og {orthogroups} -i SEQUENCE_DIR -o {output}{orthofinder_keep_taxa_option}{orthofinder_drop_taxa_option} -m {copy_mode}{max_copies_per_taxon_option}{longest_copy_option}{min_taxa_option}{no_species_prefix_option} --orthofinder-id-style {orthofinder_id_style} -mo {map_output_name} --pathlist-output {pathlist_output_name}",
   },
   {
     script: "oma_to_orthogroups.py", title: "Convert OMA orthogroups", category: "Orthology", browser: true,
@@ -672,6 +676,9 @@ function updateContextualParameters() {
     if (card) card.dataset.contextHidden = String(Boolean(hidden));
   };
   hide("genetic_code", script === "AA2Codon.py" ? !elements.parameterList.querySelector('[data-parameter="validate_translation"]')?.checked : seqtype === "prot" || seqtype === "nucl");
+  hide("max_copies_per_taxon", elements.parameterList.querySelector('[data-parameter="copy_mode"]')?.value !== "all-copies");
+  hide("longest_copy", elements.parameterList.querySelector('[data-parameter="copy_mode"]')?.value !== "all-copies");
+  if (script === "extract_orthofinder_orthogroups.py") hide("seqtype", elements.parameterList.querySelector('[data-parameter="copy_mode"]')?.value !== "all-copies" || !elements.parameterList.querySelector('[data-parameter="longest_copy"]')?.checked);
   hide("protein_stop_symbol", seqtype !== "prot");
   hide("n_ratio", seqtype === "prot" || Boolean(notrim));
   hide("x_ratio", seqtype === "nucl" || Boolean(notrim));
@@ -684,6 +691,7 @@ function updateContextualParameters() {
   hide("paired_pis_policy", !pairedPis);
   hide("min_nucl_pis", seqtype === "prot");
   hide("min_protein_pis", !(seqtype === "prot" || pairedPis));
+  refreshOrthogroupPolicyNotice();
 }
 
 function inputControls() {
@@ -852,6 +860,11 @@ function rawParameterValues() {
     delete parameterValues.min_protein_pis;
   }
   if (elements.parameterList.querySelector('[data-parameter="min_taxa"]')?.dataset.autoDefault === "true") delete parameterValues.min_taxa;
+  if (parameterValues.copy_mode !== "all-copies") {
+    delete parameterValues.longest_copy;
+    delete parameterValues.max_copies_per_taxon;
+  }
+  if (module.script === "extract_orthofinder_orthogroups.py" && !parameterValues.longest_copy) delete parameterValues.seqtype;
   return parameterValues;
 }
 
@@ -908,6 +921,8 @@ function valuesForCommand() {
     allow_duplicate_ids_option: parameterValues.allow_duplicate_ids ? " --allow-duplicate-ids" : "",
     notrim_option: parameterValues.notrim ? " -n" : "",
     strip_taxon_prefix_option: parameterValues.strip_taxon_prefix ? " --strip-taxon-prefix" : "",
+    max_copies_per_taxon_option: parameterValues.max_copies_per_taxon !== undefined ? ` --max-copies-per-taxon ${parameterValues.max_copies_per_taxon}` : "",
+    longest_copy_option: parameterValues.longest_copy ? ` --longest-copy -st ${parameterValues.seqtype || "codon"}` : "",
     no_species_prefix_option: parameterValues.no_species_prefix ? " -X" : "",
     min_taxa_option: parameterValues.min_taxa ? ` --min-taxa ${parameterValues.min_taxa}` : "",
     orthofinder_keep_taxa_option: parameterValues.keep_taxa_text
@@ -1001,25 +1016,49 @@ function selectModule(index) {
 
 const orthogroupHeaderCache = new WeakMap();
 let orthogroupDefaultGeneration = 0;
+let orthogroupPolicyTaxonCount = null;
+function refreshOrthogroupPolicyNotice() {
+  const notice = elements.orthogroupPolicyNote;
+  if (!notice) return;
+  if (activeModule().script !== "extract_orthofinder_orthogroups.py") {
+    notice.hidden = true;
+    notice.textContent = "";
+    return;
+  }
+  const read = token => elements.parameterList.querySelector(`[data-parameter="${token}"]`);
+  const messages = PhyloPrepOrthogroupDefaults.policyWarnings(
+    read("copy_mode")?.value, Number(read("min_taxa")?.value), orthogroupPolicyTaxonCount,
+    read("longest_copy")?.checked);
+  notice.textContent = messages.join(" ");
+  notice.hidden = !messages.length;
+}
 async function refreshOrthogroupDefaults() {
   if (activeModule().script !== "extract_orthofinder_orthogroups.py") return;
   const generation = ++orthogroupDefaultGeneration;
   const control = elements.parameterList.querySelector('[data-parameter="min_taxa"]');
-  if (!control || control.dataset.autoDefault !== "true") return;
   const table = selectedInputFiles.get("orthogroups")?.[0];
-  if (!table) { control.value = ""; return; }
+  if (!control || !table) {
+    orthogroupPolicyTaxonCount = null;
+    if (control?.dataset.autoDefault === "true") control.value = "";
+    refreshOrthogroupPolicyNotice();
+    return;
+  }
   try {
     if (!orthogroupHeaderCache.has(table)) {
       orthogroupHeaderCache.set(table, table.slice(0, 1024 * 1024).text().then(PhyloPrepOrthogroupDefaults.taxaFromHeader));
     }
     const taxa = await orthogroupHeaderCache.get(table);
-    if (generation !== orthogroupDefaultGeneration || control.dataset.autoDefault !== "true") return;
+    if (generation !== orthogroupDefaultGeneration) return;
     const keep = elements.parameterList.querySelector('[data-parameter="keep_taxa_text"]')?.value;
     const drop = elements.parameterList.querySelector('[data-parameter="drop_taxa_text"]')?.value;
-    control.value = taxa.length ? String(PhyloPrepOrthogroupDefaults.selectedTaxonCount(taxa, keep, drop)) : "";
+    orthogroupPolicyTaxonCount = taxa.length ? PhyloPrepOrthogroupDefaults.selectedTaxonCount(taxa, keep, drop) : null;
+    if (control.dataset.autoDefault === "true") control.value = orthogroupPolicyTaxonCount ? String(orthogroupPolicyTaxonCount) : "";
   } catch {
-    if (generation === orthogroupDefaultGeneration) control.value = "";
+    if (generation !== orthogroupDefaultGeneration) return;
+    orthogroupPolicyTaxonCount = null;
+    if (control.dataset.autoDefault === "true") control.value = "";
   }
+  refreshOrthogroupPolicyNotice();
 }
 
 async function refreshTaxonSelectors() {
@@ -1768,6 +1807,7 @@ async function buildRunManifest(module, request, result, outputs) {
     inputs: inputManifest,
     outputs: outputManifest,
     provenance: result.provenance || null,
+    warnings: result.warnings || [],
     runtime: {
       pyodide: "0.27.2",
       aligner: ["phyloprep.py", "MSAP_batch.py"].includes(module.script)
@@ -1910,7 +1950,7 @@ async function runBrowserModule() {
       setLog(result.user_error || result.summary || "PhyloPrep needs input adjustment before a supermatrix can be completed.", "warning");
     } else {
       setRunStage(4, "Completed");
-      setLog([result.summary || `Created ${generatedFiles.length} output file(s).`, result.provenance].filter(Boolean).join(" "), "success");
+      setLog([result.summary || `Created ${generatedFiles.length} output file(s).`, ...(result.warnings || []), result.provenance].filter(Boolean).join(" "), "success");
     }
   } catch (error) {
     const cancelled = error.code === "CANCELLED";
