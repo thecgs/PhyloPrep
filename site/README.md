@@ -138,3 +138,7 @@ Select a `.pathlist` and its input folder, or select the referenced FASTAs along
 Browser batch progress shows completed/total loci with elapsed time and estimated remaining time. Python QC and matrix construction stream stage updates through the existing worker bridge. The interface refreshes elapsed time while a stage is active and stops timers on result, error or cancellation. Stage counts are not compute-time percentages; progress requires no additional libraries.
 
 The web catalog and selected-tool details load each script version from `engine/manifest.json`. The build reads the scripts’ own `--version` declarations and records their source SHA256 hashes; version strings are not duplicated in the interface. `phyloprep-run.json` records the version and hashes of the engine bundle actually used. Biowasm package versions come from the alignment-worker configuration and are labeled as package versions; a program’s own banner can report a different version. A missing declaration or failed manifest request is shown explicitly.
+
+### Self-hosted 4 GiB aligners
+
+Pages builds now compile the three alignment programs with a 4 GiB memory-growth ceiling and load them from `aligners/` on the same site. Build them before running `build-engine.mjs` for local previews. See [build instructions and limits](../docs/browser-aligner-builds.md). The ceiling is not a memory reservation or a guarantee of successful alignment; the browser may provide less. Aligner failures stop immediately, and diagnostics are specific to MAFFT or MUSCLE.
