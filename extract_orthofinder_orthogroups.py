@@ -186,6 +186,21 @@ def extract_orthologs(orthogroups: Path, sequence_directory: Path, outdir: Path,
     selected = [(og, cells, present_taxa) for og, cells, present_taxa in selected if len(present_taxa) >= min_taxa]
     if not selected:
         raise ValueError("No orthogroups meet the --min-taxa threshold after taxon filtering")
+    if copy_mode == "single-copy" and min_taxa < len(taxa):
+        incomplete = sum(len(present) < len(taxa) for _, _, present in selected)
+        print(
+            f"WARNING: --copy-mode single-copy --min-taxa {min_taxa} permits missing taxa among "
+            f"{len(taxa)} selected taxa ({incomplete} retained OGs are incomplete). Multi-copy taxa are omitted, "
+            "not resolved by choosing a copy. To retain incomplete loci during downstream concatenation, "
+            "use phyloprep.py --missing-taxa pad-gaps (or get_supergenes.py --missing-taxa pad-gaps); "
+            "the default skip-gene policy excludes loci missing a target taxon.", file=sys.stderr)
+    if longest_copy:
+        print(
+            "WARNING: --copy-mode all-copies --longest-copy selects representatives by length, "
+            "not by inferred orthology. Different species may retain different paralogs; the longest "
+            "sequence can also be chimeric or a fusion. This does not establish single-copy orthologs. "
+            "Inspect copy_selection.tsv and use independent orthology evidence before concatenation.",
+            file=sys.stderr)
     sequences_by_taxon = {taxon: load_sequences(sequence_files[taxon]) for taxon in taxa}
     outdir.mkdir(parents=True, exist_ok=True)
     if not outdir.is_dir():

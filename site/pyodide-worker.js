@@ -365,6 +365,7 @@ self.addEventListener("message", async (event) => {
         result: {
           ...result,
           engineMetadata: engineManifest,
+          warnings: String(result.stderr || "").split(/\r?\n/).filter(line => line.startsWith("WARNING:")),
           provenance: `Original extract_orthofinder_orthogroups.py · source bundle ${engineManifest.bundleSha256.slice(0, 12)}`,
         },
       });

@@ -86,3 +86,10 @@ workerContext.request = { options:{copy_mode:'all-copies',longest_copy:true}, ou
 assert.ok(vm.runInContext('orthofinderArguments(runtime, request, stage)', workerContext).includes('--longest-copy'));
 workerContext.request.options.copy_mode = 'single-copy';
 assert.ok(!vm.runInContext('orthofinderArguments(runtime, request, stage)', workerContext).includes('--longest-copy'));
+const policyWarnings = defaultsContext.PhyloPrepOrthogroupDefaults.policyWarnings;
+assert.match(policyWarnings('single-copy', 80, 100, false).join(' '), /--missing-taxa pad-gaps/);
+assert.equal(policyWarnings('single-copy', 80, 80, false).length, 0);
+assert.equal(policyWarnings('single-copy', 80, null, false).length, 0);
+assert.match(policyWarnings('all-copies', 100, 100, true).join(' '), /different paralogs/);
+assert.equal(policyWarnings('all-copies', 100, 100, false).length, 0);
+assert.ok(app.includes('...(result.warnings || [])'), 'Successful extraction must display policy warnings');

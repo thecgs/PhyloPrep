@@ -241,3 +241,31 @@ def test_longest_copy_does_not_hide_missing_candidate_sequence(tmp_path):
     assert "sequence ID 'gene_5'" in result.stderr
     assert not list(output.glob('*.fasta'))
     assert not (output / 'copy_selection.tsv').exists()
+
+
+def test_relaxed_single_copy_warns_about_downstream_missing_taxa(tmp_path):
+    table, cds = write_inputs(tmp_path)
+    result = run(tmp_path, '-og', table, '-i', cds, '-o', tmp_path / 'out',
+                 '--copy-mode', 'single-copy', '--min-taxa', 2)
+    assert result.returncode == 0, result.stderr
+    assert '--missing-taxa pad-gaps' in result.stderr
+    assert '3 selected taxa' in result.stderr
+    assert 'Multi-copy taxa are omitted' in result.stderr
+    assert 'skip-gene' in result.stderr
+
+
+def test_full_occupancy_does_not_warn_about_padding(tmp_path):
+    table, cds = write_inputs(tmp_path)
+    result = run(tmp_path, '-og', table, '-i', cds, '-o', tmp_path / 'out')
+    assert result.returncode == 0, result.stderr
+    assert '--missing-taxa pad-gaps' not in result.stderr
+
+
+def test_longest_copy_warns_about_paralog_selection(tmp_path):
+    table, cds = write_inputs(tmp_path)
+    result = run(tmp_path, '-og', table, '-i', cds, '-o', tmp_path / 'out',
+                 '--copy-mode', 'all-copies', '--longest-copy')
+    assert result.returncode == 0, result.stderr
+    assert 'Different species may retain different paralogs' in result.stderr
+    assert 'does not establish single-copy orthologs' in result.stderr
+    assert 'copy_selection.tsv' in result.stderr
