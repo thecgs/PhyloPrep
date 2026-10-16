@@ -205,9 +205,9 @@ def test_longest_copy_retains_one_per_taxon_and_records_candidates(tmp_path):
     assert 'Human_gene_4\tHuman\n' not in mapping
     assert len((output / 'orthogroups.pathlist').read_text().splitlines()) == 2
     selection = (output / 'copy_selection.tsv').read_text()
-    assert selection.startswith('orthogroup\ttaxon\tgene_id\tlength\tselected\n')
-    assert 'OG0002\tHuman\tgene_4\t3\tno\n' in selection
-    assert 'OG0002\tHuman\tgene_5\t6\tyes\n' in selection
+    assert selection.startswith('orthogroup\ttaxon\tgene_id\tlength\teffective_length\tsequence_type\tselected\n')
+    assert 'OG0002\tHuman\tgene_4\t3\t3\tnucl\tno\n' in selection
+    assert 'OG0002\tHuman\tgene_5\t6\t6\tnucl\tyes\n' in selection
 
 
 def test_longest_copy_ties_are_independent_of_cell_order(tmp_path):
@@ -269,3 +269,40 @@ def test_longest_copy_warns_about_paralog_selection(tmp_path):
     assert 'Different species may retain different paralogs' in result.stderr
     assert 'does not establish single-copy orthologs' in result.stderr
     assert 'copy_selection.tsv' in result.stderr
+
+
+@pytest.mark.parametrize('sequence_type,first,second,first_score,second_score', [
+    ('nucl', 'aCgTuNRYWSKMBDHVX?*-.', 'ACGTAC', 5, 6),
+    ('prot', 'aCDEFGHIKLMNPQRSTVWYnbzjxuo?*-.', 'ACDEFGHIKLMNPQRSTVWYNN', 21, 22),
+    ('nucl', 'NNNNNNNNNN', 'ACG', 0, 3),
+    ('prot', 'XXXXXXXXXX', 'NNN', 0, 3),
+])
+def test_longest_copy_counts_only_non_ambiguous_characters(tmp_path, sequence_type, first, second, first_score, second_score):
+    import csv
+    table, cds = write_inputs(tmp_path)
+    (cds / 'Human.fa').write_text(f'>gene:1\nATG\n>gene:4\n{first}\n>gene:5\n{second}\n>gene:6\nATG\n')
+    output = tmp_path / 'out'
+    result = run(tmp_path, '-og', table, '-i', cds, '-o', output,
+                 '--copy-mode', 'all-copies', '--longest-copy', '--sequence-type', sequence_type)
+    assert result.returncode == 0, result.stderr
+    records = list(SeqIO.parse(output / 'OG0002.fasta', 'fasta'))
+    assert records[0].id == 'Human_gene_5'
+    assert str(records[0].seq) == second
+    with (output / 'copy_selection.tsv').open() as handle:
+        rows = {r['gene_id']: r for r in csv.DictReader(handle, delimiter='\t') if r['orthogroup'] == 'OG0002' and r['taxon'] == 'Human'}
+    assert rows['gene_4']['length'] == str(len(first))
+    assert rows['gene_4']['effective_length'] == str(first_score)
+    assert rows['gene_5']['effective_length'] == str(second_score)
+    assert rows['gene_5']['sequence_type'] == sequence_type
+
+
+@pytest.mark.parametrize('first,second', [('ACG', 'ACGNNNN'), ('NN', 'NNNNNN')])
+def test_longest_copy_effective_length_ties_ignore_raw_length(tmp_path, first, second):
+    table, cds = write_inputs(tmp_path)
+    (cds / 'Human.fa').write_text(f'>gene:1\nATG\n>gene:4\n{first}\n>gene:5\n{second}\n>gene:6\nATG\n')
+    result = run(tmp_path, '-og', table, '-i', cds, '-o', tmp_path / 'out',
+                 '--copy-mode', 'all-copies', '--longest-copy')
+    assert result.returncode == 0, result.stderr
+    record = next(SeqIO.parse(tmp_path / 'out' / 'OG0002.fasta', 'fasta'))
+    assert record.id == 'Human_gene_4'
+    assert str(record.seq) == first

@@ -26,7 +26,7 @@
       messages.push(`This single-copy threshold permits missing taxa (${minimum} of ${total}). Taxa with multiple copies are omitted. To retain incomplete loci during downstream concatenation, use --missing-taxa pad-gaps; the default skip-gene policy excludes loci missing a target taxon.`);
     }
     if (copyMode === 'all-copies' && longestCopy) {
-      messages.push('Longest-copy selection chooses representatives by length, not by inferred orthology. Different species may retain different paralogs, and long chimeric or fusion sequences may be selected. These are not established single-copy orthologs. Inspect copy_selection.tsv and independent orthology evidence before concatenation.');
+      messages.push('Longest-copy selection chooses representatives by non-ambiguous length, not by inferred orthology. Different species may retain different paralogs, and long chimeric or fusion sequences may be selected. These are not established single-copy orthologs. Inspect copy_selection.tsv and independent orthology evidence before concatenation.');
     }
     return messages;
   }
