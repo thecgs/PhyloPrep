@@ -72,3 +72,28 @@ vm.runInContext('elements.parameterList = testPanel', context);
 assert.equal(vm.runInContext('rawParameterValues().min_taxa', context), undefined);
 controls.get('min_taxa').dataset.autoDefault = 'false'; controls.get('min_taxa').value = '2';
 assert.equal(vm.runInContext('rawParameterValues().min_taxa', context), '2');
+controls.get('longest_copy').checked = true;
+controls.get('copy_mode').value = 'single-copy';
+assert.equal(vm.runInContext('rawParameterValues().longest_copy', context), undefined);
+controls.get('copy_mode').value = 'all-copies';
+assert.equal(vm.runInContext('rawParameterValues().longest_copy', context), true);
+workerContext.runtime = { FS: { mkdirTree() {}, writeFile() {} } };
+workerContext.stage = { optionsRoot:'/opts', outputRoot:'/out', files:[
+  {inputKey:'orthogroups',path:'/og.tsv'},
+  {inputKey:'sequences',name:'Human.fa',fasta:true,content:'>g\nAAA'},
+] };
+workerContext.request = { options:{copy_mode:'all-copies',longest_copy:true}, outputName:'results' };
+assert.ok(vm.runInContext('orthofinderArguments(runtime, request, stage)', workerContext).includes('--longest-copy'));
+assert.ok(vm.runInContext('orthofinderArguments(runtime, request, stage)', workerContext).includes('codon'));
+workerContext.request.options.seqtype = 'prot';
+assert.ok(vm.runInContext('orthofinderArguments(runtime, request, stage)', workerContext).includes('prot'));
+workerContext.request.options.copy_mode = 'single-copy';
+assert.ok(!vm.runInContext('orthofinderArguments(runtime, request, stage)', workerContext).includes('--longest-copy'));
+assert.ok(!vm.runInContext('orthofinderArguments(runtime, request, stage)', workerContext).includes('-st'));
+const policyWarnings = defaultsContext.PhyloPrepOrthogroupDefaults.policyWarnings;
+assert.match(policyWarnings('single-copy', 80, 100, false).join(' '), /--missing-taxa pad-gaps/);
+assert.equal(policyWarnings('single-copy', 80, 80, false).length, 0);
+assert.equal(policyWarnings('single-copy', 80, null, false).length, 0);
+assert.match(policyWarnings('all-copies', 100, 100, true).join(' '), /different paralogs/);
+assert.equal(policyWarnings('all-copies', 100, 100, false).length, 0);
+assert.ok(app.includes('...(result.warnings || [])'), 'Successful extraction must display policy warnings');
