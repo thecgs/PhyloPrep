@@ -218,3 +218,5 @@ await import('./version-test.mjs');
 await import('./progress-test.mjs');
 
 await import('./save-test.mjs');
+
+await import('./provenance-test.mjs');

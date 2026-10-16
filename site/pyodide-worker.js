@@ -34,7 +34,7 @@ async function streamOutputFiles(runtime, runId, files, transferId, waitForSave 
         });
         position += read;
       }
-      const end = { type: "output-file-end", runId, index, name: file.name, transferId };
+      const end = { type: "output-file-end", runId, index, name: file.name, transferId, size: file.size, sha256: file.sha256 };
       if (waitForSave) {
         const sequence = ++outputSequence;
         await new Promise((resolve, reject) => {
@@ -75,10 +75,22 @@ function isFasta(file) {
   return file.content.trimStart().startsWith(">");
 }
 
-async function fetchText(path) {
-  const response = await fetch(path);
-  if (!response.ok) throw new Error(`Could not load ${path}.`);
-  return response.text();
+async function hashSourceBytes(bytes) {
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function verifiedEngineSource(file) {
+  if (!file || !/^[0-9a-f]{64}$/.test(file.sha256) || !file.url) {
+    throw new Error("The engine source metadata is incomplete. Reload the page to load a matching build.");
+  }
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const response = await fetch(`engine/${file.url}`, attempt ? { cache: "no-cache" } : undefined);
+    if (!response.ok) throw new Error(`Could not load verified source: ${file.name}. Reload the page and retry.`);
+    const bytes = await response.arrayBuffer();
+    if (await hashSourceBytes(bytes) === file.sha256) return new TextDecoder().decode(bytes);
+  }
+  throw new Error(`Source checksum mismatch: ${file.name}. Reload the page to refresh the engine; analysis was not started.`);
 }
 
 async function installOriginalEngine(runtime) {
@@ -86,15 +98,22 @@ async function installOriginalEngine(runtime) {
   if (!manifestResponse.ok) {
     throw new Error("The original-script bundle is missing. Run node site/build-engine.mjs before local preview.");
   }
-  engineManifest = await manifestResponse.json();
-  if (!Array.isArray(engineManifest.files) || !engineManifest.files.length) {
-    throw new Error("The original-script bundle manifest is invalid.");
+  const manifest = await manifestResponse.json();
+  if (!Array.isArray(manifest.files) || !manifest.files.length || !manifest.runner) {
+    throw new Error("The original-script bundle manifest is incomplete. Reload the page to load a matching build.");
   }
+  const records = [...manifest.files, manifest.runner];
+  const bundleBytes = new TextEncoder().encode(records.map(({name, sha256}) => `${name}:${sha256}`).join("\n"));
+  if (await hashSourceBytes(bundleBytes) !== manifest.bundleSha256) {
+    throw new Error("The engine bundle checksum is invalid. Reload the page and retry.");
+  }
+  // Verify every source, including the browser adapter, before installing/executing any.
+  const sources = await Promise.all(records.map(verifiedEngineSource));
   runtime.FS.mkdirTree(ENGINE_ROOT);
-  const files = await Promise.all(engineManifest.files.map(async ({ name }) => [name, await fetchText(`engine/${name}`)]));
-  files.forEach(([name, source]) => runtime.FS.writeFile(`${ENGINE_ROOT}/${name}`, source));
-  runtime.FS.writeFile("/browser_runner.py", await fetchText("browser_runner.py"));
+  manifest.files.forEach((file, index) => runtime.FS.writeFile(`${ENGINE_ROOT}/${file.name}`, sources[index]));
+  runtime.FS.writeFile("/browser_runner.py", sources.at(-1));
   await runtime.runPythonAsync("exec(compile(open('/browser_runner.py', encoding='utf-8').read(), '/browser_runner.py', 'exec'), globals())");
+  engineManifest = manifest;
 }
 
 async function ensureRuntime(runId) {

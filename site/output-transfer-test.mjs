@@ -75,10 +75,20 @@ receiver.handlers.message({data:{type:'output-file-reuse',runId:42,index:0,name:
 assert.equal(receiveContext.activeWorkerRun.streamedOutputs.get('final:0').content,'gene.fasta\n');
 receiveContext.activeWorkerRun.deferPublish=true;
 receiver.handlers.message({data:{type:'output-chunk',runId:42,index:1,name:'gene.prot.aln.fasta',bytes:new TextEncoder().encode('>a\nAA\n')}});
-receiver.handlers.message({data:{type:'output-file-end',runId:42,index:1,name:'gene.prot.aln.fasta'}});
+receiver.handlers.message({data:{type:'output-file-end',runId:42,index:1,name:'gene.prot.aln.fasta',size:6,sha256:'b'.repeat(64)}});
 await Promise.resolve();
 assert.equal(published.length,0,'MSAP outputs must wait for the batch adapter to assign alignments/ paths');
 assert.equal(receiveContext.activeWorkerRun.streamedOutputs.get('final:1').content,'>a\nAA\n');
+assert.equal(receiveContext.activeWorkerRun.streamedOutputs.get('final:1').size,6);
+assert.equal(receiveContext.activeWorkerRun.streamedOutputs.get('final:1').sha256,'b'.repeat(64));
+let finished;
+receiveContext.activeWorkerRun.resolve=result=>{finished=result;};
+receiver.handlers.message({data:{type:'result',runId:42,result:{files:[
+  {name:'qc/pass.tsv',path:'/qc/pass.tsv',size:11,sha256:'a'.repeat(64)},
+  {name:'gene.prot.aln.fasta',path:'/gene.prot.aln.fasta',size:6,sha256:'b'.repeat(64)},
+]}}});
+assert.equal(finished.files[1].sha256,'b'.repeat(64));
+assert.equal(finished.files[1].size,6);
 console.log('Main-thread checkpoint reuse and deferred MSAP export paths passed.');
 
 // A failed worker is terminated; retry gets a new instance, and stale events are ignored.
@@ -123,3 +133,5 @@ await assert.rejects(pending,/cannot clone request/);
 assert.equal(terminated,4);
 assert.equal(receiveContext.pyodideWorker,undefined);
 assert.equal(receiveContext.activeWorkerRun,undefined);
+
+assert.equal(receiveContext.activeWorkerRun, undefined);

@@ -7,7 +7,7 @@ const messages = [];
 const timers = new Set();
 let clock = 0;
 const elements = {
-  run: { disabled: true }, cancelRun: {}, runtimeStatus: {}, runStageLabel: {},
+  command:{textContent:"test command"},run: { disabled: true }, cancelRun: {}, runtimeStatus: {}, runStageLabel: {},
   runStages: { querySelectorAll: () => [] }, outputName: { value: '' }, useNextStep: {},
   log: { set textContent(value) { messages.push(value); }, get textContent() { return messages.at(-1); } },
 };
@@ -32,7 +32,7 @@ Object.assign(context, {
   preflightGeneration: 0, resolvedFolderFiles: new Map(), generatedFiles: [],
   runInWorker: async () => ({files:[{name:'a.fa',content:'A'},{name:'b.fa',content:'B'}], summary:'Completed'}),
   buildRunManifest: async () => '{}',
-  localSaveBusy:false, outputDirectoryHandle: undefined, outputSaveSession: undefined, producedFiles: new Map(),
+  setConfigurationLocked:()=>{}, localSaveBusy:false, outputDirectoryHandle: undefined, outputSaveSession: undefined, producedFiles: new Map(),
   publishProducedFiles: async files => { saved += files.length; },
   savedDestination: () => 'browser workspace',
   renderGeneratedFiles: () => {}, transferTarget: () => undefined,

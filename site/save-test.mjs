@@ -86,12 +86,12 @@ console.log('Four-writer bound, directory caching, deduplication, overwrite seri
 // Exercise the actual app saving helpers, completion warnings and manual retry.
 let logs = [];
 const ui = {
-  run:{disabled:false},cancelRun:{},runtimeStatus:{},saveProgress:{},outputName:{value:''},useNextStep:{},downloadAll:{},chooseFolder:{},downloadSelected:{},
+  command:{textContent:"test command"},run:{disabled:false},cancelRun:{},runtimeStatus:{},saveProgress:{},outputName:{value:''},useNextStep:{},downloadAll:{},chooseFolder:{},downloadSelected:{},
 };
 const exported = [{name:'a.fa',content:'A'},{name:'b.fa',content:'B'}];
 const integration = vm.createContext({
   elements:ui,performance:{now:()=>Date.now()},PhyloPrepSave:scope.PhyloPrepSave,
-  localSaveBusy:false, outputDirectoryHandle:undefined,outputSaveSession:undefined,producedFiles:new Map(),generatedFiles:[],
+  setConfigurationLocked:()=>{}, localSaveBusy:false, outputDirectoryHandle:undefined,outputSaveSession:undefined,producedFiles:new Map(),generatedFiles:[],
   resolvedFolderFiles:new Map(),preflightGeneration:0,
   setInterval:()=>1,clearInterval:()=>{},
   activeModule:()=>({script:'tool.py',inputFields:[],defaultOutput:'results'}),
@@ -196,3 +196,24 @@ assert.equal(largeReport.split('\n').length,150003);
 assert.ok(largeReport.startsWith('header\nfirst\n'));
 assert.ok(largeReport.endsWith('last\n'));
 console.log('Save-session isolation, retry control locking and 150,001-row report merging passed.');
+
+// Actual workflow must capture its options/output/CLI before asynchronous processing.
+const rawOptions={genetic_code:1,taxa:['original']};let submitted;
+ui.command.textContent='original command -g 1';ui.outputName.value='original-output';
+integration.outputDirectoryHandle=undefined;integration.outputSaveSession=undefined;
+integration.activeModule=()=>({script:'tool.py',inputFields:[],defaultOutput:'results'});
+integration.rawParameterValues=()=>rawOptions;
+integration.runInWorker=async request=>{
+  submitted=request;ui.command.textContent='changed command -g 2';ui.outputName.value='changed-output';
+  rawOptions.genetic_code=2;rawOptions.taxa.push('changed');
+  return {files:exported};
+};
+integration.buildRunManifest=async(module,request)=>{
+  assert.equal(request.equivalentCli,'original command -g 1');
+  assert.equal(request.options.genetic_code,1);assert.equal(request.options.taxa.length,1);
+  assert.equal(request.outputName,'original-output');return '{}';
+};
+await vm.runInContext('runBrowserModule()',integration);
+assert.equal(submitted.options.genetic_code,1);
+assert.equal(logs.at(-1).status,'success');
+console.log('Workflow start snapshots survive subsequent UI/option changes.');

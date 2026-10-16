@@ -383,6 +383,7 @@ let generatedFiles = [];
 let producedFiles = new Map();
 let outputSaveSession;
 let localSaveBusy = false;
+const configurationDisabled = new Map();
 let selectedGeneratedFileIndex = 0;
 let resultEntries = [];
 let resultPageNumber = 0;
@@ -987,6 +988,7 @@ function setLog(message, status = "") {
 }
 
 function selectModule(index) {
+  if (elements.run.disabled || localSaveBusy) return;
   activeModuleIndex = index;
   const module = activeModule();
   elements.selectedName.textContent = module.title;
@@ -1327,7 +1329,24 @@ function cancellationError() {
   return error;
 }
 
+function setConfigurationLocked(locked) {
+  for (const root of [elements.parameterList, elements.inputFileFields, elements.scriptList]) {
+    if (root) root.inert = locked;
+  }
+  if (!locked) {
+    for (const [control, disabled] of configurationDisabled) control.disabled = disabled;
+    configurationDisabled.clear();
+    return;
+  }
+  const controls = [elements.outputName, elements.clearInputFiles, elements.useNextStep];
+  for (const control of controls.filter(Boolean)) {
+    if (!configurationDisabled.has(control)) configurationDisabled.set(control, control.disabled);
+    control.disabled = true;
+  }
+}
+
 function setRunControls(running) {
+  setConfigurationLocked(running || localSaveBusy);
   elements.run.disabled = running || localSaveBusy;
   elements.run.textContent = running ? "Running…" : "Run";
   elements.cancelRun.hidden = !running;
@@ -1379,10 +1398,12 @@ function createPyodideWorker() {
         } else {
           file.parts.push(file.decoder.decode());
           file.content = file.parts.join("");
+          file.size = message.size;
+          file.sha256 = message.sha256;
           file.parts = [];
           file.decoder = undefined;
           // Only fully received files are eligible for saving. Keep engine files intact.
-          void (activeWorkerRun.deferPublish ? Promise.resolve() : publishProducedFiles([{ name: file.name, content: file.content }])).then(() => {
+          void (activeWorkerRun.deferPublish ? Promise.resolve() : publishProducedFiles([{ name: file.name, content: file.content, size: file.size, sha256: file.sha256 }])).then(() => {
             if (message.sequence !== undefined) worker.postMessage({ type: "output-chunk-ack", runId: message.runId, sequence: message.sequence });
           }).catch(fail);
           if (message.transferId) outputs.delete(transferKey);
@@ -1426,7 +1447,7 @@ function createPyodideWorker() {
             message.result.files = message.result.files.map((file, index) => {
               const streamed = run.streamedOutputs.get(`final:${index}`);
               if (!streamed || streamed.content === undefined) throw new Error(`Incomplete output received: ${file.name}`);
-              return { name: file.name, content: streamed.content };
+              return { name: file.name, content: streamed.content, size: file.size, sha256: file.sha256 };
             });
           }
           activeWorkerRun = undefined;
@@ -1508,6 +1529,7 @@ function savedDestination(file, session = outputSaveSession) {
 
 function setLocalSaveBusy(busy) {
   localSaveBusy = busy;
+  setConfigurationLocked(busy);
   for (const control of [elements.run, elements.chooseFolder, elements.downloadAll, elements.downloadSelected]) control.disabled = busy;
 }
 
@@ -1801,10 +1823,10 @@ async function runMsapBatchBrowserWorkflow(request) {
     }
     showLocusProgress(index + 1, inputs.length, progressStarted, input.name);
     engineMetadata = result.engineMetadata;
-    outputs.push(...result.files.map((file) => ({ name: file.name, content: file.content })));
+    outputs.push(...result.files.map((file) => ({ ...file })));
     const available = request.pipelineOutput
       ? result.files.filter(file => !file.name.includes("/") && (file.name.endsWith(".aln.fasta") || file.name.endsWith(".sequence_changes.tsv")))
-          .map(file => ({ name: `alignments/${file.name}`, content: file.content }))
+          .map(file => ({ ...file, name: `alignments/${file.name}` }))
       : result.files;
     await publishProducedFiles(available);
   }
@@ -1854,29 +1876,25 @@ async function runPhyloPrepBrowserWorkflow(request) {
   return result;
 }
 
-async function sha256Text(text) {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+async function sha256Text(text, bytes = new TextEncoder().encode(text)) {
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function fileFingerprint(file) {
+  if (!Number.isSafeInteger(file.size) || file.size < 0 || !/^[0-9a-f]{64}$/.test(file.sha256 || "")) {
+    const bytes = new TextEncoder().encode(file.content);
+    file.size = bytes.byteLength;
+    file.sha256 = await sha256Text(file.content, bytes);
+  }
+  return { name: file.name, bytes: file.size, sha256: file.sha256 };
 }
 
 async function buildRunManifest(module, request, result, outputs) {
   const inputManifest = [];
-  for (const file of request.files) {
-    inputManifest.push({
-      name: file.name,
-      input_key: file.inputKey,
-      bytes: new TextEncoder().encode(file.content).length,
-      sha256: await sha256Text(file.content),
-    });
-  }
+  for (const file of request.files) inputManifest.push({ ...await fileFingerprint(file), input_key: file.inputKey });
   const outputManifest = [];
-  for (const file of outputs) {
-    outputManifest.push({
-      name: file.name,
-      bytes: new TextEncoder().encode(file.content).length,
-      sha256: await sha256Text(file.content),
-    });
-  }
+  for (const file of outputs) outputManifest.push(await fileFingerprint(file));
   const engine = result.engineMetadata || versionManifest;
   const script = engine?.files?.find(file => file.name === module.script);
   return JSON.stringify({
@@ -1887,7 +1905,7 @@ async function buildRunManifest(module, request, result, outputs) {
     created_at: new Date().toISOString(),
     module: module.script,
     implementation: implementationProfile(module),
-    equivalent_cli: elements.command.textContent,
+    equivalent_cli: request.equivalentCli,
     parameters: request.options,
     inputs: inputManifest,
     outputs: outputManifest,
@@ -1970,6 +1988,10 @@ async function runBrowserModule() {
     missingInput.focus();
     return;
   }
+  const optionValues = rawParameterValues();
+  const runOptions = JSON.parse(JSON.stringify(optionValues));
+  const equivalentCli = elements.command.textContent;
+  const outputName = elements.outputName.value.trim() || module.defaultOutput;
   setRunControls(true);
   producedFiles = new Map();
   generatedFiles = [];
@@ -2027,14 +2049,14 @@ async function runBrowserModule() {
       }
     }
     clearInterval(preparationTimer);
-    const optionValues = rawParameterValues();
     setRunStage(stage, "Loading local workflow");
     elements.cancelRun.hidden = false;
     const request = {
       script: module.script,
       files: filePayload,
-      options: optionValues,
-      outputName: elements.outputName.value.trim() || module.defaultOutput,
+      options: runOptions,
+      equivalentCli,
+      outputName,
       usesPathList: module.inputFields.some((field) => field.pathList),
     };
     const result = module.browserWorkflow === "phyloprep"
@@ -2047,7 +2069,7 @@ async function runBrowserModule() {
     stage = 3;
     setRunStage(stage, "Saving output");
     generatedFiles = [];
-    const resultOutputs = result.files.map((output) => ({ name: output.name, content: output.content }));
+    const resultOutputs = result.files.map((output) => ({ ...output }));
     setRunStage(stage, "Preparing output checksums and run manifest");
     const manifest = await buildRunManifest(module, request, result, resultOutputs);
     resultOutputs.push({ name: "phyloprep-run.json", content: manifest });
