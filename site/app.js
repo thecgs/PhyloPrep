@@ -945,6 +945,7 @@ function updateCommand() {
 
 function setRunStage(stage = 0, label = "Ready to run", failed = false) {
   elements.runStageLabel.textContent = label;
+  if (elements.run.disabled && stage > 0 && stage < 4 && !failed) setLog(label);
   [...elements.runStages.querySelectorAll(".run-stage")].forEach((item) => {
     const number = Number(item.dataset.stage);
     item.classList.remove("active", "complete", "error");
@@ -1888,7 +1889,19 @@ async function runBrowserModule() {
   elements.cancelRun.hidden = true;
   let stage = 2;
   setRunStage(1, "Reading input files");
-  setLog("Preparing input for the local worker…");
+  const preparationStarted = performance.now();
+  let preparationLabel = "Resolving input files";
+  let preparationLastRender = -Infinity;
+  const renderPreparation = (force = false) => {
+    const now = performance.now();
+    if (!force && now - preparationLastRender < 100) return;
+    preparationLastRender = now;
+    const label = `${preparationLabel} · ${Math.round((now - preparationStarted) / 1000)}s elapsed`;
+    elements.runtimeStatus.textContent = label;
+    setRunStage(1, label);
+  };
+  const preparationTimer = setInterval(() => renderPreparation(true), 1000);
+  renderPreparation(true);
   try {
     ++preflightGeneration;
     resolvedFolderFiles.clear();
@@ -1900,6 +1913,10 @@ async function runBrowserModule() {
         const available = [...inputs, ...(inputFolderFiles.get(field.key) || [])];
         inputs = await PhyloPrepInputs.resolveFiles(available, {
           sibling: (entry, list) => readPathlistSibling(field.key, entry, list),
+          onProgress: ({ completed, total, name }) => {
+            preparationLabel = `Resolving ${name}: ${completed}/${total} paths`;
+            renderPreparation(completed === 0 || completed === total);
+          },
         });
       }
       const contents = await PhyloPrepInputs.readBounded(inputs, async file => {
@@ -1910,11 +1927,15 @@ async function runBrowserModule() {
           if (!fresh) throw error;
           return PhyloPrepInputs.readText(fresh);
         }
+      }, 4, ({ completed, total }) => {
+        preparationLabel = `Reading ${field?.label || "input"}: ${completed}/${total} files`;
+        renderPreparation(completed === 0 || completed === total);
       });
       for (let index = 0; index < inputs.length; index++) {
         filePayload.push({ name: inputs[index].name, content: contents[index], inputKey: control.dataset.inputKey });
       }
     }
+    clearInterval(preparationTimer);
     const optionValues = rawParameterValues();
     setRunStage(stage, "Loading local workflow");
     elements.cancelRun.hidden = false;
@@ -1936,12 +1957,20 @@ async function runBrowserModule() {
     setRunStage(stage, "Saving output");
     generatedFiles = [];
     const resultOutputs = result.files.map((output) => ({ name: output.name, content: output.content }));
+    setRunStage(stage, "Preparing output checksums and run manifest");
     const manifest = await buildRunManifest(module, request, result, resultOutputs);
     resultOutputs.push({ name: "phyloprep-run.json", content: manifest });
+    let savingLastRender = -Infinity;
+    setRunStage(stage, `Saving output: 0/${resultOutputs.length} files`);
     for (const output of resultOutputs) {
       const generated = { name: output.name, content: output.content };
       generated.destination = await saveGeneratedFile(generated);
       generatedFiles.push(generated);
+      const now = performance.now();
+      if (now - savingLastRender >= 100 || generatedFiles.length === resultOutputs.length) {
+        setRunStage(stage, `Saving output: ${generatedFiles.length}/${resultOutputs.length} files · ${output.name}`);
+        savingLastRender = now;
+      }
     }
     renderGeneratedFiles();
     elements.useNextStep.hidden = !transferTarget(module);
@@ -1957,6 +1986,7 @@ async function runBrowserModule() {
     setRunStage(stage, cancelled ? "Run cancelled" : "Workflow needs attention", !cancelled);
     setLog(cancelled ? "Run cancelled. You can change inputs or parameters and try again." : (error.message || String(error)), cancelled ? "" : "error");
   } finally {
+    clearInterval(preparationTimer);
     setRunControls(false);
   }
 }

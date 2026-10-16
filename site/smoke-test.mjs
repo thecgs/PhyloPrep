@@ -214,3 +214,5 @@ if (alignerControls.length !== 2 || alignerControls.some(line => !line.includes(
 await import('./result-test.mjs');
 await import('./options-test.mjs');
 await import('./version-test.mjs');
+
+await import('./progress-test.mjs');
