@@ -27,7 +27,7 @@ the configured heap maximum or the host computer's available RAM.
 Run from the repository root with Docker available:
 
 ```bash
-docker run --rm -u "$(id -u):$(id -g)" -e HOME=/tmp \
+docker run --rm -e HOME=/tmp \
   -v "$PWD:/src" -w /src emscripten/emsdk:2.0.25 \
   python3 scripts/build_browser_aligners.py
 node site/aligner-build-test.mjs
@@ -58,3 +58,5 @@ never changes automatically.
 This is a 4 GiB wasm32 build, not a Memory64 port. It does not guarantee that
 the previously failing five-sequence, approximately 10,146-residue dataset
 will fit: that dataset needs a separate run to establish its peak demand.
+
+Custom preview servers must serve the `.js` and `.wasm` files with appropriate MIME types and `Access-Control-Allow-Origin: *`, because Aioli can load its nested worker through a data URL. The browser test's local server sets these headers. Tests can optionally mirror the three unchanged CDN runtime assets through `PHYLOPREP_TEST_VENDOR_DIR` when the test browser cannot use a host network proxy; production aligner code is not rewritten.

@@ -9,6 +9,7 @@ const server = http.createServer((req, res) => {
   const file = path.resolve(root, '.' + new URL(req.url, 'http://localhost').pathname);
   if (!file.startsWith(root + path.sep)) { res.writeHead(403).end(); return; }
   if (!fs.existsSync(file) || !fs.statSync(file).isFile()) { res.writeHead(404).end(); return; }
+  res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Content-Type', file.endsWith('.wasm') ? 'application/wasm' : file.endsWith('.js') ? 'application/javascript' : 'text/html');
   fs.createReadStream(file).pipe(res);
 });
@@ -16,9 +17,25 @@ const server = http.createServer((req, res) => {
 (async () => {
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const origin = `http://127.0.0.1:${server.address().port}`;
-  const browser = await chromium.launch({ headless: true, args: ['--no-sandbox'] });
+  const proxyUrl = process.env.PHYLOPREP_TEST_PROXY ? new URL(process.env.PHYLOPREP_TEST_PROXY) : null;
+  const proxy = proxyUrl ? { server: proxyUrl.origin, username: decodeURIComponent(proxyUrl.username),
+    password: decodeURIComponent(proxyUrl.password), bypass: '127.0.0.1,localhost' } : undefined;
+  const browser = await chromium.launch({ headless: true, args: ['--no-sandbox'], proxy });
   try {
-    const page = await browser.newPage();
+    const context = await browser.newContext();
+    context.on('requestfailed', request => console.error('Request failed:', request.url(), request.failure()?.errorText));
+    // Optional byte-for-byte CDN mirror for environments whose browser cannot
+    // use the host's network proxy. Production workers and wasm stay unchanged.
+    if (process.env.PHYLOPREP_TEST_VENDOR_DIR) {
+      await context.route('https://biowasm.com/**', async route => {
+        const basename = path.basename(new URL(route.request().url()).pathname);
+        if (!['aioli.js', 'base.js', 'base.wasm'].includes(basename)) throw new Error(`Unexpected CDN asset ${basename}`);
+        await route.fulfill({path: path.join(process.env.PHYLOPREP_TEST_VENDOR_DIR, basename),
+          contentType: basename.endsWith('.wasm') ? 'application/wasm' : 'application/javascript'});
+      });
+    }
+    const page = await context.newPage();
+    page.on('console', message => { if (message.type() === 'error') console.error(message.text()); });
     await page.goto(`${origin}/index.html`);
     // The memory probe uses the same compiler and ceiling and touches >2 GiB.
     const probe = await page.evaluate(async origin => {

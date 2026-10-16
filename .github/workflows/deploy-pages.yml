@@ -40,7 +40,7 @@ jobs:
         run: python -m pytest -q
       - name: Compile 4 GiB MAFFT and MUSCLE WebAssembly builds
         run: |
-          docker run --rm -u "$(id -u):$(id -g)" -e HOME=/tmp -v "$PWD:/src" -w /src emscripten/emsdk:2.0.25 python3 scripts/build_browser_aligners.py
+          docker run --rm -e HOME=/tmp -v "$PWD:/src" -w /src emscripten/emsdk:2.0.25 python3 scripts/build_browser_aligners.py
           node site/aligner-build-test.mjs
       - name: Bundle original browser scripts
         run: node site/build-engine.mjs
