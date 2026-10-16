@@ -6,10 +6,14 @@ let engineManifest;
 const outputAcknowledgements = new Map();
 let outputSequence = 0;
 
-async function streamOutputFiles(runtime, runId, files, transferId, waitForSave = false) {
+async function streamOutputFiles(runtime, runId, files, transferId, waitForSave = false, transferred = new Map()) {
   for (let index = 0; index < files.length; index++) {
     const file = files[index];
     if (!file.path) continue;
+    if (file.sha256 && transferred.get(file.name) === file.sha256) {
+      self.postMessage({ type: "output-file-reuse", runId, index, name: file.name, transferId });
+      continue;
+    }
     const stream = runtime.FS.open(file.path, "r");
     try {
       let position = 0;
@@ -42,6 +46,7 @@ async function streamOutputFiles(runtime, runId, files, transferId, waitForSave 
           self.postMessage({ ...end, sequence });
         });
       } else self.postMessage(end);
+      if (file.sha256) transferred.set(file.name, file.sha256);
     } finally {
       runtime.FS.close(stream);
     }
@@ -301,6 +306,7 @@ self.addEventListener("message", async (event) => {
   const { runId } = request;
   let runtime;
   let stage;
+  const transferred = new Map();
   try {
     runtime = await ensureRuntime(runId);
     stage = stageBrowserInputs(runtime, request);
@@ -320,9 +326,10 @@ self.addEventListener("message", async (event) => {
       const alignmentPath = `${stage.optionsRoot}/biowasm-alignment.aln.fasta`;
       runtime.FS.writeFile(alignmentPath, request.alignmentContent || "");
       const args = msapArguments(request, stage);
-      const raw = await runtime.runPythonAsync(`run_msap_complete(${JSON.stringify(args)}, ${JSON.stringify(stage.outputRoot)}, ${JSON.stringify(alignmentPath)})`);
+      const raw = await runtime.runPythonAsync(`run_msap_complete(${JSON.stringify(args)}, ${JSON.stringify(stage.outputRoot)}, ${JSON.stringify(alignmentPath)}, manifest_only=True)`);
       const result = JSON.parse(raw);
       if (!result.ok) throw new Error(result.error || "The original MSAP.py workflow could not complete.");
+      await streamOutputFiles(runtime, runId, result.files || [], undefined, request.incrementalSave, transferred);
       self.postMessage({
         type: "result",
         runId,
@@ -352,7 +359,7 @@ self.addEventListener("message", async (event) => {
             raw = await runtime.runPythonAsync("advance_phyloprep_finalize(_phyloprep_steps)");
             const step = JSON.parse(raw);
             if (!step.pending) break;
-            await streamOutputFiles(runtime, runId, step.files || [], `checkpoint-${checkpoint++}`, true);
+            await streamOutputFiles(runtime, runId, step.files || [], `checkpoint-${checkpoint++}`, true, transferred);
           }
         } else {
           raw = await runtime.runPythonAsync(`run_phyloprep_finalize(${pythonJson(manifest)}, ${pythonJson(request.options)}, ${JSON.stringify(stage.outputRoot)}, progress_callback=_phyloprep_progress_callback, manifest_only=True)`);
@@ -367,7 +374,7 @@ self.addEventListener("message", async (event) => {
       if (!result.ok && !result.recoverable) {
         throw new Error(result.user_error || result.error || "The browser PhyloPrep pipeline could not complete.");
       }
-      await streamOutputFiles(runtime, runId, result.files || [], undefined, request.incrementalSave);
+      await streamOutputFiles(runtime, runId, result.files || [], undefined, request.incrementalSave, transferred);
       self.postMessage({
         type: "result",
         runId,
@@ -384,9 +391,10 @@ self.addEventListener("message", async (event) => {
     if (request.type === "orthofinder-extract") {
       self.postMessage({ type: "stage", runId, stage: "process", label: "Extracting OrthoFinder orthogroups" });
       const args = orthofinderArguments(runtime, request, stage);
-      const raw = await runtime.runPythonAsync(`run_original_module("extract_orthofinder_orthogroups.py", ${JSON.stringify(args)}, ${JSON.stringify(stage.outputRoot)})`);
+      const raw = await runtime.runPythonAsync(`run_original_module("extract_orthofinder_orthogroups.py", ${JSON.stringify(args)}, ${JSON.stringify(stage.outputRoot)}, manifest_only=True)`);
       const result = JSON.parse(raw);
       if (!result.ok) throw new Error(result.error || "OrthoFinder orthogroup extraction failed.");
+      await streamOutputFiles(runtime, runId, result.files || [], undefined, request.incrementalSave, transferred);
       self.postMessage({
         type: "result",
         runId,
@@ -402,9 +410,10 @@ self.addEventListener("message", async (event) => {
 
     self.postMessage({ type: "stage", runId, stage: "process", label: "Running original script locally" });
     const args = originalArguments(request, stage);
-    const raw = await runtime.runPythonAsync(`run_original_module(${JSON.stringify(request.script)}, ${JSON.stringify(args)}, ${JSON.stringify(stage.outputRoot)})`);
+    const raw = await runtime.runPythonAsync(`run_original_module(${JSON.stringify(request.script)}, ${JSON.stringify(args)}, ${JSON.stringify(stage.outputRoot)}, manifest_only=True)`);
     const result = JSON.parse(raw);
     if (!result.ok) throw new Error(result.error || "The original script could not complete.");
+    await streamOutputFiles(runtime, runId, result.files || [], undefined, request.incrementalSave, transferred);
     self.postMessage({
       type: "result",
       runId,

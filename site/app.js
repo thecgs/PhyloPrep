@@ -1339,6 +1339,15 @@ function createPyodideWorker() {
   worker.addEventListener("message", (event) => {
     const message = event.data;
     if (!activeWorkerRun || message.runId !== activeWorkerRun.id) return;
+    if (message.type === "output-file-reuse") {
+      const previous = producedFiles.get(message.name);
+      if (!previous) {
+        activeWorkerRun.reject(new Error(`Missing previously received output: ${message.name}`));
+        return;
+      }
+      if (!message.transferId) activeWorkerRun.streamedOutputs.set(`final:${message.index}`, previous);
+      return;
+    }
     if (message.type === "output-chunk" || message.type === "output-file-end") {
       clearInterval(activeWorkerRun.progressTimer);
       const outputs = activeWorkerRun.streamedOutputs;
@@ -1358,7 +1367,7 @@ function createPyodideWorker() {
         file.parts = [];
         file.decoder = undefined;
         // Only fully received files are eligible for saving. Keep engine files intact.
-        void publishProducedFiles([{ name: file.name, content: file.content }]).then(() => {
+        void (activeWorkerRun.deferPublish ? Promise.resolve() : publishProducedFiles([{ name: file.name, content: file.content }])).then(() => {
           if (message.sequence !== undefined) worker.postMessage({ type: "output-chunk-ack", runId: message.runId, sequence: message.sequence });
         });
         if (message.transferId) outputs.delete(transferKey);
@@ -1427,7 +1436,7 @@ function runInWorker(payload) {
   const worker = pyodideWorker || createPyodideWorker();
   const runId = ++nextRunId;
   return new Promise((resolve, reject) => {
-    activeWorkerRun = { id: runId, resolve, reject, streamedOutputs: new Map() };
+    activeWorkerRun = { id: runId, resolve, reject, streamedOutputs: new Map(), deferPublish: Boolean(payload.deferPublish) };
     worker.postMessage({ type: payload.type || "run", runId, ...payload, incrementalSave: Boolean(outputSaveSession) });
   });
 }
@@ -1685,7 +1694,7 @@ async function runMsapBrowserWorkflow(request) {
   setRunStage(2, "Finishing original MSAP.py workflow");
   elements.runtimeStatus.textContent = "Finishing MSAP.py workflow";
   elements.cancelRun.hidden = false;
-  return runInWorker({ type: "msap-complete", ...request, alignmentContent });
+  return runInWorker({ type: "msap-complete", ...request, alignmentContent, deferPublish: true });
 }
 
 
@@ -1696,9 +1705,12 @@ function fileStem(name) {
 }
 
 function requireUniqueStems(files) {
-  const stems = files.map((file) => fileStem(file.name));
-  const duplicate = stems.find((stem, index) => stems.indexOf(stem) !== index);
-  if (duplicate) throw new Error(`Input FASTA basenames must be unique; duplicate stem: ${duplicate}`);
+  const seen = new Set();
+  for (const file of files) {
+    const stem = fileStem(file.name);
+    if (seen.has(stem)) throw new Error(`Input FASTA basenames must be unique; duplicate stem: ${stem}`);
+    seen.add(stem);
+  }
 }
 
 function mergeTsvContents(files) {
@@ -1714,7 +1726,7 @@ function mergeTsvContents(files) {
 }
 
 function selectedInputPathList(inputs) {
-  return `${inputs.map((file) => virtualInputPath(file.name)).join("\n")}\n`;
+  return `${inputs.map((file) => file.name).join("\n")}\n`;
 }
 
 function batchPathLists(files) {
@@ -1722,7 +1734,7 @@ function batchPathLists(files) {
   const outputs = [];
   suffixes.forEach((suffix) => {
     const names = files.filter((file) => file.name.endsWith(`.${suffix}`)).map((file) => file.name).sort();
-    if (names.length) outputs.push({ name: `path-lists/all.${suffix}.pathlist`, content: `${names.join("\n")}\n` });
+    if (names.length) outputs.push({ name: `path-lists/all.${suffix}.pathlist`, content: `${names.map(name => `../${name}`).join("\n")}\n` });
   });
   return outputs;
 }
@@ -1933,6 +1945,8 @@ async function runBrowserModule() {
   setRunControls(true);
   producedFiles = new Map();
   generatedFiles = [];
+  renderGeneratedFiles();
+  elements.useNextStep.hidden = true;
   outputSaveSession = outputDirectoryHandle ? createOutputSaveSession(outputDirectoryHandle) : undefined;
   if (elements.saveProgress) elements.saveProgress.hidden = true;
   elements.cancelRun.hidden = true;

@@ -8,6 +8,7 @@ visible in the result directory only after MSAP.py exits successfully.
 from __future__ import annotations
 
 import argparse
+from bisect import bisect_left
 import fcntl
 import concurrent.futures
 import hashlib
@@ -90,12 +91,14 @@ def _claim_prefixes(inputs: list[Path], root: Path) -> None:
         if stem in owners and owners[stem] != source:
             raise ValueError(f"Conflicting historical owners for prefix {stem}; use a new output directory")
         owners[stem] = source
+    existing_names = sorted(p.name for p in root.iterdir())
     for path in inputs:
         source = str(path.resolve())
         owner = owners.get(path.stem)
         if owner is not None and owner != source:
             raise ValueError(f"Output prefix {path.stem} already belongs to {owner}; use another output directory")
-        if owner is None and any(p.name.startswith(path.stem + ".") for p in root.iterdir()):
+        position = bisect_left(existing_names, path.stem + ".")
+        if owner is None and position < len(existing_names) and existing_names[position].startswith(path.stem + "."):
             raise ValueError(f"Unmanaged outputs already use prefix {path.stem}; use another output directory")
         owners[path.stem] = source
     _atomic_json(owner_file, owners)

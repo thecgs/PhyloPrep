@@ -171,3 +171,11 @@ Local-save counts are displayed separately from analysis progress. Completion wa
 ### Alignment filenames
 
 CLI and browser alignment outputs use the explicit FASTA suffix: `GENE.ALIGNER.TYPE.aln.fasta` for untrimmed alignments and `GENE.ALIGNER.TYPE.trimmed.aln.fasta` for trimmed alignments. Batch pathlists are named `all.TYPE.aln.fasta.pathlist` and `all.TYPE.trimmed.aln.fasta.pathlist`. The file contents remain FASTA; QC, provenance matching, paired trimming and concatenation use the same naming convention.
+
+### Portable exports and bounded tool results
+
+All Python tool results, including OG extraction and per-locus MSAP completion, return file metadata and use acknowledged 1 MiB output chunks instead of serializing all contents into one JSON response. Full-pipeline checkpoints fingerprint files with SHA256; unchanged files are reused in the final results instead of being transmitted and decoded again. Changed reports are retransmitted.
+
+Exported output pathlists and QC pass/fail/retained lists use paths relative to their own directory. Export copies do not alter engine paths used for QC or concatenation. Lists referring to original input FASTAs use basenames because the originals are not bundled; place those original files alongside the list before CLI reuse. Batch alignment lists use `../<alignment filename>`. Download the complete output folder to preserve these relative paths.
+
+Starting another run clears the previous result list and preview immediately. Duplicate input-stem checking uses a set, and the CLI indexes existing output filenames once before checking prefix ownership.

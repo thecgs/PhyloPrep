@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import io
 import importlib
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -84,7 +85,9 @@ def _exit_code(value):
     return 1
 
 
-def _output_files(output_root: Path):
+def _output_files(output_root: Path, manifest_only=False, path_lists=()):
+    if manifest_only:
+        return _export_output_files(output_root, _visible_output_files(output_root, manifest_only=True), path_lists=path_lists)
     files = []
     for path in sorted(output_root.rglob("*")):
         if path.is_file():
@@ -96,7 +99,7 @@ def _output_files(output_root: Path):
 
 
 @memory_safe_result
-def run_original_module(module, argv, output_root, engine_root="/engine"):
+def run_original_module(module, argv, output_root, engine_root="/engine", manifest_only=False):
     """Run an untouched source script as its CLI entry point and return its files."""
     engine = Path(engine_root).resolve()
     script = engine / module
@@ -133,7 +136,14 @@ def run_original_module(module, argv, output_root, engine_root="/engine"):
             "stdout": stdout.getvalue(),
             "stderr": stderr.getvalue(),
         })
-    files = _output_files(output)
+    list_paths = []
+    for index, argument in enumerate(argv):
+        if str(argument) == '--pathlist-output' and index + 1 < len(argv):
+            list_paths.append(argv[index + 1])
+        elif str(argument).startswith('--pathlist-output='):
+            list_paths.append(str(argument).split('=', 1)[1])
+    list_paths = [Path(value) if Path(value).is_absolute() else output / value for value in list_paths]
+    files = _output_files(output, manifest_only=manifest_only, path_lists=list_paths)
     if not files:
         return json.dumps({"ok": False, "error": f"{module} did not create an output file."})
     return json.dumps({
@@ -280,7 +290,7 @@ def run_msap_probe(argv, output_root, engine_root="/engine"):
 
 
 @memory_safe_result
-def run_msap_complete(argv, output_root, alignment_file, engine_root="/engine"):
+def run_msap_complete(argv, output_root, alignment_file, engine_root="/engine", manifest_only=False):
     """Rerun untouched MSAP.py and satisfy its browser-supported alignment call."""
     alignment = Path(alignment_file)
     if not alignment.is_file():
@@ -324,7 +334,7 @@ def run_msap_complete(argv, output_root, alignment_file, engine_root="/engine"):
             "stdout": stdout,
             "stderr": stderr,
         })
-    files = _output_files(Path(output_root).resolve())
+    files = _output_files(Path(output_root).resolve(), manifest_only=manifest_only)
     if not files:
         return json.dumps({"ok": False, "error": "MSAP.py did not create output files."})
     return json.dumps({
@@ -386,6 +396,41 @@ def _visible_output_files(root, manifest_only=False):
         else:
             file["content"] = path.read_text(encoding="utf-8", errors="replace")
         files.append(file)
+    return files
+
+
+def _export_output_files(root, files, path_lists=()):
+    """Prepare portable list copies; never change paths used by the engine."""
+    root = Path(root).resolve()
+    list_paths = {Path(path).resolve() for path in path_lists}
+    for item in files:
+        path = Path(item['path'])
+        if path.resolve() in list_paths or path.suffix in {'.pathlist', '.list'} or path.name.endswith(('.pass.tsv', '.fail.tsv', '.retained.tsv')):
+            exported = root / '.browser-export' / item['name']
+            exported.parent.mkdir(parents=True, exist_ok=True)
+            with path.open(encoding='utf-8') as source, exported.open('w', encoding='utf-8') as target:
+                for line in source:
+                    entry = line.strip()
+                    candidate = Path(entry)
+                    if entry and not entry.startswith(('#', ';')):
+                        if not candidate.is_absolute():
+                            candidate = path.parent / candidate
+                        candidate = candidate.resolve()
+                        if candidate.is_file():
+                            if candidate.is_relative_to(root):
+                                entry = Path(os.path.relpath(candidate, path.parent)).as_posix()
+                            else:
+                                # Inputs are not bundled: place the original FASTA
+                                # alongside this exported list before CLI reuse.
+                                entry = candidate.name
+                    target.write(entry + '\n')
+            path = exported
+            item.update(path=str(path), size=path.stat().st_size)
+        digest = hashlib.sha256()
+        with path.open('rb') as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b''):
+                digest.update(chunk)
+        item['sha256'] = digest.hexdigest()
     return files
 
 
@@ -509,7 +554,7 @@ def _phyloprep_finalize_steps(file_manifest, options, output_root, engine_root="
                                 for item in _visible_output_files(root / folder, manifest_only=True):
                                     item['name'] = folder + '/' + item['name']
                                     checkpoint.append(item)
-                            yield checkpoint
+                            yield _export_output_files(root, checkpoint)
                     report_phase(args, 'Publishing matrices')
                     phyloprep.publish_matrices(matrix_root, root, variants, block_signals=False)
                     args._progress.update('Complete', completed=len(variants) + 1)
@@ -517,6 +562,8 @@ def _phyloprep_finalize_steps(file_manifest, options, output_root, engine_root="
             phyloprep.run = original_run
 
         files = _visible_output_files(root, manifest_only=manifest_only)
+        if manifest_only:
+            files = _export_output_files(root, files)
         if not files:
             raise ValueError("PhyloPrep produced no downloadable output files.")
         return json.dumps({
@@ -533,7 +580,8 @@ def _phyloprep_finalize_steps(file_manifest, options, output_root, engine_root="
             return json.dumps({
                 "ok": False,
                 "recoverable": True,
-                "files": _visible_output_files(root, manifest_only=manifest_only),
+                "files": (_export_output_files(root, _visible_output_files(root, manifest_only=True))
+                          if manifest_only else _visible_output_files(root)),
                 "user_error": str(error),
                 "summary": "No loci passed QC; diagnostic reports were preserved.",
                 "stdout": stdout.getvalue(),
@@ -543,6 +591,8 @@ def _phyloprep_finalize_steps(file_manifest, options, output_root, engine_root="
         technical_error = stderr.getvalue().strip() or "The browser PhyloPrep pipeline failed."
         if phyloprep is not None and isinstance(error, phyloprep.NoGenesIncludedError):
             files = _visible_output_files(root, manifest_only=manifest_only)
+            if manifest_only:
+                files = _export_output_files(root, files)
             if mapping_supplied:
                 user_error = (
                     "No supermatrix could be built with missing-taxa=skip-gene because no locus retained the full "

@@ -139,3 +139,20 @@ assert.equal(logs.at(-1).text,'analysis interrupted');
 assert.equal(integration.generatedFiles.length,1,'Produced files must survive analysis errors');
 assert.equal(other.disk.get('/alignments/partial.aln.fasta'),'ATG');
 console.log('No-folder behavior, full workflow save completion, paused-save warning, manual retry, destination changes and partial-result retention passed.');
+
+// Portable batch lists and a linear duplicate-stem check use actual app helpers.
+const names = vm.createContext({});
+vm.runInContext(slice('function fileStem(', 'function mergeTsvContents('), names);
+vm.runInContext(slice('function batchPathLists(', 'function showLocusProgress('), names);
+names.inputs = Array.from({length:60000}, (_,i) => ({name:`gene${i}.fasta`}));
+vm.runInContext('requireUniqueStems(inputs)', names);
+names.inputs.push({name:'gene0.fa'});
+assert.throws(() => vm.runInContext('requireUniqueStems(inputs)', names), /duplicate stem: gene0/);
+const portable = vm.runInContext('batchPathLists([{name:"gene.mafft.codon.aln.fasta"}])', names);
+assert.equal(portable[0].content, '../gene.mafft.codon.aln.fasta\n');
+let cleared = false;
+integration.renderGeneratedFiles = () => { if (!integration.generatedFiles.length) cleared = true; };
+integration.runInWorker = async () => {throw new Error('early failure');};
+await vm.runInContext('runBrowserModule()', integration);
+assert.ok(cleared, 'Starting a failing run must clear the previous result list');
+console.log('Portable list naming, 60,000-input stem checking and stale-result clearing passed.');
