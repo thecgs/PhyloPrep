@@ -21,19 +21,24 @@
       throw new Error(`Cannot read ${file.name}: ${error.message}. Reselect this file or authorize its input folder and retry.`, { cause: error });
     }
   }
-  async function readBounded(files, read = readText, concurrency = 4) {
+  async function readBounded(files, read = readText, concurrency = 4, onProgress) {
     const results = new Array(files.length);
-    let next = 0, stopped = false;
+    let next = 0, completed = 0, stopped = false;
+    onProgress?.({ completed, total: files.length });
     await Promise.all(Array.from({ length: Math.min(concurrency, files.length) }, async () => {
       while (!stopped && next < files.length) {
         const index = next++;
-        try { results[index] = await read(files[index]); }
+        try {
+          results[index] = await read(files[index]);
+          completed++;
+          if (!stopped) onProgress?.({ completed, total: files.length, name: files[index].name });
+        }
         catch (error) { stopped = true; throw error; }
       }
     }));
     return results;
   }
-  async function resolveFiles(files, { sibling, read = readText } = {}) {
+  async function resolveFiles(files, { sibling, read = readText, onProgress } = {}) {
     const lists = files.filter(isList);
     if (!lists.length) return files;
     const available = files.filter(file => !isList(file));
@@ -46,16 +51,17 @@
       if (!byBase.has(key)) byBase.set(key, []);
       byBase.get(key).push(file);
     }
+    const roots = new Set(available.filter(file => file.webkitRelativePath).map(file => normalize(file.webkitRelativePath).split("/")[0]));
     const result = [], seen = new Set();
     for (const list of lists) {
       const content = await read(list);
-      for (const line of content.split(/\r?\n/)) {
-        const entry = line.trim();
-        if (!entry || /^[#;]/.test(entry)) continue;
-        const listPath = normalize(list.webkitRelativePath || list.name);
-        const roots = new Set(available.filter(file => file.webkitRelativePath).map(file => normalize(file.webkitRelativePath).split("/")[0]));
-        const parent = listPath.includes("/") ? listPath.slice(0, listPath.lastIndexOf("/") + 1)
-          : roots.size === 1 ? `${[...roots][0]}/` : "";
+      const entries = content.split(/\r?\n/).map(line => line.trim()).filter(entry => entry && !/^[#;]/.test(entry));
+      const listPath = normalize(list.webkitRelativePath || list.name);
+      const parent = listPath.includes("/") ? listPath.slice(0, listPath.lastIndexOf("/") + 1)
+        : roots.size === 1 ? `${[...roots][0]}/` : "";
+      let completed = 0;
+      onProgress?.({ completed, total: entries.length, name: list.name });
+      for (const entry of entries) {
         let file = exact.get(parent + normalize(entry)) || exact.get(normalize(entry));
         // A folder authorization can resolve subpaths and the same-directory fallback.
         if (!file && sibling) file = await sibling(entry, list);
@@ -67,6 +73,7 @@
         }
         if (!file) throw new Error(`Missing FASTA in ${list.name}: ${entry}. Select its input folder or the referenced FASTA files; the same-folder basename ${basename(entry)} was also checked.`);
         if (!seen.has(file)) { result.push(file); seen.add(file); }
+        onProgress?.({ completed: ++completed, total: entries.length, name: list.name });
       }
     }
     if (!result.length) throw new Error("The selected pathlist contains no FASTA paths.");

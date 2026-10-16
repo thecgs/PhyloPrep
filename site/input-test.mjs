@@ -31,3 +31,26 @@ console.log('Browser pathlist and 7,644-file bounded-read checks passed.');
 const parsed = pathlistFolders('# comment\n/home/data/a.fa\n/home/data/b.fa\nC:\\input\\c.fa\nd.fa\n; comment\n');
 assert.equal(parsed.count, 4);
 assert.deepEqual(Array.from(parsed.folders), ['/home/data', 'C:/input', 'beside the pathlist']);
+
+
+const readEvents = [];
+const reported = await readBounded([a, b], async f => f.text(), 2, event => readEvents.push(event));
+assert.equal(reported.length, 2);
+assert.deepEqual(readEvents.map(e => e.completed), [0, 1, 2]);
+assert.ok(readEvents.every(e => e.total === 2));
+const resolveEvents = [];
+await resolveFiles([list, a, b], { onProgress: event => resolveEvents.push(event) });
+assert.deepEqual(resolveEvents.map(e => e.completed), [0, 1, 2]);
+assert.equal(resolveEvents.at(-1).name, 'orthogroups.pathlist');
+// Do not keep reporting reads that complete after another read failed.
+const failureEvents = [];
+let finishLate;
+const late = new Promise(resolve => { finishLate = resolve; });
+await assert.rejects(readBounded([a, b], async f => {
+  if (f === a) throw new Error('read failed');
+  await late;
+  return 'late';
+}, 2, event => failureEvents.push(event)), /read failed/);
+finishLate();
+await Promise.resolve(); await Promise.resolve();
+assert.equal(failureEvents.length, 1);
