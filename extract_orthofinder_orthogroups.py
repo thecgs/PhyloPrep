@@ -334,8 +334,10 @@ smallest normalized gene ID, without using raw length as a secondary criterion.
 No sequence cleaning is performed. copy_selection.tsv records raw length,
 effective_length, sequence_type and selection status for all candidates.
 This is representative selection, not orthology inference.
---min-taxa still counts occupied taxa, not copies, and is evaluated
-under the chosen mode. Its maximum is the number of taxa remaining after taxon
+--min-taxa is an integer taxon count, not a percentage or a gene-copy count.
+single-copy counts taxa with exactly one listed gene; all-copies counts taxa
+with at least one listed gene, once per taxon, even with --longest-copy.
+This is OG membership, not sequence-quality filtering. Its maximum is the number of taxa remaining after taxon
 filtering; its default is that maximum. The default --orthofinder-id-style auto
 detects taxon-prefixed table IDs (normal OrthoFinder output) or unprefixed IDs
 (OrthoFinder -X output). Detection controls source FASTA lookup only.
@@ -362,7 +364,7 @@ absolute output FASTA paths and can be passed directly to phyloprep.py -i.
     parser.add_argument("-st", "--seqtype", "--seq-type", choices=("codon", "prot", "nucl", "pseudogene"), default="codon",
                         help="Alphabet for --longest-copy scoring: codon (default), nucl and pseudogene count A/C/G/T/U; prot counts the 20 standard amino acids. No translation or codon grouping is performed. Does not modify sequences.")
     parser.add_argument("--min-taxa", type=int, metavar="N",
-                        help="Require N occupied taxa after filtering; occupancy follows --copy-mode (default: all selected taxa).")
+                        help="Require an integer N taxa after keep/drop filtering, not a percentage or copy count. single-copy counts taxa with exactly one listed gene; all-copies counts taxa with >=1 listed gene, once per taxon, also with --longest-copy. No sequence-quality filtering (default: all selected taxa).")
     parser.add_argument("-X", action="store_true", dest="no_species_prefix",
                         help="Write gene IDs without adding the taxon prefix. Without -X, always write Taxon_geneID, regardless of input table style.")
     parser.add_argument("--orthofinder-id-style", choices=("auto", "prefixed", "unprefixed"), default="auto",
