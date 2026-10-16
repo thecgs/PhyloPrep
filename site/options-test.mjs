@@ -88,6 +88,9 @@ workerContext.stage = { optionsRoot:'/opts', outputRoot:'/out', files:[
 workerContext.request = { options:{copy_mode:'all-copies',longest_copy:true}, outputName:'results' };
 assert.ok(vm.runInContext('orthofinderArguments(runtime, request, stage)', workerContext).includes('--longest-copy'));
 assert.ok(vm.runInContext('orthofinderArguments(runtime, request, stage)', workerContext).includes('codon'));
+workerContext.request.options.max_copies_per_taxon = 'inf';
+const unlimitedArgs = vm.runInContext('orthofinderArguments(runtime, request, stage)', workerContext);
+assert.equal(unlimitedArgs[unlimitedArgs.indexOf('--max-copies-per-taxon') + 1], 'inf');
 workerContext.request.options.max_copies_per_taxon = '2';
 const copyArgs = vm.runInContext('orthofinderArguments(runtime, request, stage)', workerContext);
 assert.equal(copyArgs[copyArgs.indexOf('--max-copies-per-taxon') + 1], '2');

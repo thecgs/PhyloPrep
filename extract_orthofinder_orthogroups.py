@@ -14,6 +14,19 @@ from msap_io import atomic_output, check_output_path
 ORTHOFINDER_FASTA_SUFFIXES = (".fa", ".faa", ".fasta", ".fas", ".pep")
 
 
+def parse_copy_limit(value: str) -> int | str:
+    """Accept a positive integer or the explicit unlimited token."""
+    if value.strip().lower() == "inf":
+        return "inf"
+    try:
+        limit = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError("must be a positive integer or inf") from None
+    if limit < 1:
+        raise argparse.ArgumentTypeError("must be a positive integer or inf")
+    return limit
+
+
 def non_ambiguous_length(sequence: str, seqtype: str) -> int:
     """Count unambiguous bases/residues without modifying the source sequence."""
     alphabet = "ACGTU" if seqtype != "prot" else "ACDEFGHIKLMNPQRSTVWY"
@@ -179,14 +192,15 @@ def extract_orthologs(orthogroups: Path, sequence_directory: Path, outdir: Path,
                       map_output: Path | None = None, copy_mode: str = "single-copy",
                       pathlist_output: Path | None = None, orthofinder_id_style: str = "auto",
                       longest_copy: bool = False, seqtype: str = "codon",
-                      max_copies_per_taxon: int = 0) -> int:
+                      max_copies_per_taxon: int | str = "inf") -> int:
     if seqtype not in ("codon", "prot", "nucl", "pseudogene"):
         raise ValueError("seqtype must be codon, prot, nucl or pseudogene")
     if longest_copy and copy_mode != "all-copies":
         raise ValueError("--longest-copy requires --copy-mode all-copies")
-    if max_copies_per_taxon < 0:
-        raise ValueError("--max-copies-per-taxon must be >= 0 (0 means unlimited)")
-    if max_copies_per_taxon and copy_mode != "all-copies":
+    if max_copies_per_taxon != "inf" and (
+            not isinstance(max_copies_per_taxon, int) or max_copies_per_taxon < 1):
+        raise ValueError("--max-copies-per-taxon must be a positive integer or inf")
+    if max_copies_per_taxon != "inf" and copy_mode != "all-copies":
         raise ValueError("--max-copies-per-taxon requires --copy-mode all-copies")
     all_taxa, rows = read_orthogroups(orthogroups)
     taxa = select_taxa(all_taxa, keep_taxa, drop_taxa)
@@ -201,14 +215,14 @@ def extract_orthologs(orthogroups: Path, sequence_directory: Path, outdir: Path,
         raise ValueError("Sequence FASTA is missing for selected taxa: " + ", ".join(missing_files))
     selected = [(og, cells, occupied_taxa(cells, taxa, og, copy_mode)) for og, cells in rows]
     selected = [(og, cells, present_taxa) for og, cells, present_taxa in selected if len(present_taxa) >= min_taxa]
-    if max_copies_per_taxon:
+    if max_copies_per_taxon != "inf":
         selected = [
             (og, cells, present_taxa) for og, cells, present_taxa in selected
             if all(len(genes_in_cell(cells[taxon], og, taxon)) <= max_copies_per_taxon
                    for taxon in present_taxa)
         ]
     if not selected:
-        if max_copies_per_taxon:
+        if max_copies_per_taxon != "inf":
             raise ValueError("No orthogroups meet --min-taxa and --max-copies-per-taxon after taxon filtering")
         raise ValueError("No orthogroups meet the --min-taxa threshold after taxon filtering")
     if copy_mode == "single-copy" and min_taxa < len(taxa):
@@ -345,7 +359,7 @@ acids, including N. Counting is case-insensitive; ambiguity, gap, stop and other
 symbols do not contribute. Effective-length ties choose the lexicographically
 smallest normalized gene ID, without using raw length as a secondary criterion.
 --max-copies-per-taxon N (all-copies only) excludes an entire OG if any
-selected taxon has more than N listed genes. The bound is inclusive; 0 (default)
+selected taxon has more than N listed genes. The bound is inclusive; inf (default)
 means unlimited. It uses the original OG copy counts after keep/drop filtering,
 before --longest-copy selection, and does not truncate copies or omit that taxon.
 It does not require a minimum proportion of single-copy taxa or infer orthology.
@@ -377,8 +391,8 @@ absolute output FASTA paths and can be passed directly to phyloprep.py -i.
                         help="Exclude these taxa; overlapping --keep-taxa entries are errors.")
     parser.add_argument('-m',"--copy-mode", choices=("single-copy", "all-copies"), default="single-copy",
                         help="single-copy: require exactly one gene per counted taxon (default); all-copies: retain every copy and count taxa with >=1 gene, for e.g. ASTRAL-Pro3.")
-    parser.add_argument("--max-copies-per-taxon", type=int, default=0, metavar="N",
-                        help="all-copies only: exclude the entire OG if any selected taxon has >N listed genes, before longest-copy selection; inclusive bound, 0 means unlimited (default: 0).")
+    parser.add_argument("--max-copies-per-taxon", type=parse_copy_limit, default="inf", metavar="N|inf",
+                        help="all-copies only: exclude the entire OG if any selected taxon has >N listed genes, before longest-copy selection; inclusive bound, inf means unlimited (default: inf).")
     parser.add_argument("--longest-copy", action="store_true",
                         help="all-copies only: retain the sequence with most non-ambiguous characters per taxon within each OG; ties use gene ID order. This does not establish orthology.")
     parser.add_argument("-st", "--seqtype", "--seq-type", choices=("codon", "prot", "nucl", "pseudogene"), default="codon",

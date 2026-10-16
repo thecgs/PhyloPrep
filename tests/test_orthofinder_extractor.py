@@ -363,7 +363,7 @@ def test_filtered_sequence_loading_distinguishes_no_matches_from_empty_file(tmp_
         load_sequences(source, {'missing'})
 
 
-@pytest.mark.parametrize('limit,expected', [(0, 2), (1, 1), (2, 2)])
+@pytest.mark.parametrize('limit,expected', [('inf', 2), ('INF', 2), (1, 1), (2, 2)])
 @pytest.mark.parametrize('longest', [False, True])
 def test_max_copies_filters_entire_og_before_copy_selection(tmp_path, limit, expected, longest):
     table, cds = write_inputs(tmp_path)
@@ -390,9 +390,10 @@ def test_max_copies_ignores_taxa_removed_by_filtering(tmp_path):
 
 
 @pytest.mark.parametrize('flags,error', [
-    (['--copy-mode', 'all-copies', '--max-copies-per-taxon', '-1'], 'must be >= 0'),
+    (['--copy-mode', 'all-copies', '--max-copies-per-taxon', '-1'], 'must be a positive integer or inf'),
+    (['--copy-mode', 'all-copies', '--max-copies-per-taxon', '0'], 'must be a positive integer or inf'),
     (['--max-copies-per-taxon', '2'], 'requires --copy-mode all-copies'),
-    (['--copy-mode', 'all-copies', '--max-copies-per-taxon', '1.5'], 'invalid int value'),
+    (['--copy-mode', 'all-copies', '--max-copies-per-taxon', '1.5'], 'must be a positive integer or inf'),
 ])
 def test_max_copies_rejects_invalid_parameters(tmp_path, flags, error):
     table, cds = write_inputs(tmp_path)
