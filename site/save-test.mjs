@@ -217,3 +217,53 @@ await vm.runInContext('runBrowserModule()',integration);
 assert.equal(submitted.options.genetic_code,1);
 assert.equal(logs.at(-1).status,'success');
 console.log('Workflow start snapshots survive subsequent UI/option changes.');
+
+// Full pipeline validates once and lets Python build its own lists/merged report.
+let validations=0, listBuilds=0, reportMerges=0, finalized=0, aligned=0;
+let finalRequest;
+const adapter=vm.createContext({
+  performance:{now:()=>0},setInterval:()=>1,clearInterval:()=>{},
+  showLocusProgress:()=>{},setRunStage:()=>{},elements:{runtimeStatus:{}},
+  externalAlignerLabel:()=> 'MAFFT',publishProducedFiles:async()=>{},
+  runMsapBrowserWorkflow:async request=>{
+    aligned++;const stem=request.files[0].name.split('.')[0];
+    return {files:[
+      {name:`${stem}.mafft.codon.aln.fasta`,content:'>a\nATG\n',size:7,sha256:'a'.repeat(64)},
+      {name:`${stem}.sequence_changes.tsv`,content:`header\n${stem}\n`},
+      {name:`${stem}.cds.fasta`,content:'unused intermediate'},
+    ]};
+  },
+  runInWorker:async request=>{finalized++;finalRequest=request;return {files:[{name:'matrices/result.fasta',content:'matrix'}]};},
+});
+vm.runInContext(slice('function fileStem(', 'function showLocusProgress('),adapter);
+const validateInputs=adapter.requireUniqueStems,buildLists=adapter.batchPathLists,mergeReports=adapter.mergeTsvContents;
+adapter.requireUniqueStems=files=>{validations++;return validateInputs(files);};
+adapter.batchPathLists=files=>{listBuilds++;return buildLists(files);};
+adapter.mergeTsvContents=files=>{reportMerges++;return mergeReports(files);};
+vm.runInContext(slice('async function runMsapBatchBrowserWorkflow(', 'async function sha256Text('),adapter);
+adapter.request={options:{},files:[
+  {inputKey:'inputs',name:'first.fa',content:'>a\nATG'},
+  {inputKey:'inputs',name:'second.fa',content:'>a\nATG'},
+  {inputKey:'mapping',name:'map.tsv',content:'a\tTaxon\n'},
+]};
+const pipeline=await vm.runInContext('runPhyloPrepBrowserWorkflow(request)',adapter);
+assert.equal(validations,1);assert.equal(listBuilds,0);assert.equal(reportMerges,0);assert.equal(finalized,1);
+assert.equal(finalRequest.files.filter(file=>file.role==='source').length,2);
+assert.equal(finalRequest.files.filter(file=>file.role==='mapping').length,1);
+assert.ok(finalRequest.files.filter(file=>file.role==='batch-output').every(file=>!file.name.includes('/') && !file.name.endsWith('.cds.fasta')));
+assert.equal(finalRequest.files.find(file=>file.name==='first.mafft.codon.aln.fasta').sha256,'a'.repeat(64));
+assert.ok(pipeline.files.some(file=>file.name==='inputs.pathlist'));
+validations=0;
+const standalone=await vm.runInContext('runMsapBatchBrowserWorkflow(request)',adapter);
+assert.equal(validations,1);assert.equal(listBuilds,1);assert.equal(reportMerges,1);
+assert.ok(standalone.files.some(file=>file.name==='path-lists/all.codon.aln.fasta.pathlist'));
+assert.ok(standalone.files.some(file=>file.name==='first.cds.fasta'));
+assert.equal(standalone.files.find(file=>file.name==='reports/sequence_changes.tsv').content,'header\nfirst\nsecond\n');
+adapter.request.files=[{inputKey:'inputs',name:'first.fa',content:'>a\nATG'},{inputKey:'inputs',name:'first.fasta',content:'>a\nATG'}];
+const alignedBeforeFailure=aligned;
+await assert.rejects(vm.runInContext('runPhyloPrepBrowserWorkflow(request)',adapter),/duplicate stem/);
+assert.equal(aligned,alignedBeforeFailure);
+adapter.request.files=[];
+await assert.rejects(vm.runInContext('runPhyloPrepBrowserWorkflow(request)',adapter),/Select at least one FASTA/);
+assert.equal(aligned,alignedBeforeFailure);
+console.log('Single input validation, pipeline-only product retention and standalone list/report outputs passed.');

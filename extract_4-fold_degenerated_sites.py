@@ -4,73 +4,8 @@
 import argparse
 from Bio import SeqIO
 from Bio.Data import CodonTable
-from collections import Counter, defaultdict
+from collections import defaultdict
 from msap_io import atomic_output
-
-#def get_four_fold_codons(genetic_code=1):
-#    """
-#    Return a set containing all four-fold degenerate codons.
-#    """
-#    
-#    codon_table = CodonTable.unambiguous_dna_by_id[genetic_code]
-#    
-#    #print('The condon table used:', codon_table, file=sys.stderr)
-#    
-#    
-#    
-#    four_fold_codons = {}
-#    acids2codons = defaultdict(list)
-#    
-#    for codon in codon_table.forward_table:
-#        acids2codons[codon_table.forward_table[codon]].append(codon)
-#        
-#    for acid in acids2codons:
-#        tmp = defaultdict(list)
-#        for codon in acids2codons[acid]:
-#            tmp[codon[0:2]].append(codon)
-#        for i in tmp:
-#            if len(tmp[i]) == 4:
-#                for c in tmp[i]:
-#                    four_fold_codons.setdefault(c, acid)
-#    
-#    return four_fold_codons
- 
-#def extract_four_fold_site(infile, outfile, genetic_code):
-#    """
-#    Extract four-fold degenerate codons from a codon-aligned FASTA.
-#
-#    This version:
-#      - avoids dict/Counter/list creation inside the codon loop
-#      - uses list.append() instead of repeated string concatenation
-#      - stops checking a site immediately when one sequence fails
-#      - converts Bio.Seq objects to str only once
-#    """
-#    
-#    alignment_seqences = {}
-#    for record in SeqIO.parse(infile, 'fasta'):
-#        alignment_seqences.setdefault(record.id, record.seq.upper())
-#    
-#    four_fold_codons = get_four_fold_codons(genetic_code)
-#    alignment_seqences_four_fold_site = defaultdict(list)
-#    matrix_length = len(record.seq)
-#    for i in range(0, matrix_length, 3):
-#        print(str(round((i+3)/matrix_length*100, 2)) + " %", end='\r')
-#        codons = {}
-#        for geneID in alignment_seqences:
-#            codons[geneID] = alignment_seqences[geneID][i: i+3]
-#
-#        if len(Counter([c[0:2] for c in codons.values()])) == 1:
-#            codons_bool = [True if c in four_fold_codons else False for c in codons.values()]
-#            if all(codons_bool):
-#                for geneID in alignment_seqences:
-#                    alignment_seqences_four_fold_site[geneID].append(codons[geneID][2])
-#                    
-#    out = open(outfile, 'w')
-#    for k in alignment_seqences_four_fold_site:
-#        seq = ''.join(alignment_seqences_four_fold_site[k])
-#        print(f'>{k}\n{seq}', file=out)
-#    out.close()
-#    return None 
 
 def get_four_fold_codons(genetic_code=1):
     """

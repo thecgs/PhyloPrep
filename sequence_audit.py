@@ -11,7 +11,6 @@ import subprocess
 import sys
 
 from Bio import SeqIO
-from Bio.Data import CodonTable
 from msap_io import atomic_output, read_fasta_alignment, is_stop_codon, normalize_dna
 
 FIELDS = ['input_file', 'taxa_id', 'event', 'source_nt_positions',

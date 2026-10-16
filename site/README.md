@@ -45,8 +45,12 @@ modifying those core scripts.
 
 `MSAP_batch.py` browser mode processes loci sequentially with the existing
 MSAP/Pyodide + Biowasm MAFFT/MUSCLE workflow, then creates batch-style path lists and
-a merged sequence-change report. Those validated path lists are also the browser finalizer's only source of downstream alignment membership, matching the CLI contract. `phyloprep.py` browser mode reuses those
-alignments and invokes the repository's provenance-aware paired codon/protein QC,
+a merged sequence-change report. In the full `phyloprep.py` browser workflow, the
+batch adapter validates the input set once and forwards alignments plus individual
+audit reports; it skips standalone summaries and unused preprocessing intermediates.
+The Python finalizer generates the path lists and merged report once. Its path
+lists remain the only source of downstream alignment membership, matching the CLI
+contract. It invokes the repository's provenance-aware paired codon/protein QC,
 taxon-renaming, supermatrix, codon-position, four-fold and FASTA/PHYLIP/NEXUS
 modules inside Pyodide.
 

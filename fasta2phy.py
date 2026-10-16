@@ -1,7 +1,6 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-import sys
 import argparse
 from msap_io import atomic_output, read_fasta_alignment, check_output_path
 from sequence_audit import normalize_export_records, write_report

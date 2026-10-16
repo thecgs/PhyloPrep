@@ -1801,7 +1801,7 @@ async function runMsapBatchBrowserWorkflow(request) {
   if (!inputs.length) throw new Error("Select at least one FASTA input.");
   requireUniqueStems(inputs);
   const outputs = [];
-  if (inputs.length > 1) {
+  if (!request.pipelineOutput && inputs.length > 1) {
     outputs.push({
       name: "path-lists/inputs.pathlist",
       content: selectedInputPathList(inputs),
@@ -1823,20 +1823,25 @@ async function runMsapBatchBrowserWorkflow(request) {
     }
     showLocusProgress(index + 1, inputs.length, progressStarted, input.name);
     engineMetadata = result.engineMetadata;
-    outputs.push(...result.files.map((file) => ({ ...file })));
-    const available = request.pipelineOutput
+    const products = request.pipelineOutput
       ? result.files.filter(file => !file.name.includes("/") && (file.name.endsWith(".aln.fasta") || file.name.endsWith(".sequence_changes.tsv")))
-          .map(file => ({ ...file, name: `alignments/${file.name}` }))
       : result.files;
+    outputs.push(...products.map(file => ({ ...file })));
+    const available = request.pipelineOutput
+      ? products.map(file => ({ ...file, name: `alignments/${file.name}` }))
+      : products;
     await publishProducedFiles(available);
   }
-  outputs.push(...batchPathLists(outputs));
-  const changeReports = outputs.filter((file) => file.name.endsWith(".sequence_changes.tsv") && !file.name.includes("/"));
-  const mergedReport = mergeTsvContents(changeReports);
-  if (mergedReport) outputs.push({ name: "reports/sequence_changes.tsv", content: mergedReport });
-  if (!request.pipelineOutput) await publishProducedFiles(outputs);
+  if (!request.pipelineOutput) {
+    outputs.push(...batchPathLists(outputs));
+    const changeReports = outputs.filter(file => file.name.endsWith(".sequence_changes.tsv") && !file.name.includes("/"));
+    const mergedReport = mergeTsvContents(changeReports);
+    if (mergedReport) outputs.push({ name: "reports/sequence_changes.tsv", content: mergedReport });
+    await publishProducedFiles(outputs);
+  }
   return {
     files: outputs,
+    inputs,
     engineMetadata,
     summary: `Processed ${inputs.length} loci with the browser MSAP batch workflow.`,
     provenance: `Browser MSAP_batch adapter · untouched MSAP.py + ${externalAlignerLabel(request.options.align_software || "mafft")}`,
@@ -1844,14 +1849,10 @@ async function runMsapBatchBrowserWorkflow(request) {
 }
 
 async function runPhyloPrepBrowserWorkflow(request) {
-  const sources = request.files.filter((file) => file.inputKey === "inputs" && String(file.content || "").trimStart().startsWith(">"));
-  if (!sources.length) throw new Error("Select at least one FASTA input.");
-  requireUniqueStems(sources);
-  const mapping = request.files.find((file) => file.inputKey === "mapping");
-  const batch = await runMsapBatchBrowserWorkflow({ ...request, files: sources, pipelineOutput: true });
-  const batchProducts = batch.files
-    .filter((file) => !file.name.includes("/") && (file.name.endsWith(".aln.fasta") || file.name.endsWith(".sequence_changes.tsv")))
-    .map((file) => ({ ...file, role: "batch-output" }));
+  const mapping = request.files.find(file => file.inputKey === "mapping");
+  const batch = await runMsapBatchBrowserWorkflow({ ...request, pipelineOutput: true });
+  const sources = batch.inputs;
+  const batchProducts = batch.files.map(file => ({ ...file, role: "batch-output" }));
   const finalFiles = [
     ...sources.map((file) => ({ ...file, role: "source" })),
     ...(mapping ? [{ ...mapping, role: "mapping" }] : []),
@@ -1980,7 +1981,6 @@ async function readPathlistSibling(inputKey, entry, list) {
 async function runBrowserModule() {
   if (localSaveBusy) return;
   const module = activeModule();
-  const files = browserInputFiles();
   const missingInput = inputControls().find((control) => control.dataset.inputRequired !== "false" && !filesForInput(control).length);
   if (missingInput) {
     setLog(`Select ${missingInput.dataset.inputLabel} before running.`, "error");

@@ -5,7 +5,7 @@ import sys
 import gzip
 import argparse
 from Bio import SeqIO
-from msap_io import atomic_output, check_output_path
+from msap_io import atomic_output
 
 
 def open_input(filename):
@@ -15,15 +15,6 @@ def open_input(filename):
         return gzip.open(filename, "rt")
     else:
         return open(filename, "r")
-
-
-def open_output(filename):
-    if filename == "-":
-        return sys.stdout
-    elif filename.endswith(".gz"):
-        return gzip.open(filename, "wt")
-    else:
-        return open(filename, "w")
 
 
 if __name__ == "__main__":
