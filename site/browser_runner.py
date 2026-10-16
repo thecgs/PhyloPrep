@@ -389,8 +389,7 @@ def _visible_output_files(root, manifest_only=False):
     return files
 
 
-@memory_safe_result
-def run_phyloprep_finalize(file_manifest, options, output_root, engine_root="/engine", progress_callback=None, manifest_only=False):
+def _phyloprep_finalize_steps(file_manifest, options, output_root, engine_root="/engine", progress_callback=None, manifest_only=False, incremental=False):
     """Finish the browser pipeline with the repository's original downstream modules."""
     engine = Path(engine_root).resolve()
     root = Path(output_root).resolve()
@@ -502,6 +501,15 @@ def run_phyloprep_finalize(file_manifest, options, output_root, engine_root="/en
                         report_phase(args, f'{variant}: QC and matrix preparation')
                         phyloprep.prepare_variant(args, root, matrix_root, variant)
                         args._progress.update(f'{variant}: complete', completed=index + 1)
+                        if incremental:
+                            # Export completed QC/report branches only; staged matrices
+                            # stay private until normal publication succeeds.
+                            checkpoint = []
+                            for folder in ('qc', 'reports'):
+                                for item in _visible_output_files(root / folder, manifest_only=True):
+                                    item['name'] = folder + '/' + item['name']
+                                    checkpoint.append(item)
+                            yield checkpoint
                     report_phase(args, 'Publishing matrices')
                     phyloprep.publish_matrices(matrix_root, root, variants, block_signals=False)
                     args._progress.update('Complete', completed=len(variants) + 1)
@@ -565,3 +573,27 @@ def run_phyloprep_finalize(file_manifest, options, output_root, engine_root="/en
             "stdout": stdout.getvalue(),
             "stderr": stderr.getvalue(),
         })
+
+
+@memory_safe_result
+def advance_phyloprep_finalize(steps):
+    """One synchronous analysis step, followed by bounded asynchronous JS export."""
+    try:
+        files = next(steps)
+    except StopIteration as completed:
+        return completed.value
+    return json.dumps({"pending": True, "files": files})
+
+
+@memory_safe_result
+def run_phyloprep_finalize(file_manifest, options, output_root, engine_root="/engine", progress_callback=None, manifest_only=False):
+    """Existing synchronous interface; incremental exports are browser opt-in."""
+    steps = _phyloprep_finalize_steps(file_manifest, options, output_root, engine_root,
+                                     progress_callback, manifest_only)
+    try:
+        while True:
+            next(steps)
+    except StopIteration as completed:
+        return completed.value
+    finally:
+        steps.close()

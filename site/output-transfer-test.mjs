@@ -14,7 +14,10 @@ const context = vm.createContext({ setTimeout, clearTimeout, self: {
       chunks.push(received.bytes.length);
       parts.push(decoder.decode(received.bytes, { stream: true }));
       queueMicrotask(() => { outstanding--; void handler({ data: { type: 'output-chunk-ack', runId: received.runId, sequence: received.sequence } }); });
-    } else if (received.type === 'output-file-end') parts.push(decoder.decode());
+    } else if (received.type === 'output-file-end') {
+      parts.push(decoder.decode());
+      if (received.sequence !== undefined) queueMicrotask(() => void handler({data:{type:'output-chunk-ack',runId:received.runId,sequence:received.sequence}}));
+    }
   },
 } });
 vm.runInContext(await readFile('site/pyodide-worker.js', 'utf8'), context);
@@ -30,4 +33,7 @@ assert.equal(maxOutstanding, 1);
 assert.ok(chunks.every(size => size <= 1024 * 1024));
 assert.equal(open, 2); assert.equal(closed, 2);
 assert.equal(vm.runInContext('outputAcknowledgements.size', context), 0);
+await vm.runInContext('streamOutputFiles(runtime, 10, files, "checkpoint-0", true)', context);
+assert.equal(vm.runInContext('outputAcknowledgements.size', context), 0);
+assert.equal(open, 4); assert.equal(closed, 4);
 console.log('Acknowledged output-chunk transfer and UTF-8 boundary checks passed.');

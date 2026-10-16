@@ -26,6 +26,7 @@ const elements = {
   run: document.querySelector("#run-browser-module"),
   cancelRun: document.querySelector("#cancel-run"),
   log: document.querySelector("#workspace-log"),
+  saveProgress: document.querySelector("#save-progress"),
   implementationNote: document.querySelector("#implementation-note"),
   outputFilesList: document.querySelector("#output-files-list"),
   resultCount: document.querySelector("#result-count"),
@@ -379,6 +380,8 @@ let versionLoadFailed = false;
 let activeModuleIndex = 0;
 let outputDirectoryHandle;
 let generatedFiles = [];
+let producedFiles = new Map();
+let outputSaveSession;
 let selectedGeneratedFileIndex = 0;
 let resultEntries = [];
 let resultPageNumber = 0;
@@ -1302,17 +1305,17 @@ async function updatePreflight() {
 
 async function chooseOutputFolder() {
   if (!("showDirectoryPicker" in window)) {
-    setLog("This browser does not support local folder selection. Output will use its configured download folder.", "error");
+    setLog("This browser does not support local folder selection. Results remain in the browser workspace for manual download.", "error");
     return;
   }
   try {
     outputDirectoryHandle = await window.showDirectoryPicker({ mode: "readwrite" });
     elements.outputFolder.textContent = `Selected local folder: ${outputDirectoryHandle.name}`;
-    elements.downloadAll.textContent = "Save all to folder";
+    elements.downloadAll.textContent = "Save remaining to folder";
     updateCommand();
     setLog("Output folder selected. Generated files will be written there.", "success");
   } catch (error) {
-    if (error.name !== "AbortError") setLog("Unable to select the output folder. Browser download folder remains in use.", "error");
+    if (error.name !== "AbortError") setLog("Unable to select the output folder. Results remain available in the browser workspace.", "error");
   }
 }
 
@@ -1326,6 +1329,9 @@ function setRunControls(running) {
   elements.run.disabled = running;
   elements.run.textContent = running ? "Running…" : "Run";
   elements.cancelRun.hidden = !running;
+  elements.chooseFolder.disabled = running;
+  elements.downloadAll.disabled = running;
+  elements.downloadSelected.disabled = running;
 }
 
 function createPyodideWorker() {
@@ -1336,10 +1342,11 @@ function createPyodideWorker() {
     if (message.type === "output-chunk" || message.type === "output-file-end") {
       clearInterval(activeWorkerRun.progressTimer);
       const outputs = activeWorkerRun.streamedOutputs;
-      let file = outputs.get(message.index);
+      const transferKey = `${message.transferId || "final"}:${message.index}`;
+      let file = outputs.get(transferKey);
       if (!file) {
         file = { decoder: new TextDecoder(), parts: [], name: message.name };
-        outputs.set(message.index, file);
+        outputs.set(transferKey, file);
       }
       if (message.type === "output-chunk") {
         file.parts.push(file.decoder.decode(message.bytes, { stream: true }));
@@ -1350,6 +1357,11 @@ function createPyodideWorker() {
         file.content = file.parts.join("");
         file.parts = [];
         file.decoder = undefined;
+        // Only fully received files are eligible for saving. Keep engine files intact.
+        void publishProducedFiles([{ name: file.name, content: file.content }]).then(() => {
+          if (message.sequence !== undefined) worker.postMessage({ type: "output-chunk-ack", runId: message.runId, sequence: message.sequence });
+        });
+        if (message.transferId) outputs.delete(transferKey);
       }
       return;
     }
@@ -1386,7 +1398,7 @@ function createPyodideWorker() {
       try {
         if (message.result.files?.some(file => file.path)) {
           message.result.files = message.result.files.map((file, index) => {
-            const streamed = run.streamedOutputs.get(index);
+            const streamed = run.streamedOutputs.get(`final:${index}`);
             if (!streamed || streamed.content === undefined) throw new Error(`Incomplete output received: ${file.name}`);
             return { name: file.name, content: streamed.content };
           });
@@ -1416,7 +1428,7 @@ function runInWorker(payload) {
   const runId = ++nextRunId;
   return new Promise((resolve, reject) => {
     activeWorkerRun = { id: runId, resolve, reject, streamedOutputs: new Map() };
-    worker.postMessage({ type: payload.type || "run", runId, ...payload });
+    worker.postMessage({ type: payload.type || "run", runId, ...payload, incrementalSave: Boolean(outputSaveSession) });
   });
 }
 
@@ -1437,20 +1449,44 @@ function cancelActiveRun() {
   run.reject(cancellationError());
 }
 
-async function saveGeneratedFile(file) {
-  if (outputDirectoryHandle) {
-    const parts = file.name.replaceAll("\\", "/").split("/").filter(Boolean);
-    let directory = outputDirectoryHandle;
-    for (const part of parts.slice(0, -1)) {
-      directory = await directory.getDirectoryHandle(part, { create: true });
+function createOutputSaveSession(root) {
+  let lastRender = -Infinity;
+  return PhyloPrepSave.createWriter(root, { concurrency: 4, onProgress: stats => {
+    const now = performance.now();
+    if (!elements.saveProgress || (now - lastRender < 100 && !stats.settled)) return;
+    lastRender = now;
+    elements.saveProgress.hidden = false;
+    elements.saveProgress.textContent = `Local save: ${stats.saved}/${stats.total} available files saved · ${stats.failed} failed · ${stats.pending + stats.writing} pending`;
+    elements.saveProgress.className = `workspace-log${stats.failed ? " warning" : ""}`;
+  } });
+}
+
+async function publishProducedFiles(files) {
+  for (const file of files) {
+    producedFiles.set(file.name, file);
+    if (outputSaveSession) {
+      outputSaveSession.save(file);
+      await outputSaveSession.ready();
     }
-    const fileHandle = await directory.getFileHandle(parts.at(-1) || "output.txt", { create: true });
-    const writable = await fileHandle.createWritable();
-    await writable.write(file.content);
-    await writable.close();
-    return "selected local folder";
   }
-  return "browser workspace";
+}
+
+function savedDestination(file) {
+  if (!outputSaveSession) return "browser workspace";
+  if (outputSaveSession.saved(file)) return "selected local folder";
+  return outputSaveSession.state(file) === "failed" ? "browser workspace · local save failed" : "browser workspace · local save pending";
+}
+
+async function saveOutputCollection(files, retry = false) {
+  if (!outputDirectoryHandle) return;
+  if (!outputSaveSession || outputSaveSession.root !== outputDirectoryHandle) outputSaveSession = createOutputSaveSession(outputDirectoryHandle);
+  if (retry) await outputSaveSession.retry();
+  for (const file of files) {
+    outputSaveSession.save(file);
+    await outputSaveSession.ready();
+  }
+  await outputSaveSession.settle();
+  for (const file of files) file.destination = savedDestination(file);
 }
 
 function renderGeneratedFiles() {
@@ -1567,11 +1603,14 @@ async function downloadAllOutputs() {
   const stem = (elements.outputName.value.trim() || activeModule().script.replace(/\.py$/i, "outputs")).replace(/\.[^.]+$/, "").replace(/[^a-z0-9._-]+/gi, "-");
   try {
     if (outputDirectoryHandle) {
-      for (const [index, file] of generatedFiles.entries()) {
-        setLog(`Saving file ${index + 1}/${generatedFiles.length}: ${file.name}`, "info");
-        await saveGeneratedFile(file);
-      }
-      setLog(`Saved ${generatedFiles.length} files to the selected output folder.`, "success");
+      elements.downloadAll.disabled = true;
+      try {
+        setLog("Saving remaining files to the selected output folder…", "info");
+        await saveOutputCollection(generatedFiles, true);
+        renderGeneratedFiles();
+        if (outputSaveSession.error) throw new Error(`Local save incomplete: ${outputSaveSession.error.message}. Saved files are retained; retry Save remaining to folder.`);
+        setLog(`All ${generatedFiles.length} files are saved to the selected output folder.`, "success");
+      } finally { elements.downloadAll.disabled = false; }
       return;
     }
     PhyloPrepDownloads.checkZipCount(generatedFiles);
@@ -1724,11 +1763,17 @@ async function runMsapBatchBrowserWorkflow(request) {
     showLocusProgress(index + 1, inputs.length, progressStarted, input.name);
     engineMetadata = result.engineMetadata;
     outputs.push(...result.files.map((file) => ({ name: file.name, content: file.content })));
+    const available = request.pipelineOutput
+      ? result.files.filter(file => !file.name.includes("/") && (file.name.endsWith(".aln") || file.name.endsWith(".sequence_changes.tsv")))
+          .map(file => ({ name: `alignments/${file.name}`, content: file.content }))
+      : result.files;
+    await publishProducedFiles(available);
   }
   outputs.push(...batchPathLists(outputs));
   const changeReports = outputs.filter((file) => file.name.endsWith(".sequence_changes.tsv") && !file.name.includes("/"));
   const mergedReport = mergeTsvContents(changeReports);
   if (mergedReport) outputs.push({ name: "reports/sequence_changes.tsv", content: mergedReport });
+  if (!request.pipelineOutput) await publishProducedFiles(outputs);
   return {
     files: outputs,
     engineMetadata,
@@ -1742,7 +1787,7 @@ async function runPhyloPrepBrowserWorkflow(request) {
   if (!sources.length) throw new Error("Select at least one FASTA input.");
   requireUniqueStems(sources);
   const mapping = request.files.find((file) => file.inputKey === "mapping");
-  const batch = await runMsapBatchBrowserWorkflow({ ...request, files: sources });
+  const batch = await runMsapBatchBrowserWorkflow({ ...request, files: sources, pipelineOutput: true });
   const batchProducts = batch.files
     .filter((file) => !file.name.includes("/") && (file.name.endsWith(".aln") || file.name.endsWith(".sequence_changes.tsv")))
     .map((file) => ({ ...file, role: "batch-output" }));
@@ -1886,6 +1931,10 @@ async function runBrowserModule() {
     return;
   }
   setRunControls(true);
+  producedFiles = new Map();
+  generatedFiles = [];
+  outputSaveSession = outputDirectoryHandle ? createOutputSaveSession(outputDirectoryHandle) : undefined;
+  if (elements.saveProgress) elements.saveProgress.hidden = true;
   elements.cancelRun.hidden = true;
   let stage = 2;
   setRunStage(1, "Reading input files");
@@ -1960,28 +2009,29 @@ async function runBrowserModule() {
     setRunStage(stage, "Preparing output checksums and run manifest");
     const manifest = await buildRunManifest(module, request, result, resultOutputs);
     resultOutputs.push({ name: "phyloprep-run.json", content: manifest });
-    let savingLastRender = -Infinity;
-    setRunStage(stage, `Saving output: 0/${resultOutputs.length} files`);
-    for (const output of resultOutputs) {
-      const generated = { name: output.name, content: output.content };
-      generated.destination = await saveGeneratedFile(generated);
-      generatedFiles.push(generated);
-      const now = performance.now();
-      if (now - savingLastRender >= 100 || generatedFiles.length === resultOutputs.length) {
-        setRunStage(stage, `Saving output: ${generatedFiles.length}/${resultOutputs.length} files · ${output.name}`);
-        savingLastRender = now;
-      }
-    }
+    await publishProducedFiles(resultOutputs);
+    generatedFiles = resultOutputs.map(file => ({ ...file, destination: savedDestination(file) }));
+    setRunStage(stage, "Waiting for local file saves to finish");
+    if (outputSaveSession) await outputSaveSession.settle();
+    generatedFiles.forEach(file => { file.destination = savedDestination(file); });
     renderGeneratedFiles();
     elements.useNextStep.hidden = !transferTarget(module);
     if (result.partial) {
       setRunStage(3, "Needs map.tsv or missing-taxa adjustment", true);
       setLog(result.user_error || result.summary || "PhyloPrep needs input adjustment before a supermatrix can be completed.", "warning");
+    } else if (outputSaveSession?.error) {
+      setRunStage(3, "Analysis complete · local save incomplete", true);
+      setLog(`Analysis completed, but local saving stopped: ${outputSaveSession.error.message}. Results remain in the workspace. Click Save remaining to folder to retry.`, "warning");
     } else {
       setRunStage(4, "Completed");
       setLog([result.summary || `Created ${generatedFiles.length} output file(s).`, ...(result.warnings || []), result.provenance].filter(Boolean).join(" "), "success");
     }
   } catch (error) {
+    if (outputSaveSession) await outputSaveSession.settle();
+    if (producedFiles.size) {
+      generatedFiles = [...producedFiles.values()].map(file => ({ ...file, destination: savedDestination(file) }));
+      renderGeneratedFiles();
+    }
     const cancelled = error.code === "CANCELLED";
     setRunStage(stage, cancelled ? "Run cancelled" : "Workflow needs attention", !cancelled);
     setLog(cancelled ? "Run cancelled. You can change inputs or parameters and try again." : (error.message || String(error)), cancelled ? "" : "error");

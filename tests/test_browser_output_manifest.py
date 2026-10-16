@@ -80,3 +80,67 @@ def test_finalize_memory_failure_uses_prebuilt_response(tmp_path, monkeypatch):
     result = json.loads(raw)
     assert not result['ok']
     assert 'Python/Pyodide' in result['error']
+
+
+def test_incremental_finalize_exports_qc_without_publishing_staged_matrices(tmp_path, monkeypatch):
+    browser = browser_module()
+    import phyloprep
+    source = tmp_path / 'source.fa'
+    source.write_text('>a\nMA\n>b\nMA\n')
+    seen = []
+
+    def variant(args, root, stage, name):
+        assert source.exists()
+        if name == 'trimmed':
+            assert (root / 'qc/raw/alignment.details.tsv').exists()
+        report = root / 'qc' / name / 'alignment.details.tsv'
+        report.parent.mkdir(parents=True)
+        report.write_text('locus\tpass\ngene\tyes\n')
+        matrix = stage / 'prot' / name / 'supermatrix.fasta'
+        matrix.parent.mkdir(parents=True)
+        matrix.write_text('>a\nMA\n>b\nMA\n')
+        seen.append(name)
+
+    monkeypatch.setattr(phyloprep, 'prepare_variant', variant)
+    steps = browser._phyloprep_finalize_steps(
+        [dict(role='source', path=str(source), name=source.name)],
+        dict(seqtype='prot'), str(tmp_path / 'out'), str(ROOT),
+        manifest_only=True, incremental=True)
+    try:
+        for expected in ('raw', 'trimmed'):
+            checkpoint = json.loads(browser.advance_phyloprep_finalize(steps))
+            assert checkpoint['pending']
+            assert seen[-1] == expected
+            assert all(file['name'].startswith(('qc/', 'reports/')) for file in checkpoint['files'])
+            assert all(Path(file['path']).exists() for file in checkpoint['files'])
+            assert not (tmp_path / 'out/matrices').exists()
+        completed = json.loads(browser.advance_phyloprep_finalize(steps))
+        assert completed['ok']
+        assert any(file['name'].startswith('matrices/') for file in completed['files'])
+        assert source.exists()
+    finally:
+        steps.close()
+
+
+def test_closing_incremental_finalize_restores_engine_and_streams(tmp_path, monkeypatch):
+    import sys
+    import phyloprep
+    browser = browser_module()
+    source = tmp_path / 'source.fa'
+    source.write_text('>a\nMA\n>b\nMA\n')
+    original_run = phyloprep.run
+    original_stdout, original_stderr = sys.stdout, sys.stderr
+    monkeypatch.setattr(phyloprep, 'prepare_variant', lambda *args: None)
+    steps = browser._phyloprep_finalize_steps(
+        [dict(role='source', path=str(source), name=source.name)],
+        dict(seqtype='prot'), str(tmp_path / 'out'), str(ROOT),
+        manifest_only=True, incremental=True)
+    try:
+        next(steps)
+    finally:
+        steps.close()
+    assert phyloprep.run is original_run
+    assert sys.stdout is original_stdout
+    assert sys.stderr is original_stderr
+    assert not list((tmp_path / 'out').glob('.matrices-*'))
+    assert not (tmp_path / 'out/matrices').exists()

@@ -6,7 +6,7 @@ let engineManifest;
 const outputAcknowledgements = new Map();
 let outputSequence = 0;
 
-async function streamOutputFiles(runtime, runId, files) {
+async function streamOutputFiles(runtime, runId, files, transferId, waitForSave = false) {
   for (let index = 0; index < files.length; index++) {
     const file = files[index];
     if (!file.path) continue;
@@ -26,11 +26,22 @@ async function streamOutputFiles(runtime, runId, files) {
           }, 30000);
           outputAcknowledgements.set(sequence, { runId, resolve: () => { clearTimeout(timer); resolve(); } });
           self.postMessage({ type: "output-chunk", runId, sequence, index, name: file.name,
-            fileCount: files.length, bytes: chunk }, [bytes.buffer]);
+            fileCount: files.length, transferId, bytes: chunk }, [bytes.buffer]);
         });
         position += read;
       }
-      self.postMessage({ type: "output-file-end", runId, index, name: file.name });
+      const end = { type: "output-file-end", runId, index, name: file.name, transferId };
+      if (waitForSave) {
+        const sequence = ++outputSequence;
+        await new Promise((resolve, reject) => {
+          const timer = setTimeout(() => {
+            outputAcknowledgements.delete(sequence);
+            reject(new Error(`Local output queue acknowledgement timed out: ${file.name}`));
+          }, 300000);
+          outputAcknowledgements.set(sequence, { runId, resolve: () => { clearTimeout(timer); resolve(); } });
+          self.postMessage({ ...end, sequence });
+        });
+      } else self.postMessage(end);
     } finally {
       runtime.FS.close(stream);
     }
@@ -331,16 +342,32 @@ self.addEventListener("message", async (event) => {
         self.postMessage({ type: "progress", runId, progress: JSON.parse(eventJson) });
       });
       let raw;
+      let stepsStarted = false;
       try {
-        raw = await runtime.runPythonAsync(`run_phyloprep_finalize(${pythonJson(manifest)}, ${pythonJson(request.options)}, ${JSON.stringify(stage.outputRoot)}, progress_callback=_phyloprep_progress_callback, manifest_only=True)`);
+        if (request.incrementalSave) {
+          await runtime.runPythonAsync(`_phyloprep_steps = _phyloprep_finalize_steps(${pythonJson(manifest)}, ${pythonJson(request.options)}, ${JSON.stringify(stage.outputRoot)}, progress_callback=_phyloprep_progress_callback, manifest_only=True, incremental=True)`);
+          stepsStarted = true;
+          let checkpoint = 0;
+          while (true) {
+            raw = await runtime.runPythonAsync("advance_phyloprep_finalize(_phyloprep_steps)");
+            const step = JSON.parse(raw);
+            if (!step.pending) break;
+            await streamOutputFiles(runtime, runId, step.files || [], `checkpoint-${checkpoint++}`, true);
+          }
+        } else {
+          raw = await runtime.runPythonAsync(`run_phyloprep_finalize(${pythonJson(manifest)}, ${pythonJson(request.options)}, ${JSON.stringify(stage.outputRoot)}, progress_callback=_phyloprep_progress_callback, manifest_only=True)`);
+        }
       } finally {
+        if (stepsStarted) {
+          await runtime.runPythonAsync("_phyloprep_steps.close(); del _phyloprep_steps");
+        }
         runtime.globals.delete("_phyloprep_progress_callback");
       }
       const result = JSON.parse(raw);
       if (!result.ok && !result.recoverable) {
         throw new Error(result.user_error || result.error || "The browser PhyloPrep pipeline could not complete.");
       }
-      await streamOutputFiles(runtime, runId, result.files || []);
+      await streamOutputFiles(runtime, runId, result.files || [], undefined, request.incrementalSave);
       self.postMessage({
         type: "result",
         runId,
