@@ -155,16 +155,20 @@ def fasta_files_by_taxon(sequence_directory: Path) -> dict[str, Path]:
     return files
 
 
-def load_sequences(path: Path) -> dict[str, str]:
+def load_sequences(path: Path, wanted_ids: set[str] | None = None) -> dict[str, str]:
+    """Scan a taxon FASTA once, retaining sequence contents only for requested IDs."""
     sequences = {}
+    seen = set()
     for record in SeqIO.parse(path, "fasta"):
         identifier = orthofinder_safe_id(record.id)
         if not identifier:
             raise ValueError(f"{path}: empty FASTA ID")
-        if identifier in sequences:
+        if identifier in seen:
             raise ValueError(f"{path}: duplicate OrthoFinder-normalized sequence ID: {identifier}")
-        sequences[identifier] = str(record.seq)
-    if not sequences:
+        seen.add(identifier)
+        if wanted_ids is None or identifier in wanted_ids:
+            sequences[identifier] = str(record.seq)
+    if not seen:
         raise ValueError(f"No sequences found in FASTA: {path}")
     return sequences
 
@@ -209,7 +213,17 @@ def extract_orthologs(orthogroups: Path, sequence_directory: Path, outdir: Path,
             "sequence can also be chimeric or a fusion. This does not establish single-copy orthologs. "
             "Inspect copy_selection.tsv and use independent orthology evidence before concatenation.",
             file=sys.stderr)
-    sequences_by_taxon = {taxon: load_sequences(sequence_files[taxon]) for taxon in taxa}
+    # Filter OGs before retaining sequence contents. All copies in a retained
+    # cell remain candidates for --longest-copy; none may be skipped by length.
+    needed_ids = {taxon: set() for taxon in taxa}
+    for orthogroup, cells, present_taxa in selected:
+        for taxon in present_taxa:
+            for table_id in genes_in_cell(cells[taxon], orthogroup, taxon):
+                _, gene_id = table_gene_id(table_id, taxon, id_style)
+                needed_ids[taxon].add(gene_id)
+    sequences_by_taxon = {
+        taxon: load_sequences(sequence_files[taxon], needed_ids[taxon]) for taxon in taxa
+    }
     outdir.mkdir(parents=True, exist_ok=True)
     if not outdir.is_dir():
         raise ValueError(f"Output path is not a directory: {outdir}")

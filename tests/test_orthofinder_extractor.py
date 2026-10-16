@@ -318,3 +318,46 @@ def test_longest_copy_sequence_type_aliases(tmp_path, flag):
                  '--copy-mode', 'all-copies', '--longest-copy', flag, 'prot')
     assert result.returncode == 0, result.stderr
     assert next(SeqIO.parse(tmp_path / 'out' / 'OG0002.fasta', 'fasta')).id == 'Human_gene_5'
+
+
+@pytest.mark.parametrize('copy_mode,longest_copy,expected_human', [
+    ('single-copy', False, {'gene_1'}),
+    ('all-copies', False, {'gene_1', 'gene_4', 'gene_5'}),
+    ('all-copies', True, {'gene_1', 'gene_4', 'gene_5'}),
+])
+def test_only_retained_og_candidates_are_loaded(tmp_path, monkeypatch, copy_mode, longest_copy, expected_human):
+    import extract_orthofinder_orthogroups as extractor
+    table, cds = write_inputs(tmp_path)
+    with (cds / 'Human.fa').open('a') as handle:
+        handle.write('>unused\n' + 'A' * 100000 + '\n')
+    calls = {}
+    original = extractor.load_sequences
+
+    def load(path, wanted_ids=None):
+        result = original(path, wanted_ids)
+        calls[path.stem] = (set(wanted_ids), set(result))
+        return result
+
+    monkeypatch.setattr(extractor, 'load_sequences', load)
+    extractor.extract_orthologs(table, cds, tmp_path / 'out', copy_mode=copy_mode, longest_copy=longest_copy)
+    assert calls['Human'] == (expected_human, expected_human)
+    assert len(calls) == 3
+    assert (tmp_path / 'out/map.tsv').is_file()
+
+
+def test_filtered_sequence_loading_keeps_existing_duplicate_validation(tmp_path):
+    from extract_orthofinder_orthogroups import load_sequences
+    source = tmp_path / 'source.fa'
+    source.write_text('>wanted\nATG\n>unused:1\nAAA\n>unused_1\nCCC\n')
+    with pytest.raises(ValueError, match='duplicate OrthoFinder-normalized sequence ID'):
+        load_sequences(source, {'wanted'})
+
+
+def test_filtered_sequence_loading_distinguishes_no_matches_from_empty_file(tmp_path):
+    from extract_orthofinder_orthogroups import load_sequences
+    source = tmp_path / 'source.fa'
+    source.write_text('>other\nATG\n')
+    assert load_sequences(source, {'missing'}) == {}
+    source.write_text('')
+    with pytest.raises(ValueError, match='No sequences found'):
+        load_sequences(source, {'missing'})
