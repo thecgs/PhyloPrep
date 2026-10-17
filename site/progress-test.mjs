@@ -21,8 +21,17 @@ vm.runInContext(source('function setRunStage(', 'function renderEmptyOutputFiles
 vm.runInContext(source('function showLocusProgress(', 'async function runMsapBatchBrowserWorkflow('), context);
 vm.runInContext('showLocusProgress(2, 10, 0, "Aligning gene.fa")', context);
 assert.match(elements.log.textContent, /2\/10 loci complete.*Aligning gene.fa/);
+assert.equal(elements.runStageLabel.textContent, 'Processing locally');
+assert.equal(elements.runtimeStatus.textContent, 'Processing locally');
+vm.runInContext('showLocusProgress(3, 10, 0, "Aligning next.fa")', context);
+assert.match(elements.log.textContent, /3\/10 loci complete.*Aligning next.fa/);
+assert.equal(elements.runStageLabel.textContent, 'Processing locally');
+assert.equal(elements.runtimeStatus.textContent, 'Processing locally');
 vm.runInContext('setLog("specific failure", "error"); setRunStage(2, "Failed", true)', context);
 assert.equal(elements.log.textContent, 'specific failure');
+assert.equal(elements.runStageLabel.textContent, 'Failed');
+vm.runInContext('setRunStage(2, "Run cancelled")', context);
+assert.equal(elements.runStageLabel.textContent, 'Run cancelled');
 
 let saved = 0;
 Object.assign(context, {
@@ -42,6 +51,7 @@ await vm.runInContext('runBrowserModule()', context);
 assert.equal(saved, 3);
 assert.ok(messages.includes('Waiting for local file saves to finish'));
 assert.equal(elements.log.textContent, 'Completed');
+assert.equal(elements.runStageLabel.textContent, 'Completed');
 assert.equal(timers.size, 0, 'Input heartbeat must stop before execution/completion');
 context.runInWorker = async () => { throw new Error('worker failure'); };
 await vm.runInContext('runBrowserModule()', context);
@@ -62,4 +72,6 @@ worker.handlers.message({data:{type:'stage',runId:1,stage:'runtime',label:'Loadi
 assert.equal(elements.log.textContent, 'Loading scripts');
 worker.handlers.message({data:{type:'progress',runId:1,progress:{completed:1,total:3,unit:'stages',label:'raw: QC',elapsed_seconds:5}}});
 assert.match(elements.log.textContent, /1\/3 stages.*raw: QC/);
+assert.equal(elements.runStageLabel.textContent, 'Processing locally');
+assert.equal(elements.runtimeStatus.textContent, 'Processing locally');
 console.log('Workspace progress, output-save counts, worker messages and heartbeat cleanup checks passed.');
