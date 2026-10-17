@@ -530,36 +530,41 @@ def _phyloprep_finalize_steps(file_manifest, options, output_root, engine_root="
         variants = ("raw",) if args.notrim else ("raw", "trimmed")
         args._progress = ProgressReporter('PhyloPrep', len(variants) + 1, unit='stages', callback=progress_callback)
 
-        original_run = phyloprep.run
-
         def browser_run(script, *arguments, cwd=None):
             print("[phyloprep-web] " + " ".join([script, *map(str, arguments)]), flush=True)
             return _browser_run_engine_script(engine, script, arguments, cwd=cwd)
 
-        phyloprep.run = browser_run
-        try:
-            variants = ("raw",) if args.notrim else ("raw", "trimmed")
-            with tempfile.TemporaryDirectory(prefix=".matrices-", dir=root) as temporary:
-                matrix_root = Path(temporary)
+        @contextlib.contextmanager
+        def analysis_step():
+            original_run = phyloprep.run
+            phyloprep.run = browser_run
+            try:
                 with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr), progress_context(args._progress):
-                    for index, variant in enumerate(variants):
-                        report_phase(args, f'{variant}: QC and matrix preparation')
-                        phyloprep.prepare_variant(args, root, matrix_root, variant)
-                        args._progress.update(f'{variant}: complete', completed=index + 1)
-                        if incremental:
-                            # Export completed QC/report branches only; staged matrices
-                            # stay private until normal publication succeeds.
-                            checkpoint = []
-                            for folder in ('qc', 'reports'):
-                                for item in _visible_output_files(root / folder, manifest_only=True):
-                                    item['name'] = folder + '/' + item['name']
-                                    checkpoint.append(item)
-                            yield _export_output_files(root, checkpoint)
-                    report_phase(args, 'Publishing matrices')
-                    phyloprep.publish_matrices(matrix_root, root, variants, block_signals=False)
-                    args._progress.update('Complete', completed=len(variants) + 1)
-        finally:
-            phyloprep.run = original_run
+                    yield
+            finally:
+                phyloprep.run = original_run
+
+        with tempfile.TemporaryDirectory(prefix=".matrices-", dir=root) as temporary:
+            matrix_root = Path(temporary)
+            for index, variant in enumerate(variants):
+                # Each runPythonAsync call can have a different Context. Leave
+                # progress/log/engine scopes before yielding files to JavaScript.
+                with analysis_step():
+                    report_phase(args, f'{variant}: QC and matrix preparation')
+                    phyloprep.prepare_variant(args, root, matrix_root, variant)
+                    args._progress.update(f'{variant}: complete', completed=index + 1)
+                if incremental:
+                    # Staged matrices stay private until publication succeeds.
+                    checkpoint = []
+                    for folder in ('qc', 'reports'):
+                        for item in _visible_output_files(root / folder, manifest_only=True):
+                            item['name'] = folder + '/' + item['name']
+                            checkpoint.append(item)
+                    yield _export_output_files(root, checkpoint)
+            with analysis_step():
+                report_phase(args, 'Publishing matrices')
+                phyloprep.publish_matrices(matrix_root, root, variants, block_signals=False)
+                args._progress.update('Complete', completed=len(variants) + 1)
 
         files = _visible_output_files(root, manifest_only=manifest_only)
         if manifest_only:
