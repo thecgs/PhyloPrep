@@ -1,3 +1,4 @@
+import { PhyloPrepSave } from './test-output-store.mjs';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {createHash, webcrypto} from 'node:crypto';
@@ -13,7 +14,7 @@ for(const file of records){
   assert.ok(file.url.includes(`/`+file.sha256+`/`));
 }
 const installed=new Map();let executed=0, corrupt, repairOnRefresh=false;
-const loader=vm.createContext({crypto:webcrypto,TextEncoder,TextDecoder,Uint8Array,
+const loader=vm.createContext({ PhyloPrepSave, Blob, crypto:webcrypto,TextEncoder,TextDecoder,Uint8Array,
   setTimeout,clearTimeout,self:{addEventListener:()=>{}},
   fetch:async (url,options)=>url==='engine/manifest.json'?new Response(JSON.stringify(manifest)):
     new Response(corrupt && url.endsWith(`/${corrupt}`) && (!repairOnRefresh || options?.cache!=='no-cache')?'mismatched cached source':await readFile(`site/${url}`)),
@@ -40,7 +41,7 @@ manifest.bundleSha256=validBundle;
 // Manifest refresh must not return a stale cache entry when the network has a newer build.
 let fetchHandler, responsePromise, fetches=0, offline=false;
 const old=new Response('old manifest');
-const sw=vm.createContext({URL,self:{location:{origin:'https://test.example'},addEventListener:(type,callback)=>{if(type==='fetch')fetchHandler=callback;}},
+const sw=vm.createContext({ PhyloPrepSave, Blob, URL,self:{location:{origin:'https://test.example'},addEventListener:(type,callback)=>{if(type==='fetch')fetchHandler=callback;}},
   caches:{match:async()=>old.clone(),open:async()=>({put:async()=>{}})},
   fetch:async()=>{fetches++;if(offline)throw new Error('offline');return new Response('new manifest');},
 });
@@ -52,7 +53,7 @@ fetchHandler({request:new Request('https://test.example/engine/manifest.json',{c
 assert.equal(await (await responsePromise).text(),'old manifest','Offline fallback must remain available for verified cached sources');
 
 let encodes=0,digests=0;
-const fingerprints=vm.createContext({TextEncoder:class extends TextEncoder{encode(value){encodes++;return super.encode(value);}},
+const fingerprints=vm.createContext({ PhyloPrepSave, Blob, TextEncoder:class extends TextEncoder{encode(value){encodes++;return super.encode(value);}},
   crypto:{subtle:{digest:async(...args)=>{digests++;return webcrypto.subtle.digest(...args);}}},Uint8Array,
   elements:{command:{textContent:'changed command -g 2'}},versionManifest:undefined,
   navigator:{userAgent:'test'},implementationProfile:()=>({}),externalAlignerLabel:()=>'',
@@ -73,7 +74,7 @@ await vm.runInContext('buildRunManifest(module,request,result,outputs)',fingerpr
 assert.equal(encodes,1,'Fallback fingerprints must be reused too');
 
 const roots=[{},{},{}];
-const config=vm.createContext({configurationDisabled:new Map(),elements:{parameterList:roots[0],inputFileFields:roots[1],scriptList:roots[2],outputName:{disabled:false},clearInputFiles:{disabled:true}}});
+const config=vm.createContext({ PhyloPrepSave, Blob, configurationDisabled:new Map(),elements:{parameterList:roots[0],inputFileFields:roots[1],scriptList:roots[2],outputName:{disabled:false},clearInputFiles:{disabled:true}}});
 vm.runInContext(app.slice(app.indexOf('function setConfigurationLocked('),app.indexOf('function setRunControls(')),config);
 vm.runInContext('setConfigurationLocked(true)',config);
 assert.ok(roots.every(root=>root.inert));assert.equal(config.elements.outputName.disabled,true);

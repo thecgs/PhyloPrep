@@ -1,11 +1,13 @@
+import { PhyloPrepSave } from './test-output-store.mjs';
 import { readFile } from 'node:fs/promises';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
 const text = 'A'.repeat(1024 * 1024 - 1) + 'é' + 'B'.repeat(1024 * 1024) + '\n';
 const data = new TextEncoder().encode(text);
-let handler, open = 0, closed = 0, outstanding = 0, maxOutstanding = 0;
+let handler, open = 0, closed = 0, outstanding = 0, maxOutstanding = 0, saved = false;
+const released = [];
 const decoder = new TextDecoder(), parts = [], chunks = [], reused = [];
-const context = vm.createContext({ setTimeout, clearTimeout, self: {
+const context = vm.createContext({ PhyloPrepSave, Blob,  setTimeout, clearTimeout, self: {
   addEventListener(type, callback) { handler = callback; },
   postMessage(message, transfer = []) {
     const received = structuredClone(message, { transfer });
@@ -18,7 +20,7 @@ const context = vm.createContext({ setTimeout, clearTimeout, self: {
       reused.push(received);
     } else if (received.type === 'output-file-end') {
       parts.push(decoder.decode());
-      if (received.sequence !== undefined) queueMicrotask(() => void handler({data:{type:'output-chunk-ack',runId:received.runId,sequence:received.sequence}}));
+      if (received.sequence !== undefined) queueMicrotask(() => void handler({data:{type:'output-chunk-ack',runId:received.runId,sequence:received.sequence,saved}}));
     }
   },
 } });
@@ -27,6 +29,7 @@ context.runtime = { FS: {
   open() { open++; return {}; },
   read(stream, bytes, offset, length, position) { bytes.set(data.subarray(position, position + length)); return length; },
   close() { closed++; },
+  unlink(path) {released.push(path);},
 } };
 context.files = [{ name: 'matrix.fasta', path: '/matrix.fasta', size: data.length }, { name: 'empty.txt', path: '/empty.txt', size: 0 }];
 await vm.runInContext('streamOutputFiles(runtime, 9, files)', context);
@@ -57,7 +60,7 @@ console.log('Checkpoint/final output reuse and changed-content retransmission pa
 const app = await readFile('site/app.js', 'utf8');
 let receiver;
 const published = [];
-const receiveContext = vm.createContext({
+const receiveContext = vm.createContext({ PhyloPrepSave, Blob,
   TextDecoder, clearInterval, Promise,
   activeWorkerRun: {id:42, streamedOutputs:new Map()}, pyodideWorker:undefined,
   producedFiles:new Map([['qc/pass.tsv', {name:'qc/pass.tsv',content:'gene.fasta\n'}]]),
@@ -135,3 +138,11 @@ assert.equal(receiveContext.pyodideWorker,undefined);
 assert.equal(receiveContext.activeWorkerRun,undefined);
 
 assert.equal(receiveContext.activeWorkerRun, undefined);
+
+// Engine files are discarded only for completed branches with confirmed disk saves.
+context.files=[{name:'renamed/raw/gene.aln.fasta',path:'/renamed/raw/gene.aln.fasta',size:0,release:true}];
+await vm.runInContext('streamOutputFiles(runtime,12,files,"release",true)',context);
+assert.equal(released.length,0,'Queue acknowledgements without durable saves must retain files');
+saved=true;
+await vm.runInContext('streamOutputFiles(runtime,12,files,"release",true)',context);
+assert.deepEqual(released,['/renamed/raw/gene.aln.fasta']);

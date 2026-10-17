@@ -1,3 +1,4 @@
+import { PhyloPrepSave } from './test-output-store.mjs';
 import { readFile } from 'node:fs/promises';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
@@ -11,7 +12,7 @@ const elements = {
   runStages: { querySelectorAll: () => [] }, outputName: { value: '' }, useNextStep: {},
   log: { set textContent(value) { messages.push(value); }, get textContent() { return messages.at(-1); } },
 };
-const context = vm.createContext({
+const context = vm.createContext({ PhyloPrepSave, Blob,
   elements, performance: { now: () => clock += 101 }, Map,
   setInterval: callback => { timers.add(callback); return callback; },
   clearInterval: callback => timers.delete(callback),

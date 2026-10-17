@@ -1411,8 +1411,14 @@ function createPyodideWorker() {
           file.parts = [];
           file.decoder = undefined;
           // Only fully received files are eligible for saving. Keep engine files intact.
-          void (activeWorkerRun.deferPublish ? Promise.resolve() : publishProducedFiles([{ name: file.name, content: file.content, size: file.size, sha256: file.sha256 }])).then(() => {
-            if (message.sequence !== undefined) worker.postMessage({ type: "output-chunk-ack", runId: message.runId, sequence: message.sequence });
+          PhyloPrepSave.record(file);
+          void (activeWorkerRun.deferPublish ? Promise.resolve() : publishProducedFiles([file])).then(async () => {
+            // Checkpoint release requires confirmed close, not merely queueing.
+            if (message.sequence !== undefined) {
+              if (outputSaveSession && !activeWorkerRun?.deferPublish) await outputSaveSession.settle();
+              worker.postMessage({ type: "output-chunk-ack", runId: message.runId, sequence: message.sequence,
+                saved: Boolean(outputSaveSession?.saved(file)) });
+            }
           }).catch(fail);
           if (message.transferId) outputs.delete(transferKey);
         }
@@ -1450,8 +1456,8 @@ function createPyodideWorker() {
           if (message.result.files?.some(file => file.path)) {
             message.result.files = message.result.files.map((file, index) => {
               const streamed = run.streamedOutputs.get(`final:${index}`);
-              if (!streamed || streamed.content === undefined) throw new Error(`Incomplete output received: ${file.name}`);
-              return { name: file.name, content: streamed.content, size: file.size, sha256: file.sha256 };
+              if (!streamed || (streamed.content === undefined && !streamed.storage?.disk)) throw new Error(`Incomplete output received: ${file.name}`);
+              return PhyloPrepSave.record({ ...streamed, size: file.size, sha256: file.sha256 });
             });
           }
           activeWorkerRun = undefined;
@@ -1475,7 +1481,7 @@ function runInWorker(payload) {
   return new Promise((resolve, reject) => {
     activeWorkerRun = { id: runId, resolve, reject, streamedOutputs: new Map(), deferPublish: Boolean(payload.deferPublish) };
     try {
-      worker.postMessage({ type: payload.type || "run", runId, ...payload, incrementalSave: Boolean(outputSaveSession) });
+      worker.postMessage({ type: payload.type || "run", runId, ...payload, files: payload.files?.map(PhyloPrepSave.wireFile), incrementalSave: Boolean(outputSaveSession) });
     } catch (error) {
       activeWorkerRun = undefined;
       pyodideWorker = undefined;
@@ -1515,6 +1521,7 @@ function createOutputSaveSession(root) {
 async function publishProducedFiles(files) {
   const session = outputSaveSession, produced = producedFiles;
   for (const file of files) {
+    PhyloPrepSave.record(file);
     produced.set(file.name, file);
     if (session) {
       session.save(file);
@@ -1524,9 +1531,10 @@ async function publishProducedFiles(files) {
 }
 
 function savedDestination(file, session = outputSaveSession) {
-  if (!session) return "browser workspace";
+  if (!session) return file.storage?.disk ? "saved local folder" : "browser workspace";
   if (session.saved(file)) return "selected local folder";
-  return session.state(file) === "failed" ? "browser workspace · local save failed" : "browser workspace · local save pending";
+  const source = file.storage?.disk ? "previous local folder" : "browser workspace";
+  return source + (session.state(file) === "failed" ? " · local save failed" : " · local save pending");
 }
 
 function setLocalSaveBusy(busy) {
@@ -1594,19 +1602,27 @@ function renderGeneratedPage() {
     button.title = file.name;
     button.addEventListener("click", () => {
       selectedGeneratedFileIndex = index;
-      elements.preview.textContent = previewOutput(file.content);
+      void previewGeneratedFile(file);
       elements.outputFilesList.querySelectorAll("button").forEach((item) => item.classList.remove("active"));
       button.classList.add("active");
     });
     elements.outputFilesList.append(button);
   });
-  elements.preview.textContent = result.entries.length ? previewOutput(generatedFiles[selectedGeneratedFileIndex]?.content || "") : "No files match the current filter.";
+  if (result.entries.length) void previewGeneratedFile(generatedFiles[selectedGeneratedFileIndex]);
+  else elements.preview.textContent = "No files match the current filter.";
   elements.downloadSelected.hidden = !result.entries.length;
 }
 
-function previewOutput(content) {
-  const limit = 200000;
-  return content.length > limit ? content.slice(0, limit) + "\n[Preview truncated; download contains the complete file.]" : content;
+async function previewGeneratedFile(file) {
+  try {
+    const blob = await PhyloPrepSave.readBlob(file);
+    const limit = 200000;
+    const text = await blob.slice(0, limit).text();
+    if (generatedFiles[selectedGeneratedFileIndex] !== file) return;
+    elements.preview.textContent = text + (blob.size > limit ? "\n[Preview truncated; download contains the complete file.]" : "");
+  } catch (error) {
+    if (generatedFiles[selectedGeneratedFileIndex] === file) elements.preview.textContent = `Unable to preview ${file.name}: ${error.message}`;
+  }
 }
 
 async function downloadGeneratedFile(file) {
@@ -1615,7 +1631,7 @@ async function downloadGeneratedFile(file) {
     const handle = await window.showSaveFilePicker({ suggestedName: name });
     const writable = await handle.createWritable();
     try {
-      await writable.write(file.content);
+      await writable.write(await PhyloPrepSave.readBlob(file));
       await writable.close();
     } catch (error) {
       try { await writable.abort(); } catch {}
@@ -1623,7 +1639,8 @@ async function downloadGeneratedFile(file) {
     }
     return "saved";
   }
-  PhyloPrepDownloads.requestDownload(() => new Blob([file.content], { type: "text/plain;charset=utf-8" }), name, file);
+  const blob = await PhyloPrepSave.readBlob(file);
+  PhyloPrepDownloads.requestDownload(() => blob, name, file);
   return "requested";
 }
 
@@ -1679,10 +1696,12 @@ async function downloadAllOutputs() {
       const handle = await window.showSaveFilePicker({ suggestedName: name });
       const writable = await handle.createWritable();
       setLog("Writing ZIP archive to the selected file…", "info");
-      await PhyloPrepDownloads.writeZip(files, writable);
+      await PhyloPrepDownloads.writeZip(files, writable, PhyloPrepSave.readBlob);
       setLog(`Saved ${files.length} files as a ZIP archive.`, "success");
     } else {
-      PhyloPrepDownloads.requestDownload(() => new Blob([...PhyloPrepDownloads.zipParts(files)], { type: "application/zip" }), name, files);
+      const parts = [];
+      for await (const part of PhyloPrepDownloads.zipPartsAsync(files, PhyloPrepSave.readBlob)) parts.push(part);
+      PhyloPrepDownloads.requestDownload(() => new Blob(parts, { type: "application/zip" }), name, files);
       setLog(`ZIP download requested for ${files.length} files; check your browser downloads for completion.`, "success");
     }
   } catch (error) {
@@ -1824,16 +1843,19 @@ async function runMsapBatchBrowserWorkflow(request) {
     const products = request.pipelineOutput
       ? result.files.filter(file => !file.name.includes("/") && (file.name.endsWith(".aln.fasta") || file.name.endsWith(".sequence_changes.tsv")))
       : result.files;
-    outputs.push(...products.map(file => ({ ...file })));
+    products.forEach(PhyloPrepSave.record);
+    outputs.push(...products);
     const available = request.pipelineOutput
-      ? products.map(file => ({ ...file, name: `alignments/${file.name}` }))
+      ? products.map(file => PhyloPrepSave.record({ ...file, name: `alignments/${file.name}` }))
       : products;
     await publishProducedFiles(available);
   }
   if (!request.pipelineOutput) {
     outputs.push(...batchPathLists(outputs));
     const changeReports = outputs.filter(file => file.name.endsWith(".sequence_changes.tsv") && !file.name.includes("/"));
-    const mergedReport = mergeTsvContents(changeReports);
+    const loadedReports = [];
+    for (const file of changeReports) loadedReports.push({ content: await PhyloPrepSave.readText(file) });
+    const mergedReport = mergeTsvContents(loadedReports);
     if (mergedReport) outputs.push({ name: "reports/sequence_changes.tsv", content: mergedReport });
     await publishProducedFiles(outputs);
   }
@@ -1881,9 +1903,10 @@ async function sha256Text(text, bytes = new TextEncoder().encode(text)) {
 
 async function fileFingerprint(file) {
   if (!Number.isSafeInteger(file.size) || file.size < 0 || !/^[0-9a-f]{64}$/.test(file.sha256 || "")) {
-    const bytes = new TextEncoder().encode(file.content);
+    const text = await PhyloPrepSave.readText(file);
+    const bytes = new TextEncoder().encode(text);
     file.size = bytes.byteLength;
-    file.sha256 = await sha256Text(file.content, bytes);
+    file.sha256 = await sha256Text(text, bytes);
   }
   return { name: file.name, bytes: file.size, sha256: file.sha256 };
 }
@@ -1927,25 +1950,31 @@ function transferTarget(module) {
   return null;
 }
 
-function prepareNextStep() {
+async function prepareNextStep() {
   const target = transferTarget(activeModule());
   if (!target || !generatedFiles.length) return;
-  const inputs = new Map();
-  if (target === "extract_orthofinder_orthogroups.py") {
-    const table = generatedFiles.find((file) => /\.tsv$/i.test(file.name) && file.name !== "phyloprep-run.json");
-    if (!table) return;
-    inputs.set("orthogroups", [new File([table.content], table.name, { type: "text/tab-separated-values" })]);
-  } else if (target === "phyloprep.py") {
-    const fastas = generatedFiles.filter((file) => /\.(fa|fas|fasta)$/i.test(file.name));
-    const mapping = generatedFiles.find((file) => /(^|\/)map\.tsv$/i.test(file.name));
-    if (!fastas.length) return;
-    inputs.set("inputs", fastas.map((file) => new File([file.content], file.name.split("/").at(-1), { type: "text/plain" })));
-    if (mapping) inputs.set("mapping", [new File([mapping.content], "map.tsv", { type: "text/tab-separated-values" })]);
-  }
-  const index = modules.findIndex((module) => module.script === target);
-  if (index < 0) return;
-  pendingTransfer = { script: target, inputs };
-  selectModule(index);
+  setLocalSaveBusy(true);
+  try {
+    const inputs = new Map();
+    if (target === "extract_orthofinder_orthogroups.py") {
+      const table = generatedFiles.find((file) => /\.tsv$/i.test(file.name) && file.name !== "phyloprep-run.json");
+      if (!table) return;
+      inputs.set("orthogroups", [new File([await PhyloPrepSave.readBlob(table)], table.name, { type: "text/tab-separated-values" })]);
+    } else if (target === "phyloprep.py") {
+      const fastas = generatedFiles.filter((file) => /\.(fa|fas|fasta)$/i.test(file.name));
+      const mapping = generatedFiles.find((file) => /(^|\/)map\.tsv$/i.test(file.name));
+      if (!fastas.length) return;
+      inputs.set("inputs", await PhyloPrepInputs.readBounded(fastas, async file => new File([await PhyloPrepSave.readBlob(file)], file.name.split("/").at(-1), { type: "text/plain" }), 4));
+      if (mapping) inputs.set("mapping", [new File([await PhyloPrepSave.readBlob(mapping)], "map.tsv", { type: "text/tab-separated-values" })]);
+    }
+    const index = modules.findIndex((module) => module.script === target);
+    if (index < 0) return;
+    pendingTransfer = { script: target, inputs };
+    selectModule(index);
+  } catch (error) {
+    setLog(`Unable to prepare the next tool: ${error.message}. Results remain available.`, "error");
+  } finally { setLocalSaveBusy(false); }
+
 }
 
 async function readPathlistSibling(inputKey, entry, list) {
@@ -2065,12 +2094,12 @@ async function runBrowserModule() {
     stage = 3;
     setRunStage(stage, "Saving output");
     generatedFiles = [];
-    const resultOutputs = result.files.map((output) => ({ ...output }));
+    const resultOutputs = result.files.map(output => PhyloPrepSave.record({ ...output }));
     setRunStage(stage, "Preparing output checksums and run manifest");
     const manifest = await buildRunManifest(module, request, result, resultOutputs);
     resultOutputs.push({ name: "phyloprep-run.json", content: manifest });
     await publishProducedFiles(resultOutputs);
-    generatedFiles = resultOutputs.map(file => ({ ...file, destination: savedDestination(file) }));
+    generatedFiles = resultOutputs.map(file => PhyloPrepSave.record({ ...file, destination: savedDestination(file) }));
     setRunStage(stage, "Waiting for local file saves to finish");
     if (outputSaveSession) await outputSaveSession.settle();
     generatedFiles.forEach(file => { file.destination = savedDestination(file); });
@@ -2089,7 +2118,7 @@ async function runBrowserModule() {
   } catch (error) {
     if (outputSaveSession) await outputSaveSession.settle();
     if (producedFiles.size) {
-      generatedFiles = [...producedFiles.values()].map(file => ({ ...file, destination: savedDestination(file) }));
+      generatedFiles = [...producedFiles.values()].map(file => PhyloPrepSave.record({ ...file, destination: savedDestination(file) }));
       renderGeneratedFiles();
     }
     const cancelled = error.code === "CANCELLED";
