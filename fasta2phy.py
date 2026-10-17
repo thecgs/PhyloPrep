@@ -40,7 +40,7 @@ if __name__ == '__main__':
     optional = parser.add_argument_group('optional arguments')
     required.add_argument('-i', '--input', metavar='FASTA', help='Input FASTA alignment.', required=True)
     optional.add_argument('-o', '--output', metavar='PHY', help='Output PHYLIP file (default: stdout).', default=None)
-    optional.add_argument('-st', '--seqtype', default='DNA', choices=['DNA', 'protein'], help='DNA masks ambiguity as N; protein masks ambiguity as X.')
+    optional.add_argument('-st', '--seqtype', default='DNA', choices=['DNA', 'protein'], help='Preserves missing-data ? and gaps; DNA masks ambiguity as N, protein as X.')
     optional.add_argument('--changes-report', metavar='TSV', help='Audit TSV; defaults to OUTPUT.sequence_changes.tsv when edits occur.')
     optional.add_argument('-h', '--help', action='help', help="Show program's help message and exit.")
     optional.add_argument('-v', '--version', action='version', version='v1.0.0', help="Show program's version number and exit.")

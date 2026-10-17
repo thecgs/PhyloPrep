@@ -115,7 +115,7 @@ flowchart LR
 | `-m TSV` | Two-column gene-ID/taxon-ID mapping applied after MSA and before QC/concatenation. |
 | `-st` | `codon`, `nucl`, `prot`, or `pseudogene`. |
 | `-t N`, `-j N` | MAFFT/MUSCLE threads and concurrent jobs. |
-| `--missing-taxa` | `skip-gene` or `pad-gaps` during concatenation. |
+| `--missing-taxa` | `skip-gene` excludes incomplete loci; `pad-gaps` fills missing sequences with `?` during concatenation. |
 | `--min-length`, `--max-*-ratio` | Representation-specific QC thresholds. Independent matrices use each side's own QC and PIS threshold. Additional paired matrices require both sides to pass non-PIS QC, then apply `--paired-pis-policy`. |
 | `--allow-internal-stop` | Retain a protein locus or paired codon/protein locus when an internal stop is observed directly or recorded by preprocessing as masked to `NNN/X`. The masked state is not restored. |
 | `--paired-pis-policy` | `both` (default), `either`, `codon`, or `protein`; controls how paired codon/protein PIS decisions are combined while keeping the final locus set identical in both matrices. |
@@ -231,7 +231,7 @@ In the complete `phyloprep.py -st codon` workflow the merged `reports/sequence_c
 
 ### `get_supergenes.py` — supermatrix and partitions
 
-Concatenates aligned genes and writes `PREFIX.fasta`, `PREFIX.phy`, a report, and partition files. `skip-gene` excludes incomplete loci; `pad-gaps` retains them with gaps.
+Concatenates aligned genes and writes `PREFIX.fasta`, `PREFIX.phy`, a report, and partition files. `skip-gene` excludes incomplete loci; `pad-gaps` retains them by filling absent sequences with `?`, while preserving original alignment gaps as `-`. A sparse `PREFIX.missing.tsv` records only artificial missing blocks, using 1-based inclusive coordinates in the full concatenated matrix (nt for nucleotide/codon matrices, aa for protein matrices). It contains `locus`, `taxon`, `start`, `end`, `length` and `fill_character`; the locus ID matches the partition name. With no padded blocks, the table contains its header only.
 
 ```bash
 python get_supergenes.py -i qc/alignment.pass.tsv -p matrices/supermatrix --missing-taxa pad-gaps
@@ -524,3 +524,11 @@ During full-pipeline finalization with an output folder, supported browsers use 
 The browser verifies the SHA256 of bundled Python sources and its browser adapter before execution, using content-addressed source assets. Run parameters and the equivalent CLI command are captured at startup. Existing output fingerprints are reused when building the run manifest to reduce memory duplication for large matrices.
 
 Browser inputs are staged lazily from File/Blob references, and large exports remain binary until saved. With a selected output folder, completed loci can be reused after verifying input content, relevant alignment settings/source versions and saved output checksums. Per-locus checkpoints in `reports/alignment-cache/` support reuse after interrupted workflows; a compatible prior `phyloprep-run.json` also works. QC/mapping changes rebuild renaming, QC and matrices while preserving compatible alignment work. **Recompute existing alignments** (`--no-resume`) forces alignment/trimming to rerun. Saved files without matching provenance are recomputed. Idle WebAssembly workers are released between alignment and finalization and after completion.
+
+### Artificial missing data in concatenated matrices
+
+Artificial padding uses `?`, an existing alignment gap remains `-`, and observed sequence ambiguity remains `N`/`X`. The existing policy name `--missing-taxa pad-gaps` is retained, but its fill character is now `?`. FASTA, relaxed PHYLIP, NEXUS and the simplified AXT exporter preserve `?`; NEXUS declares `missing=? gap=-`. Codon padding consists of complete `???` triplets, and codon-position derivatives preserve their corresponding `?` characters. Fourfold extraction retains its strict all-taxon eligibility rule: missing/gapped codons do not qualify. Raw-input normalization still maps source `?` to N/X; preservation applies to aligned-data export.
+
+The sparse missing-block table is the authoritative record of artificial padding: a literal `?` already present in an input alignment is preserved but is not recorded as newly padded data. `alignment_qc.py` reports `Missing_ratio` separately from `Gap_ratio` and N/X ratios; it counts literal `?` characters and cannot establish their origin without the missing-block table. Missing states do not contribute resolved states to variable/PIS counts. Existing gap and N/X thresholds retain their literal-symbol definitions; no new missing-data threshold is introduced.
+
+IQ-TREE and standard PAML/MrBayes analyses can interpret `?` as missing data. In PAML, `cleandata=1` removes affected sites (whole codons in codon analysis) whether they contain `-` or `?`; changing the marker does not prevent that loss. Check the accepted symbols of other downstream importers, particularly Ka/Ks tools consuming the simplified AXT format. These markers do not establish biological gene absence or prove that every alignment gap is an indel.

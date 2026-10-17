@@ -34,7 +34,7 @@ if __name__ == '__main__':
     optional.add_argument('-o', '--output', metavar='AXT',
                           help='Output AXT file (default: stdout).', default=None)
     optional.add_argument('-st', '--seqtype', default='DNA', choices=['DNA', 'protein'],
-                          help='DNA masks ambiguity as N; protein masks ambiguity as X.')
+                          help='Preserves missing-data ? and gaps; DNA masks ambiguity as N, protein as X.')
     optional.add_argument('--changes-report', metavar='TSV',
                           help='Audit TSV; defaults to OUTPUT.sequence_changes.tsv when edits occur.')
     optional.add_argument('-h', '--help', action='help', 
