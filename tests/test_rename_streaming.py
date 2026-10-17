@@ -33,3 +33,22 @@ def test_streaming_failure_keeps_existing_output(tmp_path, content):
         rename_fasta(source, target)
     assert target.read_text() == 'previous result\n'
     assert source.read_text() == content
+
+
+def test_mapping_audit_does_not_retain_all_report_rows(tmp_path):
+    from phyloprep import annotate_change_report
+    report = tmp_path / 'sequence_changes.tsv'
+    with report.open('w') as handle:
+        handle.write('taxa_id\tevent\toriginal\n')
+        for _ in range(30000):
+            handle.write('gene\tnucleotide_ambiguity\tR\n')
+    tracemalloc.start()
+    try:
+        annotate_change_report(report, {'gene': 'species'})
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert peak < 2 * 1024 * 1024, peak
+    with report.open() as handle:
+        assert handle.readline().strip().endswith('mapped_taxa_id')
+        assert all(line.strip().endswith('\tspecies') for line in handle)

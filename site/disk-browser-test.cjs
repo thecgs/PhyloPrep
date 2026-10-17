@@ -106,5 +106,73 @@ const server = http.createServer((req,res) => {
   });
   assert.equal(result.renamed,4*result.loci);assert.ok(result.files>10);assert.ok(result.allReleased);
   console.log(`Real Pyodide disk-backed raw/trimmed QC and paired/independent matrices passed (${result.files} outputs, ${result.renamed} renamed alignments); preview, download and destination-copy read-back passed.`);
+ const extra=await page.evaluate(async()=>{
+   const root=await (await navigator.storage.getDirectory()).getDirectoryHandle('reuse-tests',{create:true});
+   outputDirectoryHandle=root;outputSaveSession=createOutputSaveSession(root);producedFiles=new Map();
+   const engine=await (await fetch('engine/manifest.json')).json();
+   const original=runMsapBrowserWorkflow;let calls=0;
+   runMsapBrowserWorkflow=async()=>{
+     calls++;
+     const files=[{name:'cached.mafft.codon.aln.fasta',content:'>g1\nATGGCT\n>g2\nATGGCT\n'},
+       {name:'cached.mafft.prot.aln.fasta',content:'>g1\nMA\n>g2\nMA\n'},
+       {name:'cached.sequence_changes.tsv',content:'header\n'}];
+     for(const file of files)await fileFingerprint(file);
+     return {files,engineMetadata:engine};
+   };
+   try {
+     const request={pipelineOutput:true,options:{seqtype:'codon',notrim:true},files:[
+       {name:'cached.fa',inputKey:'inputs',fasta:true,blob:new File(['>g1\nATGGCT\n>g2\nATGGCT\n'],'cached.fa')}]};
+     await runMsapBatchBrowserWorkflow(request);await outputSaveSession.settle();
+     const alignments=await root.getDirectoryHandle('alignments');
+     const saved=await alignments.getFileHandle('cached.mafft.codon.aln.fasta');
+     const before=(await saved.getFile()).lastModified;
+     outputSaveSession=createOutputSaveSession(root);producedFiles=new Map();
+     const reused=await runMsapBatchBrowserWorkflow({...request,options:{...request.options,min_nucl_pis:5}});
+     await outputSaveSession.settle();
+     if(calls!==1 || reused.reusedLoci!==1)throw Error('Matching locus was recomputed');
+     if((await saved.getFile()).lastModified!==before)throw Error('Reused alignment was unnecessarily rewritten');
+     outputSaveSession=createOutputSaveSession(root);
+     await runMsapBatchBrowserWorkflow({...request,options:{...request.options,no_resume:true}});await outputSaveSession.settle();
+     if(calls!==2)throw Error('--no-resume did not recompute');
+     const stream=await saved.createWritable();await stream.write('>g1\nATGGCC\n>g2\nATGGCC\n');await stream.close();
+     outputSaveSession=createOutputSaveSession(root);
+     await runMsapBatchBrowserWorkflow(request);await outputSaveSession.settle();
+     if(calls!==3)throw Error('Changed saved alignment was incorrectly reused');
+   }finally{runMsapBrowserWorkflow=original;}
+   outputSaveSession=createOutputSaveSession(root);producedFiles=new Map();
+   const sequence='GCT'.repeat(220000), input=new File([`>a\n${sequence}\n>b\n${sequence}\n`],'large.fa');
+   const converted=await runInWorker({script:'fasta2phy.py',files:[{name:input.name,blob:input,fasta:true}],
+     options:{seqtype:'DNA'},outputName:'large.phy',usesPathList:false});
+   await outputSaveSession.settle();
+   const matrix=converted.files.find(file=>file.name==='large.phy');
+   if(matrix.content!==undefined || matrix.storage.blob || !matrix.storage.disk)throw Error('Large binary output was retained');
+   if((await PhyloPrepSave.readBlob(matrix)).size<1300000)throw Error('Large output truncated');
+   const extracted=await runInWorker({type:'orthofinder-extract',script:'extract_orthofinder_orthogroups.py',
+     files:[{name:'Orthogroups.tsv',inputKey:'orthogroups',blob:new File(['Orthogroup\tsp_a\tsp_b\nOG1\tg1\tg2\n'],'Orthogroups.tsv'),fasta:false},
+       ...['sp_a','sp_b'].map((name,i)=>({name:name+'.fa',inputKey:'sequences',blob:new File([`>g${i+1}\nATGGCT\n`],name+'.fa'),fasta:true}))],
+     options:{copy_mode:'single-copy',orthofinder_id_style:'unprefixed'},outputName:'ogs',usesPathList:false});
+   await outputSaveSession.settle();
+   const og=extracted.files.find(file=>/OG1\.(fa|fasta)$/.test(file.name));
+   if(!og || !(await PhyloPrepSave.readText(og)).includes('>sp_a_g1'))throw Error('Blob-backed OG input staging failed');
+   const e2e=await (await navigator.storage.getDirectory()).getDirectoryHandle('pipeline-reuse',{create:true});
+   outputDirectoryHandle=e2e;outputSaveSession=createOutputSaveSession(e2e);producedFiles=new Map();
+   const align=runBrowserAlignment;let aligned=0;
+   // Identity alignment for identical sequences; original MSAP/Python stages remain real.
+   runBrowserAlignment=async sequence=>{aligned++;return sequence;};
+   try{
+     const request={options:{seqtype:'codon',notrim:true},files:[
+       ...[0,1].map(i=>({name:`e2e${i}.fa`,inputKey:'inputs',fasta:true,blob:new File(['>g1\nATGGCT\n>g2\nATGGCT\n'],`e2e${i}.fa`)})),
+       {name:'mapping.tsv',inputKey:'mapping',fasta:false,blob:new File(['g1\tsp_a\ng2\tsp_b\n'],'mapping.tsv')}]};
+     await runPhyloPrepBrowserWorkflow(request);await outputSaveSession.settle();
+     if(aligned!==2)throw Error('End-to-end alignment did not run');
+     outputSaveSession=createOutputSaveSession(e2e);producedFiles=new Map();
+     const rerun=await runPhyloPrepBrowserWorkflow(request);await outputSaveSession.settle();
+     if(aligned!==2 || rerun.reused_loci!==2)throw Error('End-to-end cached pipeline recomputed alignment');
+     const matrix=rerun.files.find(file=>file.name==='matrices/codon/raw/supermatrix.fasta');
+     if(await PhyloPrepSave.readText(matrix)!=='>sp_a\nATGGCTATGGCT\n>sp_b\nATGGCTATGGCT\n')throw Error('Cached pipeline matrix changed');
+   }finally{runBrowserAlignment=align;releaseIdleWorkers({pyodide:true});}
+   return {calls,size:matrix.size};
+ });
+ console.log(`Real browser verified reuse, --no-resume, changed-file recomputation, no-rewrite adoption, Blob input/output (${extra.size} bytes) and OG extraction passed.`);
  }finally{clearTimeout(timeout);await browser.close();server.close();}
 })().catch(error=>{console.error(error);server.close();process.exitCode=1;});

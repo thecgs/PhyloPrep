@@ -58,6 +58,8 @@ const fingerprints=vm.createContext({ PhyloPrepSave, Blob, TextEncoder:class ext
   elements:{command:{textContent:'changed command -g 2'}},versionManifest:undefined,
   navigator:{userAgent:'test'},implementationProfile:()=>({}),externalAlignerLabel:()=>'',
 });
+vm.runInContext(await readFile('site/browser-hash.js','utf8'),fingerprints);
+let blobHashes=0;const hashBlob=fingerprints.PhyloPrepHash.blob;fingerprints.PhyloPrepHash.blob=async file=>{blobHashes++;return hashBlob(file);};
 vm.runInContext(app.slice(app.indexOf('async function sha256Text('),app.indexOf('function transferTarget(')),fingerprints);
 fingerprints.module={script:'phyloprep.py'};
 fingerprints.request={equivalentCli:'original command -g 1',options:{genetic_code:1},files:[]};
@@ -67,11 +69,11 @@ assert.equal(record.equivalent_cli,'original command -g 1');assert.equal(record.
 assert.equal(encodes,0,'A previously fingerprinted matrix must not be encoded again');assert.equal(digests,0);
 fingerprints.outputs=[{name:'unicode.fasta',content:'é😀\n'}];
 record=JSON.parse(await vm.runInContext('buildRunManifest(module,request,result,outputs)',fingerprints));
-assert.equal(encodes,1);assert.equal(digests,1);
+assert.equal(encodes,0);assert.equal(digests,0);assert.equal(blobHashes,1);
 assert.equal(record.outputs[0].bytes,Buffer.byteLength('é😀\n'));
 assert.equal(record.outputs[0].sha256,sha('é😀\n'));
 await vm.runInContext('buildRunManifest(module,request,result,outputs)',fingerprints);
-assert.equal(encodes,1,'Fallback fingerprints must be reused too');
+assert.equal(blobHashes,1,'Fallback fingerprints must be reused too');
 
 const roots=[{},{},{}];
 const config=vm.createContext({ PhyloPrepSave, Blob, configurationDisabled:new Map(),elements:{parameterList:roots[0],inputFileFields:roots[1],scriptList:roots[2],outputName:{disabled:false},clearInputFiles:{disabled:true}}});

@@ -84,6 +84,14 @@ assert.equal(published.length,0,'MSAP outputs must wait for the batch adapter to
 assert.equal(receiveContext.activeWorkerRun.streamedOutputs.get('final:1').content,'>a\nAA\n');
 assert.equal(receiveContext.activeWorkerRun.streamedOutputs.get('final:1').size,6);
 assert.equal(receiveContext.activeWorkerRun.streamedOutputs.get('final:1').sha256,'b'.repeat(64));
+// Large outputs stay binary, avoiding UTF-16 decoding and joined string copies.
+const largeBytes=new TextEncoder().encode('ATG'.repeat(400000));
+receiver.handlers.message({data:{type:'output-chunk',runId:42,index:2,name:'large.fasta',bytes:largeBytes}});
+receiver.handlers.message({data:{type:'output-file-end',runId:42,index:2,name:'large.fasta',size:largeBytes.length,sha256:'c'.repeat(64)}});
+await Promise.resolve();
+const largeReceived=receiveContext.activeWorkerRun.streamedOutputs.get('final:2');
+assert.equal(largeReceived.content,undefined);assert.equal(largeReceived.storage.blob.size,largeBytes.length);
+assert.equal((await PhyloPrepSave.readBlob(largeReceived)).size,largeBytes.length);
 let finished;
 receiveContext.activeWorkerRun.resolve=result=>{finished=result;};
 receiver.handlers.message({data:{type:'result',runId:42,result:{files:[

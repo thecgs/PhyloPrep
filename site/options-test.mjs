@@ -80,7 +80,7 @@ assert.equal(vm.runInContext('rawParameterValues().max_copies_per_taxon', contex
 controls.get('copy_mode').value = 'all-copies';
 assert.equal(vm.runInContext('rawParameterValues().longest_copy', context), true);
 assert.equal(vm.runInContext('rawParameterValues().max_copies_per_taxon', context), '2');
-workerContext.runtime = { FS: { mkdirTree() {}, writeFile() {} } };
+workerContext.runtime = { FS: { mkdirTree() {}, writeFile() {}, rename() {} } };
 workerContext.stage = { optionsRoot:'/opts', outputRoot:'/out', files:[
   {inputKey:'orthogroups',path:'/og.tsv'},
   {inputKey:'sequences',name:'Human.fa',fasta:true,content:'>g\nAAA'},

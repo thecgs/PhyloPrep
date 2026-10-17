@@ -224,3 +224,5 @@ await import('./provenance-test.mjs');
 await import('./disk-output-test.mjs');
 
 await import('./disk-fs-test.mjs');
+
+await import('./memory-reuse-test.mjs');

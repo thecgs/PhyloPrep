@@ -121,6 +121,7 @@ const modules = [
       { flag: "-s", label: "Alignment software", description: "Runs locally through Biowasm/WebAssembly. MAFFT E-INS-i is the browser default through Biowasm's compiled tbfast + dvtditr pipeline; CLI -s mafft continues to use upstream mafft --auto and can differ.", type: "select", value: "mafft", options: [["mafft", "MAFFT E-INS-i (Biowasm, default)"], ["muscle", "MUSCLE (Biowasm)"]], token: "align_software" },
       { flag: "-t", label: "Threads per locus", description: "Browser fixed to one thread for GitHub Pages/WebAssembly compatibility.", type: "select", value: "1", options: [["1", "1 (browser fixed)"]], token: "thread" },
       { flag: "-j", label: "Concurrent loci", description: "Browser edition processes loci sequentially to keep memory predictable.", type: "select", value: "1", options: [["1", "1 (browser sequential)"]], token: "jobs" },
+      { flag: "--no-resume", label: "Recompute existing alignments", description: "With a selected output folder, matching saved alignments are verified and reused by default. Check to rerun alignment and trimming. QC and matrices are always rebuilt.", type: "checkbox", value: false, token: "no_resume" },
       { flag: "-ts", label: "Trimming software", description: "Browser fixed to PhyloPrep's bundled trimAlnSeq.py.", type: "select", value: "trimAlnSeq", options: [["trimAlnSeq", "trimAlnSeq.py (browser fixed)"]], token: "trim_software" },
       { flag: "-n, --notrim", label: "Skip trimming", description: "Process raw alignments only.", type: "checkbox", value: false, token: "notrim" },
       proteinStopParameter(),
@@ -151,6 +152,7 @@ const modules = [
       { flag: "-s", label: "Alignment software", description: "Runs locally through Biowasm/WebAssembly. MAFFT E-INS-i is the browser default through Biowasm's compiled tbfast + dvtditr pipeline; CLI -s mafft continues to use upstream mafft --auto and can differ.", type: "select", value: "mafft", options: [["mafft", "MAFFT E-INS-i (Biowasm, default)"], ["muscle", "MUSCLE (Biowasm)"]], token: "align_software" },
       { flag: "-t", label: "Threads per locus", description: "Browser fixed to one thread.", type: "select", value: "1", options: [["1", "1 (browser fixed)"]], token: "thread" },
       { flag: "-j", label: "Concurrent loci", description: "Browser edition processes loci sequentially.", type: "select", value: "1", options: [["1", "1 (browser sequential)"]], token: "jobs" },
+      { flag: "--no-resume", label: "Recompute existing alignments", description: "With a selected output folder, matching saved alignments are verified and reused by default. Check to rerun alignment and trimming. QC and matrices are always rebuilt.", type: "checkbox", value: false, token: "no_resume" },
       { flag: "-ts", label: "Trimming software", description: "Browser fixed to PhyloPrep's bundled trimAlnSeq.py.", type: "select", value: "trimAlnSeq", options: [["trimAlnSeq", "trimAlnSeq.py (browser fixed)"]], token: "trim_software" },
       { flag: "-n, --notrim", label: "Skip trimming", description: "Keep raw alignments only.", type: "checkbox", value: false, token: "notrim" },
       proteinStopParameter(),
@@ -1267,9 +1269,12 @@ async function updatePreflight() {
   let duplicateIds = 0;
   let malformedCodon = 0;
   const fastaIdSets = [];
+  let preflightBytes=0, deferredFiles=0;
   const sampled = files.filter(file => /\.(fa|faa|fas|fasta|aln|pep)$/i.test(file.name)).slice(0, 100);
   for (const file of sampled) {
     if (generation !== preflightGeneration) return;
+    if(file.size>1024*1024 || preflightBytes+(file.size || 0)>8*1024*1024){deferredFiles++;continue;}
+    preflightBytes+=file.size || 0;
     let text;
     try { text = await PhyloPrepInputs.readText(file); }
     catch (error) {
@@ -1309,6 +1314,7 @@ async function updatePreflight() {
   elements.preflightSummary.innerHTML = [
     `<strong>${files.length}</strong> file(s)`,
     files.length > 100 ? "Preflight samples up to 100 FASTA files; RUN processes all inputs" : "",
+    deferredFiles ? `${deferredFiles} sampled file(s) exceed the preflight size budget; full validation runs during processing` : "",
     `<strong>${formatBytes(totalBytes)}</strong>`,
     fastaFiles ? `<strong>${fastaFiles}</strong> FASTA file(s) · <strong>${sequences}</strong> sequence(s)` : "",
     problems.length ? problems.join(" · ") : '<span class="preflight-ok">Basic structure checks passed</span>',
@@ -1400,12 +1406,19 @@ function createPyodideWorker() {
           outputs.set(transferKey, file);
         }
         if (message.type === "output-chunk") {
-          file.parts.push(file.decoder.decode(message.bytes, { stream: true }));
+          file.parts.push(message.bytes);
           setRunStage(3, `Receiving output ${message.index + 1}/${message.fileCount}: ${message.name}`);
           worker.postMessage({ type: "output-chunk-ack", runId: message.runId, sequence: message.sequence });
         } else {
-          file.parts.push(file.decoder.decode());
-          file.content = file.parts.join("");
+          if(file.parts.reduce((size,part)=>size+part.byteLength,0)!==message.size)throw Error(`Incomplete output transfer: ${message.name}`);
+          if (message.size > 1024 * 1024) {
+            file.blob = new Blob(file.parts);
+          } else {
+            const bytes = new Uint8Array(message.size);
+            let position = 0;
+            for (const part of file.parts) {bytes.set(part,position);position+=part.byteLength;}
+            file.content = file.decoder.decode(bytes);
+          }
           file.size = message.size;
           file.sha256 = message.sha256;
           file.parts = [];
@@ -1456,7 +1469,7 @@ function createPyodideWorker() {
           if (message.result.files?.some(file => file.path)) {
             message.result.files = message.result.files.map((file, index) => {
               const streamed = run.streamedOutputs.get(`final:${index}`);
-              if (!streamed || (streamed.content === undefined && !streamed.storage?.disk)) throw new Error(`Incomplete output received: ${file.name}`);
+              if (!streamed || (streamed.content === undefined && !streamed.storage?.disk && !streamed.storage?.blob)) throw new Error(`Incomplete output received: ${file.name}`);
               return PhyloPrepSave.record({ ...streamed, size: file.size, sha256: file.sha256 });
             });
           }
@@ -1749,6 +1762,11 @@ function cancelAlignmentRun() {
 }
 
 
+function releaseIdleWorkers({pyodide=false}={}) {
+  if(!activeAlignmentRun && alignmentWorker){alignmentWorker.terminate();alignmentWorker=undefined;}
+  if(pyodide && !activeWorkerRun && pyodideWorker){pyodideWorker.terminate();pyodideWorker=undefined;}
+}
+
 async function runMsapBrowserWorkflow(request) {
   setRunStage(2, "Preparing input with original MSAP.py");
   const probe = await runInWorker({ type: "msap-probe", ...request });
@@ -1757,11 +1775,15 @@ async function runMsapBrowserWorkflow(request) {
   const alignerLabel = externalAlignerLabel(probe.tool);
   elements.cancelRun.hidden = false;
   setRunStage(2, `Running ${alignerLabel}`);
-  const alignmentContent = await runBrowserAlignment(probe.alignmentInput, probe.tool, request.options.seqtype || "codon");
+  const alignmentRun = runBrowserAlignment(probe.alignmentInput, probe.tool, request.options.seqtype || "codon");
+  delete probe.alignmentInput;
+  let alignmentContent = await alignmentRun;
 
   setRunStage(2, "Finishing original MSAP.py workflow");
   elements.cancelRun.hidden = false;
-  return runInWorker({ type: "msap-complete", ...request, alignmentContent, deferPublish: true });
+  const completion = runInWorker({ type: "msap-complete", ...request, alignmentContent, deferPublish: true });
+  alignmentContent = undefined;
+  return completion;
 }
 
 
@@ -1792,6 +1814,21 @@ function mergeTsvContents(files) {
   return header ? `${header}\n${rows.join("\n")}${rows.length ? "\n" : ""}` : "";
 }
 
+async function mergeTsvBlobs(files) {
+  let header;
+  const parts=[];
+  for(const file of files){
+    const source=await PhyloPrepSave.readBlob(file);
+    const prefix=await source.slice(0,65536).text();
+    const newline=prefix.indexOf('\n');
+    if(newline<0){if(!header && prefix.trim())header=prefix.trim();continue;}
+    if(!header)header=prefix.slice(0,newline).replace(/\r$/, '');
+    const offset=new TextEncoder().encode(prefix.slice(0,newline+1)).length;
+    if(source.size>offset)parts.push(source.slice(offset));
+  }
+  return header?new Blob([header+'\n',...parts]):null;
+}
+
 function selectedInputPathList(inputs) {
   return `${inputs.map((file) => file.name).join("\n")}\n`;
 }
@@ -1814,7 +1851,7 @@ function showLocusProgress(completed, total, started, label) {
 }
 
 async function runMsapBatchBrowserWorkflow(request) {
-  const inputs = request.files.filter((file) => file.inputKey === "inputs" && String(file.content || "").trimStart().startsWith(">"));
+  const inputs = request.files.filter((file) => file.inputKey === "inputs" && (file.fasta || String(file.content || "").trimStart().startsWith(">")));
   if (!inputs.length) throw new Error("Select at least one FASTA input.");
   requireUniqueStems(inputs);
   const outputs = [];
@@ -1824,6 +1861,22 @@ async function runMsapBatchBrowserWorkflow(request) {
       content: selectedInputPathList(inputs),
     });
   }
+  let reuseEngine;
+  if (outputSaveSession && globalThis.PhyloPrepReuse) {
+    try {
+      const response=await fetch('engine/manifest.json',{cache:'no-cache'});
+      if(response.ok){
+        const candidate=await response.json();
+        const entries=[...candidate.files,candidate.runner];
+        const digest=await sha256Text(entries.map(({name,sha256})=>`${name}:${sha256}`).join('\n'));
+        if(digest===candidate.bundleSha256)reuseEngine=candidate;
+      }
+    }catch {} // Without verified provenance, recompute rather than guessing.
+  }
+  const reuse = reuseEngine ? PhyloPrepReuse.create(outputSaveSession.root,reuseEngine,request.options,
+    {pipeline:Boolean(request.pipelineOutput),fingerprint:fileFingerprint}) : null;
+  let reusedLoci=0;
+  const cacheFiles=[];
   const progressStarted = performance.now();
   let engineMetadata;
   for (let index = 0; index < inputs.length; index += 1) {
@@ -1832,8 +1885,14 @@ async function runMsapBatchBrowserWorkflow(request) {
     const heartbeat = setInterval(() => showLocusProgress(index, inputs.length, progressStarted, `Aligning ${input.name}`), 1000);
     let result;
     try {
-      result = await runMsapBrowserWorkflow({
+      if(reuse && !request.options.no_resume){
+        showLocusProgress(index,inputs.length,progressStarted,`Checking saved alignment ${input.name}`);
+        result=await reuse.restore(input);
+        if(result){reusedLoci++;showLocusProgress(index,inputs.length,progressStarted,`Reusing verified alignment ${input.name}`);}
+      }
+      if(!result)result = await runMsapBrowserWorkflow({
         ...request, script: "MSAP.py", files: [input], outputName: "", usesPathList: false,
+        expectedBundle:reuseEngine?.bundleSha256,
       });
     } finally {
       clearInterval(heartbeat);
@@ -1848,22 +1907,38 @@ async function runMsapBatchBrowserWorkflow(request) {
     const available = request.pipelineOutput
       ? products.map(file => PhyloPrepSave.record({ ...file, name: `alignments/${file.name}` }))
       : products;
+    if(result.reused && outputSaveSession)for(const file of available)outputSaveSession.adopt?.(file);
     await publishProducedFiles(available);
+    if(reuse && outputSaveSession){
+      await outputSaveSession.settle();
+      if(!outputSaveSession.error){
+        const checkpoint=await reuse.checkpoint(input,result,products);
+        if(checkpoint){cacheFiles.push(checkpoint);await publishProducedFiles([checkpoint]);}
+      }
+    }
   }
   if (!request.pipelineOutput) {
     outputs.push(...batchPathLists(outputs));
     const changeReports = outputs.filter(file => file.name.endsWith(".sequence_changes.tsv") && !file.name.includes("/"));
-    const loadedReports = [];
-    for (const file of changeReports) loadedReports.push({ content: await PhyloPrepSave.readText(file) });
-    const mergedReport = mergeTsvContents(loadedReports);
-    if (mergedReport) outputs.push({ name: "reports/sequence_changes.tsv", content: mergedReport });
+    if(outputSaveSession || changeReports.reduce((sum,file)=>sum+(file.size || 0),0)>1024*1024){
+      const merged=await mergeTsvBlobs(changeReports);
+      if(merged)outputs.push(PhyloPrepSave.record({name:'reports/sequence_changes.tsv',blob:merged}));
+    }else{
+      const loadedReports = [];
+      for (const file of changeReports) loadedReports.push({ content: await PhyloPrepSave.readText(file) });
+      const mergedReport = mergeTsvContents(loadedReports);
+      if (mergedReport) outputs.push({ name: "reports/sequence_changes.tsv", content: mergedReport });
+    }
     await publishProducedFiles(outputs);
   }
+  if(!request.pipelineOutput)outputs.push(...cacheFiles);
   return {
     files: outputs,
     inputs,
     engineMetadata,
-    summary: `Processed ${inputs.length} loci with the browser MSAP batch workflow.`,
+    reusedLoci,
+    cacheFiles,
+    summary: `Processed ${inputs.length} loci with the browser MSAP batch workflow (${reusedLoci} verified saved loci reused).`,
     provenance: `Browser MSAP_batch adapter · untouched MSAP.py + ${externalAlignerLabel(request.options.align_software || "mafft")}`,
   };
 }
@@ -1871,6 +1946,8 @@ async function runMsapBatchBrowserWorkflow(request) {
 async function runPhyloPrepBrowserWorkflow(request) {
   const mapping = request.files.find(file => file.inputKey === "mapping");
   const batch = await runMsapBatchBrowserWorkflow({ ...request, pipelineOutput: true });
+  // Alignment WASM heaps cannot shrink; release idle engines before matrix construction.
+  releaseIdleWorkers({pyodide:true});
   const sources = batch.inputs;
   const batchProducts = batch.files.map(file => ({ ...file, role: "batch-output" }));
   const finalFiles = [
@@ -1882,11 +1959,14 @@ async function runPhyloPrepBrowserWorkflow(request) {
   const result = await runInWorker({
     type: "phyloprep-finalize",
     script: "phyloprep.py",
+    expectedBundle: batch.engineMetadata?.bundleSha256,
     files: finalFiles,
     options: request.options,
     outputName: "",
     usesPathList: false,
   });
+  result.files.push(...(batch.cacheFiles || []));
+  result.reused_loci = batch.reusedLoci || 0;
   if (sources.length > 1) {
     result.files.push({
       name: "inputs.pathlist",
@@ -1903,10 +1983,9 @@ async function sha256Text(text, bytes = new TextEncoder().encode(text)) {
 
 async function fileFingerprint(file) {
   if (!Number.isSafeInteger(file.size) || file.size < 0 || !/^[0-9a-f]{64}$/.test(file.sha256 || "")) {
-    const text = await PhyloPrepSave.readText(file);
-    const bytes = new TextEncoder().encode(text);
-    file.size = bytes.byteLength;
-    file.sha256 = await sha256Text(text, bytes);
+    const source = await PhyloPrepSave.readBlob(file);
+    file.size = source.size;
+    file.sha256 = await PhyloPrepHash.blob(source);
   }
   return { name: file.name, bytes: file.size, sha256: file.sha256 };
 }
@@ -1932,6 +2011,7 @@ async function buildRunManifest(module, request, result, outputs) {
     outputs: outputManifest,
     provenance: result.provenance || null,
     warnings: result.warnings || [],
+    reused_loci: result.reused_loci || result.reusedLoci || 0,
     runtime: {
       pyodide: "0.27.2",
       workspace_storage: result.workspace_storage || {kind:"memfs"},
@@ -2058,21 +2138,22 @@ async function runBrowserModule() {
           },
         });
       }
-      const contents = await PhyloPrepInputs.readBounded(inputs, async file => {
-        try { return await PhyloPrepInputs.readText(file); }
-        catch (error) {
+      const prepared = await PhyloPrepInputs.readBounded(inputs, async file => {
+        let source=file;
+        let header;
+        try { header=await source.slice(0,4096).text(); }
+        catch(error) {
           if (!field?.pathList || !inputFolderHandles.has(field.key)) throw error;
-          const fresh = await readPathlistSibling(field.key, file.name, file);
-          if (!fresh) throw error;
-          return PhyloPrepInputs.readText(fresh);
+          source=await readPathlistSibling(field.key,file.name,file);
+          if(!source)throw error;
+          header=await source.slice(0,4096).text();
         }
+        return {name:file.name,blob:source,fasta:header.trimStart().startsWith('>'),inputKey:control.dataset.inputKey};
       }, 4, ({ completed, total }) => {
         preparationLabel = `Reading ${field?.label || "input"}: ${completed}/${total} files`;
         renderPreparation(completed === 0 || completed === total);
       });
-      for (let index = 0; index < inputs.length; index++) {
-        filePayload.push({ name: inputs[index].name, content: contents[index], inputKey: control.dataset.inputKey });
-      }
+      filePayload.push(...prepared);
     }
     clearInterval(preparationTimer);
     setRunStage(stage, "Loading local workflow");
@@ -2127,6 +2208,7 @@ async function runBrowserModule() {
     setLog(cancelled ? "Run cancelled. You can change inputs or parameters and try again." : (error.message || String(error)), cancelled ? "" : "error");
   } finally {
     clearInterval(preparationTimer);
+    releaseIdleWorkers({pyodide:true});
     setRunControls(false);
   }
 }

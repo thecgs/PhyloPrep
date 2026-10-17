@@ -362,6 +362,18 @@ def test_disk_backed_branches_release_original_and_renamed_after_use(tmp_path, m
                 if ('.trimmed.aln.fasta' in name) == (variant == 'trimmed'):
                     (root / 'alignments' / name).write_text(content)
             checkpoint = json.loads(browser.advance_phyloprep_finalize(steps))
+            early = []
+            while checkpoint.get('pending') and checkpoint.get('files') and all(
+                    file['name'].startswith('renamed/') and not file.get('release')
+                    for file in checkpoint['files']):
+                assert len(checkpoint['files']) == 1
+                item = checkpoint['files'][0]
+                assert Path(item['path']).exists()
+                assert not (root / 'matrices').exists()
+                saved[item['name']] = Path(item['path']).read_bytes()
+                early.append(item['name'])
+                checkpoint = json.loads(browser.advance_phyloprep_finalize(steps))
+            assert len(early) == 2  # Each renamed locus is exported before QC/concatenation.
             if fail_trim and variant == 'trimmed':
                 assert checkpoint['recoverable']
                 names = {file['name'] for file in checkpoint['files']}

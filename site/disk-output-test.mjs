@@ -67,9 +67,10 @@ assert.ok(new TextDecoder().decode(whole).includes('>taxon\nATG\n'));
 
 // Read-back staging verifies a saved alignment before it enters the analysis FS.
 const worker=vm.createContext({TextEncoder,TextDecoder,Uint8Array,self:{addEventListener(){}},crypto:(await import('node:crypto')).webcrypto});
+vm.runInContext(await readFile('site/browser-hash.js','utf8'),worker);
 vm.runInContext(await readFile('site/pyodide-worker.js','utf8'),worker);
 worker.file=PhyloPrepSave.wireFile(file);
-assert.equal(new TextDecoder().decode(await vm.runInContext('readDiskInput(file)',worker)),'>taxon\nATG\n');
+assert.equal(await (await vm.runInContext('readDiskInput(file)',worker)).text(),'>taxon\nATG\n');
 worker.file.sha256='0'.repeat(64);
 await assert.rejects(vm.runInContext('readDiskInput(file)',worker),/checksum mismatch/);
 console.log('Disk-backed release, shared aliases, lazy read-back, destination changes, failed-save retry, ZIP and changed-file checks passed.');
