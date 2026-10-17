@@ -172,6 +172,10 @@ The per-run save queue caches shared directory promises and permits at most four
 
 Local-save counts are displayed separately from analysis progress. Completion waits for all pending saves; incomplete saving produces a warning rather than a success claim. Without an authorized folder, results remain in the browser workspace for preview and manual download; no automatic downloads occur. This overlaps analysis and saving but retains data needed for downstream processing/preview, and does not by itself remove the browser's memory limit.
 
+### PartitionFinder configuration filenames
+
+CLI and browser outputs both use `*_partition_finder.cfg.txt`. The final `.txt` extension avoids browser restrictions on creating `.cfg` files in an authorized output folder. Before using the configuration with PartitionFinder, rename it to `partition_finder.cfg` in the analysis directory. Its contents and matrix references are unchanged.
+
 ### Alignment filenames
 
 CLI and browser alignment outputs use the explicit FASTA suffix: `GENE.ALIGNER.TYPE.aln.fasta` for untrimmed alignments and `GENE.ALIGNER.TYPE.trimmed.aln.fasta` for trimmed alignments. Batch pathlists are named `all.TYPE.aln.fasta.pathlist` and `all.TYPE.trimmed.aln.fasta.pathlist`. The file contents remain FASTA; QC, provenance matching, paired trimming and concatenation use the same naming convention.
