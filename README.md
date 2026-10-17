@@ -135,6 +135,56 @@ The complete workflow automatically removes terminal stops from CDS and protein 
 
 ## Outputs and audit reports
 
+### Offline HTML analysis report
+
+After either a CLI run or saving the browser's complete output folder, run:
+
+```bash
+python phyloprep_report.py -i phyloprep-output
+```
+
+The only analysis input is the final output directory. The independently runnable
+script uses **Python's standard library only** and writes
+`phyloprep-output/phyloprep-report.html`. All report labels are in English. The
+single HTML file embeds SVG charts and summary data, requires no internet
+connection, and offers chart SVG export, summary JSON download, and print/PDF.
+The report is generated on demand; existing CLI/browser analyses do not incur
+the additional matrix-statistics calculation automatically.
+
+The report includes locus-processing counts; per-branch QC outcomes, overlapping
+exclusion reasons and mutually exclusive complete reason combinations; statistics
+recomputed from each final FASTA matrix; source sequence-change events by taxon;
+taxon-by-matrix locus occupancy; and available run provenance. QC pass counts and
+actual concatenation inclusion are reported separately. One failed locus can
+have several reasons, so reason counts can exceed unique failed loci and their
+percentages can sum to more than 100%. Each complete failure combination counts
+a locus exactly once. No arbitrary primary failure reason is assigned.
+
+Raw/trimmed length comparisons use the intersection of actually included gene
+partitions within each representation/selection, rather than comparing different
+locus sets. Final matrix statistics still describe each matrix's actual locus
+set. Paired refers to matched codon/protein loci within raw or trimmed outputs;
+it does not impose a shared raw/trimmed retention set.
+
+Missing (`?`), alignment gaps (`-`), and unresolved characters (including nucleotide
+`N` or protein `X`) are reported separately. Only matching `supermatrix.missing.tsv`
+and gene partitions establish artificial missing blocks and locus occupancy;
+existing literal `?` characters are not assumed to be padding. A header-only
+missing table means zero artificial blocks; an absent table means **Unavailable**.
+Fourfold source-locus counts are not assumed to equal the parent matrix's count.
+Resolved states alone determine variable/PIS/constant columns; columns containing
+no resolved states are separate. GC uses resolved A/C/G/T only. NT and AA event
+coordinate spans have separate units and can include overlapping changes.
+
+Keep `qc/`, `reports/`, `matrices/`, alignment path lists, and (when present)
+`phyloprep-run.json` together for the most complete report. Older or partial
+folders remain usable: missing records are explicitly labeled unavailable rather
+than treated as zero. The canonical `reports/sequence_changes.tsv` is read once,
+with identical rows deduplicated; per-locus copies are not added again. The script
+does not load original input FASTA paths or rerun alignments. Matrix sequences
+are read in bounded blocks using temporary disk storage, which is removed after
+report generation. Existing result files are not modified.
+
 ```text
 results/
   renamed/<type>/<raw|trimmed>/    # passing matrices after -m ID mapping
