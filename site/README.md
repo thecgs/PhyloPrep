@@ -190,6 +190,10 @@ This temporary working cache is browser-managed OPFS storage, separate from the 
 
 This trades additional local disk I/O and quota usage for lower retained memory. Input strings, parsed records for the current locus, filesystem metadata and Python objects still consume memory; neither OPFS nor streaming renaming raises the WebAssembly heap limit. Renamed files reach the authorized output folder at the existing branch checkpoints, while their working copies are disk-backed from the first write.
 
+### Bounded matrix derivatives and format conversion
+
+Codon-position splitting, fourfold-site extraction and PHYLIP/NEXUS conversion use a shared disk spool and bounded sequence blocks, including FASTA records written on one very long line. They do not materialize the complete supermatrix as Python sequence lists. Fourfold extraction intersects eligible columns in blocks before emitting third positions; export normalization edits are spooled rather than retained as a list. NEXUS retains a small page per taxon for interleaving. Temporary files are placed beside outputs so they use the OPFS workspace during disk-backed finalization; CLI stdout conversion uses the system temporary directory. Fourfold output validation also uses the bounded reader. These changes reduce matrix-sized allocations without increasing the WebAssembly heap limit.
+
 ### Alignment filenames
 
 CLI and browser alignment outputs use the explicit FASTA suffix: `GENE.ALIGNER.TYPE.aln.fasta` for untrimmed alignments and `GENE.ALIGNER.TYPE.trimmed.aln.fasta` for trimmed alignments. Batch pathlists are named `all.TYPE.aln.fasta.pathlist` and `all.TYPE.trimmed.aln.fasta.pathlist`. The file contents remain FASTA; QC, provenance matching, paired trimming and concatenation use the same naming convention.

@@ -383,9 +383,11 @@ python calulate_4dtv_and_correction.py -i pairwise.pathlist -o 4dtv.tsv -g 1
 
 Its TSV columns are described in the [4DTV section](#divergence-statistics-4dtv-and-related-values).
 
-### `sequence_audit.py` and `msap_io.py` — internal libraries
+### `sequence_audit.py`, `msap_io.py` and `msap_matrix.py` — internal libraries
 
 These are imported by workflow scripts. They implement normalization, MACSE provenance, report merging, FASTA/path-list validation, stop-codon logic, atomic writes, and output-path protection.
+
+`msap_matrix.py` provides a bounded disk-backed reader for supermatrix derivatives and PHYLIP/NEXUS conversion. Codon-position splitting, fourfold-site selection, export normalization reports and fourfold validation avoid retaining whole concatenated matrices in Python. Temporary files are created beside outputs, including inside the browser's OPFS workspace when active.
 
 ## QC and tree building
 

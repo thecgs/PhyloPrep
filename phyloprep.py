@@ -19,8 +19,9 @@ import tempfile
 from msap_progress import ProgressReporter, progress_context, report_phase, heartbeat
 from sequence_audit import normalize_workflow, merge_reports
 from MSAP_batch import build_parser as batch_parser
-from msap_io import (atomic_output, expand_input_paths, read_fasta_alignment,
+from msap_io import (atomic_output, expand_input_paths,
                      file_digest, file_signature, read_json, NoGenesIncludedError)
+from msap_matrix import AlignmentSpool
 from rename_taxa import rename_fasta, read_mapping_snapshot, normalized_taxon_id
 
 SCRIPTS = Path(__file__).resolve().parent
@@ -664,6 +665,7 @@ def build_group_matrices(args, root, context):
 
     supermatrix = stage / "supermatrix.fasta"
     try:
+        report_phase(args, f'{variant}/{seqtype}: concatenating loci')
         run("get_supergenes.py", "-i", passed, "-p", stage / "supermatrix",
             "--missing-taxa", args.missing_taxa, "--no-phylip")
     except subprocess.CalledProcessError as error:
@@ -692,14 +694,17 @@ def build_group_matrices(args, root, context):
 
     matrices = [supermatrix]
     if seqtype == 'codon':
+        report_phase(args, f'{variant}/{seqtype}: splitting codon positions')
         run("split_codon_seqence_alignment.py", "-i", supermatrix, cwd=stage)
         matrices.extend(stage / f"codon{position}.supermatrix.fasta"
                         for position in ("1st", "2nd", "3rd"))
         fourfold = stage / "fourfold.fasta"
+        report_phase(args, f'{variant}/{seqtype}: extracting four-fold sites')
         run("extract_4-fold_degenerated_sites.py", "-i", supermatrix,
             "-o", fourfold, "-g", args.genetic_code)
         try:
-            read_fasta_alignment(fourfold)
+            with AlignmentSpool(fourfold, directory=fourfold.parent):
+                pass
         except ValueError as error:
             if args.seqtype != 'pseudogene':
                 raise ValueError(f"No usable four-fold matrix for {seqtype}/{variant} "

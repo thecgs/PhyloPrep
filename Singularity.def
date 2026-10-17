@@ -20,6 +20,7 @@ From: ubuntu:22.04
     filter_sequences.py /opt/phyloprep/filter_sequences.py
     get_supergenes.py /opt/phyloprep/get_supergenes.py
     msap_io.py /opt/phyloprep/msap_io.py
+    msap_matrix.py /opt/phyloprep/msap_matrix.py
     oma_to_orthogroups.py /opt/phyloprep/oma_to_orthogroups.py
     orthogroup_table.py /opt/phyloprep/orthogroup_table.py
     orthomcl_to_orthogroups.py /opt/phyloprep/orthomcl_to_orthogroups.py

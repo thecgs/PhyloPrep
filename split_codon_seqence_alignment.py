@@ -3,22 +3,29 @@
 
 import os
 import argparse
-from msap_io import atomic_output, check_output_path, read_fasta_alignment
+from contextlib import ExitStack
+from msap_matrix import AlignmentSpool
+from msap_io import atomic_output, check_output_path
 
 def get_prefix(infile):
     return os.path.splitext(os.path.basename(infile))[0]
 
 def split(infile):
 
-    records = read_fasta_alignment(infile, codon=True)
     outputs = [f"codon{position}.{get_prefix(infile)}.fasta" for position in ("1st", "2nd", "3rd")]
     for outfile in outputs:
         check_output_path(outfile, [infile])
-    for offset, outfile in enumerate(outputs):
-        with atomic_output(outfile, inputs=[infile]) as out:
-            for record in records:
-                print(f">{record.id}\n{record.seq[offset::3]}", file=out)
-    
+    with AlignmentSpool(infile, codon=True, directory=os.getcwd()) as matrix, ExitStack() as stack:
+        handles = [stack.enter_context(atomic_output(path, inputs=[infile])) for path in outputs]
+        for index, (identifier, _, _) in enumerate(matrix.records):
+            for handle in handles:
+                handle.write(f'>{identifier}\n')
+            for chunk in matrix.chunks(index):
+                for offset, handle in enumerate(handles):
+                    handle.write(chunk[offset::3])
+            for handle in handles:
+                handle.write('\n')
+
     return None
 
 if __name__ == '__main__':

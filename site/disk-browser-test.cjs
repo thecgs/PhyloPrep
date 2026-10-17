@@ -58,7 +58,9 @@ const server = http.createServer((req,res) => {
   const result=await page.evaluate(async()=>{
     const folder=await (await navigator.storage.getDirectory()).getDirectoryHandle('outputs',{create:true});
     outputDirectoryHandle=folder; outputSaveSession=createOutputSaveSession(folder);producedFiles=new Map();
-    const dna='>gene_a\nATGGCT\n>gene_b\nATGGCT\n', protein='>gene_a\nMA\n>gene_b\nMA\n';
+    // Concatenation crosses the bounded-reader block boundary (>65,535 bases).
+    const unit='ATGGCT'.repeat(2000), amino='MA'.repeat(2000);
+    const dna=`>gene_a\n${unit}\n>gene_b\n${unit}\n`, protein=`>gene_a\n${amino}\n>gene_b\n${amino}\n`;
     const batch=[], sources=[];
     const loci=6;
     for(let locus=0;locus<loci;locus++) {
@@ -82,8 +84,12 @@ const server = http.createServer((req,res) => {
     const renamed=result.files.filter(file=>file.name.startsWith('renamed/'));
     const matrix=result.files.find(file=>file.name==='matrices/codon/raw/supermatrix.fasta');
     const paired=result.files.find(file=>file.name==='matrices/paired/codon/raw/supermatrix.fasta');
-    const expected=`>sp_a\n${'ATGGCT'.repeat(loci)}\n>sp_b\n${'ATGGCT'.repeat(loci)}\n`;
+    const expected=`>sp_a\n${unit.repeat(loci)}\n>sp_b\n${unit.repeat(loci)}\n`;
     if(await PhyloPrepSave.readText(matrix)!==expected||await PhyloPrepSave.readText(paired)!==expected)throw Error('Matrix changed');
+    const fourfold=result.files.find(file=>file.name==='matrices/codon/raw/fourfold.fasta');
+    const third=result.files.find(file=>file.name==='matrices/codon/raw/codon3rd.supermatrix.fasta');
+    if(await PhyloPrepSave.readText(fourfold)!==`>sp_a\n${'T'.repeat(2000*loci)}\n>sp_b\n${'T'.repeat(2000*loci)}\n`)throw Error('Fourfold matrix changed across blocks');
+    if(await PhyloPrepSave.readText(third)!==`>sp_a\n${'GT'.repeat(2000*loci)}\n>sp_b\n${'GT'.repeat(2000*loci)}\n`)throw Error('Codon-position matrix changed across blocks');
     generatedFiles=result.files;renderGeneratedFiles();selectedGeneratedFileIndex=result.files.indexOf(matrix);
     await previewGeneratedFile(matrix);
     if(elements.preview.textContent!==expected||matrix.content!==undefined)throw Error('Lazy preview failed');

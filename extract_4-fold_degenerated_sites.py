@@ -2,10 +2,12 @@
 # coding: utf-8
 
 import argparse
-from Bio import SeqIO
+import tempfile
+from pathlib import Path
+from msap_matrix import AlignmentSpool, CHUNK_SIZE
 from Bio.Data import CodonTable
 from collections import defaultdict
-from msap_io import atomic_output
+from msap_io import atomic_output, check_output_path
 
 def get_four_fold_codons(genetic_code=1):
     """
@@ -28,83 +30,41 @@ def get_four_fold_codons(genetic_code=1):
     return four_fold_codons
     
 def extract_four_fold_site(infile, outfile, genetic_code=1):
-    """
-    Extract four-fold degenerate codons from a codon-aligned FASTA.
-
-    This version:
-      - avoids dict/Counter/list creation inside the codon loop
-      - uses list.append() instead of repeated string concatenation
-      - stops checking a site immediately when one sequence fails
-      - converts Bio.Seq objects to str only once
-    """
-
-    ids = []
-    seqs = []
-
-    for record in SeqIO.parse(infile, "fasta"):
-        ids.append(record.id)
-        seqs.append(str(record.seq).upper().replace('U', 'T'))
-
-    if not seqs:
-        raise ValueError("No sequences found in input FASTA.")
-
-    nseq = len(seqs)
-    matrix_length = len(seqs[0])
-
-    # Check alignment lengths once
-    for seq in seqs[1:]:
-        if len(seq) != matrix_length:
-            raise ValueError("Sequences have different lengths.")
-
-    if matrix_length % 3 != 0:
-        raise ValueError(
-            f"Alignment length ({matrix_length}) is not divisible by 3."
-        )
-
+    """Intersect qualifying codons in bounded blocks, then stream third bases."""
+    check_output_path(outfile, [infile])
+    directory = Path(outfile).absolute().parent
     four_fold_codons = get_four_fold_codons(genetic_code)
-
-    # One list for each sequence
-    output = [[] for _ in range(nseq)]
-
-    for pos in range(0, matrix_length, 3):
-        #print(str(round((pos+3)/matrix_length*100, 2)) + " %", end='\r')
-        
-        # Use the first sequence as reference
-        codon0 = seqs[0][pos:pos + 3]
-
-        # If reference itself is not four-fold, reject immediately
-        if codon0 not in four_fold_codons:
-            continue
-
-        prefix = codon0[:2]
-
-        valid = True
-
-        # Start from sequence 2
-        for j in range(1, nseq):
-            codon = seqs[j][pos:pos + 3]
-
-            # This checks both:
-            # 1. same first two bases
-            # 2. valid four-fold codon
-            if codon[:2] != prefix or codon not in four_fold_codons:
-                valid = False
-                break
-
-        if not valid:
-            continue
-
-        # Site passed all checks.
-        # Append complete codon.
-        for j in range(nseq):
-            #output[j].append(seqs[j][pos:pos + 3])
-            output[j].append(seqs[j][pos + 2])
-
-    with atomic_output(outfile, inputs=[infile]) as out:
-        for seq_id, fragments in zip(ids, output):
-            out.write(f">{seq_id}\n")
-            out.write("".join(fragments))
-            out.write("\n")
+    with AlignmentSpool(infile, codon=True, directory=directory,
+                        transform=lambda _, chunk, offset: chunk.upper().replace('U', 'T')) as matrix, \
+            tempfile.TemporaryFile(mode='w+b', dir=directory) as mask:
+        positions = [record[1] for record in matrix.records]
+        for start in range(0, matrix.length, CHUNK_SIZE):
+            size = min(CHUNK_SIZE, matrix.length - start)
+            reference = None
+            keep = bytearray(size // 3)
+            for index in range(len(matrix.records)):
+                matrix.file.seek(positions[index])
+                chunk = matrix.file.read(size)
+                positions[index] = matrix.file.tell()
+                if reference is None:
+                    reference = chunk
+                    for site, pos in enumerate(range(0, size, 3)):
+                        keep[site] = chunk[pos:pos + 3] in four_fold_codons
+                else:
+                    for site, pos in enumerate(range(0, size, 3)):
+                        if keep[site]:
+                            codon = chunk[pos:pos + 3]
+                            if codon not in four_fold_codons or codon[:2] != reference[pos:pos + 2]:
+                                keep[site] = 0
+            mask.write(keep)
+        with atomic_output(outfile, inputs=[infile]) as out:
+            for index, (identifier, _, _) in enumerate(matrix.records):
+                out.write(f'>{identifier}\n')
+                mask.seek(0)
+                for chunk in matrix.chunks(index):
+                    keep = mask.read(len(chunk) // 3)
+                    out.write(''.join(chunk[site * 3 + 2] for site, retain in enumerate(keep) if retain))
+                out.write('\n')
     return None
 
 if __name__ == '__main__':

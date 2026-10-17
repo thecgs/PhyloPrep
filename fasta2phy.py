@@ -2,25 +2,33 @@
 # coding: utf-8
 
 import argparse
-from msap_io import atomic_output, read_fasta_alignment, check_output_path
-from sequence_audit import normalize_export_records, write_report
+from pathlib import Path
+from msap_io import atomic_output, check_output_path
+from fasta2nex import prepare_records
 
 def fasta2phy(infile, outfile, seqtype='DNA', changes_report=None):
 
-    records = read_fasta_alignment(infile)
-    changes, protein = normalize_export_records(records, infile, seqtype)
-    if changes:
-        if changes_report is None:
-            if outfile is None:
-                raise ValueError('Use --changes-report when normalizing input while writing PHYLIP to stdout')
-            changes_report = str(outfile) + '.sequence_changes.tsv'
-        check_output_path(changes_report, inputs=[infile, outfile])
-    with atomic_output(outfile, inputs=[infile]) as out:
-        out.write(f'{len(records)} {len(records[0].seq)}\n')
-        for record in records:
-            out.write(f'{record.id}  {str(record.seq).upper()}\n')
-    if changes:
-        write_report(changes_report, changes, protein=protein)
+    check_output_path(outfile, inputs=[infile])
+    matrix, changes = prepare_records(infile, seqtype, Path(outfile).absolute().parent if outfile else None)
+    try:
+        if changes:
+            if changes_report is None:
+                if outfile is None:
+                    raise ValueError('Use --changes-report when normalizing input while writing PHYLIP to stdout')
+                changes_report = str(outfile) + '.sequence_changes.tsv'
+            check_output_path(changes_report, inputs=[infile, outfile])
+        with atomic_output(outfile, inputs=[infile]) as out:
+            out.write(f'{len(matrix.records)} {matrix.length}\n')
+            for index, (identifier, _, _) in enumerate(matrix.records):
+                out.write(f'{identifier}  ')
+                for chunk in matrix.chunks(index):
+                    out.write(chunk)
+                out.write('\n')
+        if changes:
+            changes.publish(changes_report)
+    finally:
+        matrix.close()
+        changes.close()
     return None
 
 if __name__ == '__main__':
