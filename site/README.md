@@ -161,7 +161,7 @@ In `all-copies` mode, **Maximum copies per taxon** (`--max-copies-per-taxon`) de
 
 Concatenation now uses two passes, temporary taxon spools and chunked output rather than retaining every locus plus complete joined matrices in Python. Spools are released taxon by taxon during final output. Browser MEMFS still consumes memory for temporary and final files. Captured stdout/stderr each retain only a tail of up to 65,536 characters (and at most 1,024 fragments), with an explicit truncation marker. Browser entry points return a pre-serialized short diagnostic on MemoryError, avoiding traceback/log collection and another JSON allocation while memory is exhausted. These changes reduce duplication; they do not guarantee that an arbitrarily large dataset fits in Pyodide.
 
-Run progress is mirrored in the main workspace log as well as the stage label. Input preparation reports resolved path counts, read file counts and elapsed time before worker execution; output saving reports completed file counts and the current file. Pathlist folder roots are indexed once instead of rescanned for each entry.
+Detailed run progress is shown in the main workspace log. The status beside Repository and the Workflow status label show only the broad phase (Checking input, Processing locally or Saving output), plus completion, cancellation or errors; locus names, aligner steps and elapsed-time ticks do not change these labels. Input preparation reports resolved path counts, read file counts and elapsed time before worker execution; output saving reports completed file counts and the current file. Pathlist folder roots are indexed once instead of rescanned for each entry.
 
 
 ### Incremental saving to an authorized folder

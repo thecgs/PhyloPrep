@@ -954,7 +954,11 @@ function updateCommand() {
 }
 
 function setRunStage(stage = 0, label = "Ready to run", failed = false) {
-  elements.runStageLabel.textContent = label;
+  const activeLabels = { 1: "Checking input", 2: "Processing locally", 3: "Saving output" };
+  const active = stage > 0 && stage < 4 && !failed && label !== "Run cancelled";
+  const status = active ? activeLabels[stage] : label;
+  if (elements.runStageLabel.textContent !== status) elements.runStageLabel.textContent = status;
+  if (elements.runtimeStatus.textContent !== status) elements.runtimeStatus.textContent = status;
   if (elements.run.disabled && stage > 0 && stage < 4 && !failed) setLog(label);
   [...elements.runStages.querySelectorAll(".run-stage")].forEach((item) => {
     const number = Number(item.dataset.stage);
@@ -1371,7 +1375,6 @@ function createPyodideWorker() {
     pyodideWorker = undefined;
     worker.terminate();
     elements.cancelRun.hidden = true;
-    elements.runtimeStatus.textContent = "Local worker stopped";
     run?.reject(error instanceof Error ? error : new Error(String(error)));
   }
   worker.addEventListener("message", (event) => {
@@ -1417,10 +1420,8 @@ function createPyodideWorker() {
       }
       if (message.type === "stage") {
         if (message.stage === "runtime") {
-          elements.runtimeStatus.textContent = `${message.label}…`;
           setRunStage(2, message.label);
         } else if (message.stage === "process") {
-          elements.runtimeStatus.textContent = "Local worker running";
           setRunStage(2, message.label);
         }
         return;
@@ -1431,7 +1432,6 @@ function createPyodideWorker() {
         const render = () => {
           const elapsed = progress.elapsed_seconds + (performance.now() - received) / 1000;
           const label = `${progress.completed}/${progress.total} ${progress.unit} · ${progress.label} · ${Math.round(elapsed)}s elapsed`;
-          elements.runtimeStatus.textContent = label;
           setRunStage(2, label);
         };
         clearInterval(activeWorkerRun.progressTimer);
@@ -1446,7 +1446,6 @@ function createPyodideWorker() {
       const run = activeWorkerRun;
       clearInterval(run.progressTimer);
       if (message.type === "result") {
-        elements.runtimeStatus.textContent = "Local worker ready";
         try {
           if (message.result.files?.some(file => file.path)) {
             message.result.files = message.result.files.map((file, index) => {
@@ -1489,7 +1488,6 @@ function runInWorker(payload) {
 function cancelActiveRun() {
   if (cancelAlignmentRun()) {
     elements.cancelRun.hidden = true;
-    elements.runtimeStatus.textContent = "Alignment stopped";
     return;
   }
   if (!activeWorkerRun) return;
@@ -1499,7 +1497,6 @@ function cancelActiveRun() {
   pyodideWorker?.terminate();
   pyodideWorker = undefined;
   elements.cancelRun.hidden = true;
-  elements.runtimeStatus.textContent = "Local worker stopped";
   run.reject(cancellationError());
 }
 
@@ -1735,18 +1732,15 @@ function cancelAlignmentRun() {
 
 async function runMsapBrowserWorkflow(request) {
   setRunStage(2, "Preparing input with original MSAP.py");
-  elements.runtimeStatus.textContent = "Preparing MSAP.py workflow";
   const probe = await runInWorker({ type: "msap-probe", ...request });
   if (!probe.alignmentInput) throw new Error("MSAP.py did not provide an input for the selected browser aligner.");
 
   const alignerLabel = externalAlignerLabel(probe.tool);
   elements.cancelRun.hidden = false;
   setRunStage(2, `Running ${alignerLabel}`);
-  elements.runtimeStatus.textContent = `${alignerLabel} running`;
   const alignmentContent = await runBrowserAlignment(probe.alignmentInput, probe.tool, request.options.seqtype || "codon");
 
   setRunStage(2, "Finishing original MSAP.py workflow");
-  elements.runtimeStatus.textContent = "Finishing MSAP.py workflow";
   elements.cancelRun.hidden = false;
   return runInWorker({ type: "msap-complete", ...request, alignmentContent, deferPublish: true });
 }
@@ -1797,7 +1791,6 @@ function showLocusProgress(completed, total, started, label) {
   const elapsed = (performance.now() - started) / 1000;
   const eta = completed ? ` · estimated remaining ${Math.round(elapsed * (total - completed) / completed)}s` : "";
   const text = `${completed}/${total} loci complete · ${label} · ${Math.round(elapsed)}s elapsed${eta}`;
-  elements.runtimeStatus.textContent = text;
   setRunStage(2, text);
 }
 
@@ -1864,7 +1857,6 @@ async function runPhyloPrepBrowserWorkflow(request) {
     ...batchProducts,
   ];
   setRunStage(2, "Running PhyloPrep QC and matrix construction");
-  elements.runtimeStatus.textContent = "PhyloPrep matrix construction";
   const result = await runInWorker({
     type: "phyloprep-finalize",
     script: "phyloprep.py",
@@ -2015,7 +2007,6 @@ async function runBrowserModule() {
     if (!force && now - preparationLastRender < 100) return;
     preparationLastRender = now;
     const label = `${preparationLabel} · ${Math.round((now - preparationStarted) / 1000)}s elapsed`;
-    elements.runtimeStatus.textContent = label;
     setRunStage(1, label);
   };
   const preparationTimer = setInterval(() => renderPreparation(true), 1000);
