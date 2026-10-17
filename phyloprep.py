@@ -78,7 +78,7 @@ matrices are published only after all requested conversions succeed.
     pipeline.add_argument("-m", "--mapping", "--map", metavar="TSV",
                           help="Rename all alignment IDs using this two-column mapping table before QC and concatenation.")
     pipeline.add_argument("--missing-taxa", choices=["skip-gene", "pad-gaps"],
-                          default="skip-gene", help="Missing-taxon policy (default: skip-gene).")
+                          default="skip-gene", help="Missing-taxon policy: pad-gaps fills absent sequences with ? (default: skip-gene).")
     qc = parser.add_argument_group("alignment QC options (same defaults as alignment_qc.py)")
     for name, (kind, default) in QC_VALUES.items():
         unit = " (nt for nucl, aa for prot, complete codons for codon)" if name == "min_length" else ""

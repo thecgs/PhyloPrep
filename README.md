@@ -115,7 +115,7 @@ flowchart LR
 | `-m TSV` | Two-column gene-ID/taxon-ID mapping applied after MSA and before QC/concatenation. |
 | `-st` | `codon`, `nucl`, `prot`, or `pseudogene`. |
 | `-t N`, `-j N` | MAFFT/MUSCLE threads and concurrent jobs. |
-| `--missing-taxa` | `skip-gene` or `pad-gaps` during concatenation. |
+| `--missing-taxa` | `skip-gene` excludes incomplete loci; `pad-gaps` fills missing sequences with `?` during concatenation. |
 | `--min-length`, `--max-*-ratio` | Representation-specific QC thresholds. Independent matrices use each side's own QC and PIS threshold. Additional paired matrices require both sides to pass non-PIS QC, then apply `--paired-pis-policy`. |
 | `--allow-internal-stop` | Retain a protein locus or paired codon/protein locus when an internal stop is observed directly or recorded by preprocessing as masked to `NNN/X`. The masked state is not restored. |
 | `--paired-pis-policy` | `both` (default), `either`, `codon`, or `protein`; controls how paired codon/protein PIS decisions are combined while keeping the final locus set identical in both matrices. |
@@ -134,6 +134,56 @@ The complete workflow automatically removes terminal stops from CDS and protein 
 `phyloprep.py` reports alignment, raw/trimmed QC and matrix preparation, dataset export, and publication. Stage counts describe completed stages, not a percentage of compute time. Long-running CLI subprocesses refresh elapsed time periodically. Browser batch workflows update locus counts and elapsed time live; Python QC/matrix stages stream progress to the browser and the interface refreshes elapsed time while a stage runs. Pipeline results return a metadata-only file manifest; contents are transferred separately in acknowledged 1 MiB chunks, avoiding a single JSON containing every output. Output browsing places `phyloprep-run.json` first, followed by `reports/`, `matrices/`, `qc/`, and other files. Folder filters, filename search, and 200-file pages keep very large result sets responsive. Filtering and pagination do not remove outputs or change save-all/download-all behavior. Previews are capped while downloads remain complete. Download links remain valid for the page lifetime and are reused for retries; they are not revoked after a one-second timeout. Where supported, saving directly to a chosen file writes ZIP parts sequentially to reduce archive memory peaks. Selecting an output folder also allows saving all current results there without rebuilding a ZIP. ZIP32 size/count limits are checked explicitly; oversized archives should be saved as individual files to a folder. Browser download requests are labelled as requested, not falsely reported as completed. This reduces serialization peaks but does not eliminate the memory required for alignment or retained browser output. ETA is an estimate based on completed loci and can be inaccurate for heterogeneous or resumed inputs. Progress reporting uses Python's standard library, with the existing browser's native JavaScript APIs for display and no additional progress dependencies.
 
 ## Outputs and audit reports
+
+### Offline HTML analysis report
+
+After either a CLI run or saving the browser's complete output folder, run:
+
+```bash
+python phyloprep_report.py -i phyloprep-output
+```
+
+The only analysis input is the final output directory. The independently runnable
+script uses **Python's standard library only** and writes
+`phyloprep-output/phyloprep-report.html`. All report labels are in English. The
+single HTML file embeds SVG charts and summary data, requires no internet
+connection, and offers chart SVG export, summary JSON download, and print/PDF.
+The report is generated on demand; existing CLI/browser analyses do not incur
+the additional matrix-statistics calculation automatically.
+
+The report includes locus-processing counts; per-branch QC outcomes, overlapping
+exclusion reasons and mutually exclusive complete reason combinations; statistics
+recomputed from each final FASTA matrix; source sequence-change events by taxon;
+taxon-by-matrix locus occupancy; and available run provenance. QC pass counts and
+actual concatenation inclusion are reported separately. One failed locus can
+have several reasons, so reason counts can exceed unique failed loci and their
+percentages can sum to more than 100%. Each complete failure combination counts
+a locus exactly once. No arbitrary primary failure reason is assigned.
+
+Raw/trimmed length comparisons use the intersection of actually included gene
+partitions within each representation/selection, rather than comparing different
+locus sets. Final matrix statistics still describe each matrix's actual locus
+set. Paired refers to matched codon/protein loci within raw or trimmed outputs;
+it does not impose a shared raw/trimmed retention set.
+
+Missing (`?`), alignment gaps (`-`), and unresolved characters (including nucleotide
+`N` or protein `X`) are reported separately. Only matching `supermatrix.missing.tsv`
+and gene partitions establish artificial missing blocks and locus occupancy;
+existing literal `?` characters are not assumed to be padding. A header-only
+missing table means zero artificial blocks; an absent table means **Unavailable**.
+Fourfold source-locus counts are not assumed to equal the parent matrix's count.
+Resolved states alone determine variable/PIS/constant columns; columns containing
+no resolved states are separate. GC uses resolved A/C/G/T only. NT and AA event
+coordinate spans have separate units and can include overlapping changes.
+
+Keep `qc/`, `reports/`, `matrices/`, alignment path lists, and (when present)
+`phyloprep-run.json` together for the most complete report. Older or partial
+folders remain usable: missing records are explicitly labeled unavailable rather
+than treated as zero. The canonical `reports/sequence_changes.tsv` is read once,
+with identical rows deduplicated; per-locus copies are not added again. The script
+does not load original input FASTA paths or rerun alignments. Matrix sequences
+are read in bounded blocks using temporary disk storage, which is removed after
+report generation. Existing result files are not modified.
 
 ```text
 results/
@@ -231,7 +281,7 @@ In the complete `phyloprep.py -st codon` workflow the merged `reports/sequence_c
 
 ### `get_supergenes.py` — supermatrix and partitions
 
-Concatenates aligned genes and writes `PREFIX.fasta`, `PREFIX.phy`, a report, and partition files. `skip-gene` excludes incomplete loci; `pad-gaps` retains them with gaps.
+Concatenates aligned genes and writes `PREFIX.fasta`, `PREFIX.phy`, a report, and partition files. `skip-gene` excludes incomplete loci; `pad-gaps` retains them by filling absent sequences with `?`, while preserving original alignment gaps as `-`. A sparse `PREFIX.missing.tsv` records only artificial missing blocks, using 1-based inclusive coordinates in the full concatenated matrix (nt for nucleotide/codon matrices, aa for protein matrices). It contains `locus`, `taxon`, `start`, `end`, `length` and `fill_character`; the locus ID matches the partition name. With no padded blocks, the table contains its header only.
 
 ```bash
 python get_supergenes.py -i qc/alignment.pass.tsv -p matrices/supermatrix --missing-taxa pad-gaps
@@ -524,3 +574,11 @@ During full-pipeline finalization with an output folder, supported browsers use 
 The browser verifies the SHA256 of bundled Python sources and its browser adapter before execution, using content-addressed source assets. Run parameters and the equivalent CLI command are captured at startup. Existing output fingerprints are reused when building the run manifest to reduce memory duplication for large matrices.
 
 Browser inputs are staged lazily from File/Blob references, and large exports remain binary until saved. With a selected output folder, completed loci can be reused after verifying input content, relevant alignment settings/source versions and saved output checksums. Per-locus checkpoints in `reports/alignment-cache/` support reuse after interrupted workflows; a compatible prior `phyloprep-run.json` also works. QC/mapping changes rebuild renaming, QC and matrices while preserving compatible alignment work. **Recompute existing alignments** (`--no-resume`) forces alignment/trimming to rerun. Saved files without matching provenance are recomputed. Idle WebAssembly workers are released between alignment and finalization and after completion.
+
+### Artificial missing data in concatenated matrices
+
+Artificial padding uses `?`, an existing alignment gap remains `-`, and observed sequence ambiguity remains `N`/`X`. The existing policy name `--missing-taxa pad-gaps` is retained, but its fill character is now `?`. FASTA, relaxed PHYLIP, NEXUS and the simplified AXT exporter preserve `?`; NEXUS declares `missing=? gap=-`. Codon padding consists of complete `???` triplets, and codon-position derivatives preserve their corresponding `?` characters. Fourfold extraction retains its strict all-taxon eligibility rule: missing/gapped codons do not qualify. Raw-input normalization still maps source `?` to N/X; preservation applies to aligned-data export.
+
+The sparse missing-block table is the authoritative record of artificial padding: a literal `?` already present in an input alignment is preserved but is not recorded as newly padded data. `alignment_qc.py` reports `Missing_ratio` separately from `Gap_ratio` and N/X ratios; it counts literal `?` characters and cannot establish their origin without the missing-block table. Missing states do not contribute resolved states to variable/PIS counts. Existing gap and N/X thresholds retain their literal-symbol definitions; no new missing-data threshold is introduced.
+
+IQ-TREE and standard PAML/MrBayes analyses can interpret `?` as missing data. In PAML, `cleandata=1` removes affected sites (whole codons in codon analysis) whether they contain `-` or `?`; changing the marker does not prevent that loss. Check the accepted symbols of other downstream importers, particularly Ka/Ks tools consuming the simplified AXT format. These markers do not establish biological gene absence or prove that every alignment gap is an indel.

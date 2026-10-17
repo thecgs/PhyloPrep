@@ -44,6 +44,7 @@ def alignment_stats(path, seqtype="nucl", records=None):
         ambiguity_total = sum(lengths)
     result = {"file": str(path), "seqtype": seqtype, "sequence_count": len(seqs),
               "alignment_length": nchar, "gap_ratio": sum(s.count("-") for s in seqs) / (sum(lengths) or 1),
+              "missing_ratio": sum(s.count("?") for s in seqs) / (sum(lengths) or 1),
               "variable_sites": 0, "parsimony_informative_sites": 0,
               "distinct_patterns": 0, "singleton_sites": 0, "constant_sites": 0,
               ("X_ratio" if seqtype == "prot" else "N_ratio"): ambiguity_count / (ambiguity_total or 1)}
@@ -169,6 +170,8 @@ def alignment_qc(path: str, seqtype: str, genetic_code: int = 1,
             "length": len(sequence),
             "gap_count": sequence.count("-"),
             "gap_ratio": sequence.count("-") / len(sequence) if sequence else 0.0,
+            "missing_count": sequence.count("?"),
+            "missing_ratio": sequence.count("?") / len(sequence) if sequence else 0.0,
             "n_count": sequence.count("N"),
             "n_ratio": sequence.count("N") / len(sequence) if sequence else 0.0,
             "x_count": sequence.count("X"),
@@ -184,13 +187,13 @@ def alignment_qc(path: str, seqtype: str, genetic_code: int = 1,
             row["terminal_stop"] = "NA"
             row["internal_stop_count"] = "NA"
             if len(sequence) % 3 == 0 and sequence:
-                occupied = [i for i, codon in enumerate(codons) if codon != '---']
+                occupied = [i for i, codon in enumerate(codons) if codon not in {'---', '???'}]
                 last = occupied[-1] if occupied else -1
                 row["terminal_stop"] = codons[last] if last >= 0 and is_stop_codon(codons[last], genetic_code) else "NA"
                 hits = [f"{i + 1}-{codon}" for i, codon in enumerate(codons) if i != last and is_stop_codon(codon, genetic_code)]
                 row["internal_stop_count"] = ";".join(hits) if hits else "NA"
         elif actual_type == "prot":
-            occupied = [i for i, residue in enumerate(sequence) if residue != "-"]
+            occupied = [i for i, residue in enumerate(sequence) if residue not in "-?"]
             last = occupied[-1] if occupied else -1
             row["terminal_stop"] = "*" if last >= 0 and sequence[last] == "*" else "NA"
             hits = [f"{i + 1}-*" for i, residue in enumerate(sequence)
@@ -213,7 +216,8 @@ def alignment_qc(path: str, seqtype: str, genetic_code: int = 1,
     if actual_type == "codon" and aligned and alignment_length % 3 == 0:
         valid_sites = sum(
             1 for start in range(0, alignment_length - 2, 3)
-            if all("-" not in sequence[start:start + 3] for sequence in columns)
+            if all('-' not in sequence[start:start + 3] and '?' not in sequence[start:start + 3]
+                   for sequence in columns)
         )
     issues = []
     if duplicate_ids:
@@ -257,14 +261,14 @@ def write_qc_reports(results, passed, failed, prefix, seqtype):
     summary = ["File", "Seqtype", "Sequence_count", "Alignment_length",
                "N_ratio" if seqtype != "prot" else "X_ratio", "Gap_ratio",
                "Variable_sites", "Parsimony_informative_sites", "Distinct_patterns",
-               "Singleton_sites", "Constant_sites"]
+               "Singleton_sites", "Constant_sites", "Missing_ratio"]
     def rows(items):
         for r in items:
             s = r["alignment_stats"]
             yield [str(Path(r["file"]).resolve()), s["seqtype"], s["sequence_count"],
                    s["alignment_length"], s["N_ratio" if seqtype != "prot" else "X_ratio"],
                    s["gap_ratio"], s["variable_sites"], s["parsimony_informative_sites"],
-                   s["distinct_patterns"], s["singleton_sites"], s["constant_sites"]]
+                   s["distinct_patterns"], s["singleton_sites"], s["constant_sites"], s["missing_ratio"]]
     for suffix, items in ((".pass.tsv", passed), (".fail.tsv", failed)):
         with atomic_output(str(prefix) + suffix) as handle:
             w = csv.writer(handle, delimiter="\t"); w.writerows(([row[0]] for row in rows(items)))

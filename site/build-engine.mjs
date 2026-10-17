@@ -11,6 +11,7 @@ const sourceFiles = [
   "MSAP.py",
   "MSAP_batch.py",
   "phyloprep.py",
+  "phyloprep_report.py",
   "extract_orthofinder_orthogroups.py",
   "oma_to_orthogroups.py",
   "orthogroup_table.py",

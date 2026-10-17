@@ -87,7 +87,7 @@ if (alignmentWorker.includes('"mafft/7.520"')) throw new Error("Biowasm MAFFT ha
 
 if (!app.includes("CLI -s mafft runs upstream mafft --auto")) throw new Error("The Web/CLI MAFFT difference must be disclosed in the command preview.");
 
-const missingTaxaOptions = 'options: [["skip-gene", "skip-gene"], ["pad-gaps", "pad-gaps"]]';
+const missingTaxaOptions = 'options: [["skip-gene", "skip-gene"], ["pad-gaps", "pad-gaps (fill with ?)"]]';
 if (app.split(missingTaxaOptions).length - 1 < 2) {
   throw new Error("phyloprep.py and get_supergenes.py must use identical skip-gene/pad-gaps Missing taxa policy labels.");
 }

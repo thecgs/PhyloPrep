@@ -4,6 +4,7 @@
 import os
 import sys
 import argparse
+import csv
 import re
 import tempfile
 from pathlib import Path
@@ -83,7 +84,7 @@ class TaxonSpool:
             # Do not allocate an entire missing-gene sequence.
             while length:
                 count = min(length, self.chunk_size)
-                handle.write('-' * count)
+                handle.write('?' * count)
                 length -= count
 
     def close(self):
@@ -122,7 +123,7 @@ def get_supergenes(infiles, prefix, missing_taxa="skip-gene", input_lists=(), wr
     """Create a supermatrix while handling taxa missing from individual genes."""
     infiles = list(infiles)
     destinations = [prefix + suffix for suffix in
-                    (".report.tsv", "_partition_finder.cfg.txt", "_part_iqtree.txt", ".fasta")]
+                    (".report.tsv", ".missing.tsv", "_partition_finder.cfg.txt", "_part_iqtree.txt", ".fasta")]
     if write_phylip:
         destinations.append(prefix + ".phy")
     for i, destination in enumerate(destinations):
@@ -152,7 +153,11 @@ def get_supergenes(infiles, prefix, missing_taxa="skip-gene", input_lists=(), wr
 
     # A single locus is loaded at a time in the second pass. Spools use actual
     # disk on the CLI and reduce duplicated Python strings in browser MEMFS.
-    with tempfile.TemporaryDirectory(prefix='.supergenes-', dir=Path(prefix).absolute().parent) as directory:
+    with atomic_output(prefix + '.missing.tsv', inputs=infiles) as missing_report, \
+            tempfile.TemporaryDirectory(prefix='.supergenes-', dir=Path(prefix).absolute().parent) as directory:
+        missing_writer = csv.writer(missing_report, delimiter='\t')
+        missing_writer.writerow(['locus', 'taxon', 'start', 'end', 'length', 'fill_character'])
+        matrix_length = 0
         spool = TaxonSpool(directory, taxa_order)
         try:
             selected_alignments = []
@@ -172,8 +177,12 @@ def get_supergenes(infiles, prefix, missing_taxa="skip-gene", input_lists=(), wr
                 report_rows.append((file, "padded" if missing else "included",
                                     "missing taxa: " + ", ".join(missing) if missing else ""))
                 selected_alignments.append((file, alignment_length))
+                for taxon in missing:
+                    missing_writer.writerow([tidy_name(file), taxon, matrix_length + 1,
+                                             matrix_length + alignment_length, alignment_length, '?'])
                 for taxon in taxa_order:
                     spool.append(taxon, sequences.get(taxon), alignment_length)
+                matrix_length += alignment_length
                 del sequences
             spool.close()
             _write_supermatrix_products(prefix, report_rows, selected_alignments,
@@ -279,7 +288,7 @@ if __name__ == '__main__':
                           help='Prefix for supermatrix, partition, and report files.')
     optional.add_argument('--missing-taxa', choices=['skip-gene', 'pad-gaps'],
                           default='skip-gene',
-                          help='How to handle a taxon missing from a gene (default: skip-gene).')
+                          help='Missing-taxon policy: skip-gene excludes incomplete loci; pad-gaps fills absent sequences with ? (default: skip-gene).')
     optional.add_argument('--no-phylip', action='store_true',
                           help='Skip PHYLIP output when a downstream converter will generate it.')
     optional.add_argument('-h', '--help', action='help', 

@@ -34,7 +34,7 @@ def nexus_name(identifier):
 
 def normalize_sequence(source, seqtype, infile, identifier, changes, offset=0):
     if seqtype == 'DNA':
-        sequence = normalize_nucleotides(source)
+        sequence = normalize_nucleotides(source, preserve_missing=True)
         for index, (original, replacement) in enumerate(zip(source, sequence), offset + 1):
             if original.upper() != replacement:
                 changes.append(event(infile, identifier,
@@ -42,7 +42,7 @@ def normalize_sequence(source, seqtype, infile, identifier, changes, offset=0):
                                      'NA', source_nt_positions=f'{index}-{index}',
                                      original=original, replacement=replacement, action='replace'))
     elif seqtype == 'RNA':
-        sequence = normalize_nucleotides(source).replace('T', 'U')
+        sequence = normalize_nucleotides(source, preserve_missing=True).replace('T', 'U')
         for index, (original, replacement) in enumerate(zip(source, sequence), offset + 1):
             if original.upper() != replacement:
                 changes.append(event(infile, identifier,
@@ -50,7 +50,7 @@ def normalize_sequence(source, seqtype, infile, identifier, changes, offset=0):
                                      'NA', source_nt_positions=f'{index}-{index}',
                                      original=original, replacement=replacement, action='replace'))
     else:
-        sequence = ''.join(char.upper() if char.upper() in 'ACDEFGHIKLMNPQRSTVWYX-' else 'X'
+        sequence = ''.join(char.upper() if char.upper() in 'ACDEFGHIKLMNPQRSTVWYX-?' else 'X'
                            for char in source)
         for index, (original, replacement) in enumerate(zip(source, sequence), offset + 1):
             if original.upper() != replacement:
@@ -154,7 +154,7 @@ if __name__ == '__main__':
     optional = parser.add_argument_group('optional arguments')
     required.add_argument('-i', '--input', metavar='FASTA', required=True, help='Input FASTA alignment.')
     optional.add_argument('-o', '--output', metavar='NEXUS', help='Output NEXUS file (default: stdout).', default=None)
-    optional.add_argument('-st', '--seqtype', '--seq-type', default='DNA', choices=['DNA', 'RNA', 'protein'], help='Alignment type: DNA normalizes U/IUPAC ambiguity to T/N; protein masks ambiguity as X (default: DNA).')
+    optional.add_argument('-st', '--seqtype', '--seq-type', default='DNA', choices=['DNA', 'RNA', 'protein'], help='Alignment type: preserves ? and gaps; DNA normalizes U/IUPAC ambiguity to T/N; protein masks ambiguity as X (default: DNA).')
     optional.add_argument('--changes-report', metavar='TSV', help='Audit TSV for normalization edits; defaults to OUTPUT.sequence_changes.tsv when edits occur.')
     optional.add_argument('-h', '--help', action='help', help='Show program help and exit.')
     optional.add_argument('-v', '--version', action='version', version='v1.0.0', help='Show version and exit.')

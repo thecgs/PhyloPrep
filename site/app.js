@@ -117,7 +117,7 @@ const modules = [
     parameters: [
       { flag: "-st", label: "Sequence type", description: "Browser pipeline supports codon, protein, and nucleotide modes. Pseudogene/MACSE remains CLI-only.", type: "select", value: "codon", options: [["codon", "codon"], ["prot", "prot"], ["nucl", "nucl"]], token: "seqtype" },
       geneticCodeParameter(),
-      { flag: "--missing-taxa", label: "Missing taxa policy", description: "Skip genes missing taxa, or pad missing taxa with gaps during concatenation.", type: "select", value: "skip-gene", options: [["skip-gene", "skip-gene"], ["pad-gaps", "pad-gaps"]], token: "missing_taxa" },
+      { flag: "--missing-taxa", label: "Missing taxa policy", description: "Skip genes missing taxa, or retain them by filling absent sequences with ?. Existing alignment gaps remain -.", type: "select", value: "skip-gene", options: [["skip-gene", "skip-gene"], ["pad-gaps", "pad-gaps (fill with ?)"]], token: "missing_taxa" },
       { flag: "-s", label: "Alignment software", description: "Runs locally through Biowasm/WebAssembly. MAFFT E-INS-i is the browser default through Biowasm's compiled tbfast + dvtditr pipeline; CLI -s mafft continues to use upstream mafft --auto and can differ.", type: "select", value: "mafft", options: [["mafft", "MAFFT E-INS-i (Biowasm, default)"], ["muscle", "MUSCLE (Biowasm)"]], token: "align_software" },
       { flag: "-t", label: "Threads per locus", description: "Browser fixed to one thread for GitHub Pages/WebAssembly compatibility.", type: "select", value: "1", options: [["1", "1 (browser fixed)"]], token: "thread" },
       { flag: "-j", label: "Concurrent loci", description: "Browser edition processes loci sequentially to keep memory predictable.", type: "select", value: "1", options: [["1", "1 (browser sequential)"]], token: "jobs" },
@@ -301,10 +301,10 @@ const modules = [
   {
     script: "get_supergenes.py", title: "Build supergenes", category: "Matrix", browser: true,
     summary: "Combines compatible single-copy alignments into concatenated supermatrices.",
-    inputs: ["One or more alignment FASTA files (-i, --input)"], outputs: ["PREFIX.fasta and PREFIX.phy", "Partition files and gene-inclusion report"],
+    inputs: ["One or more alignment FASTA files (-i, --input)"], outputs: ["PREFIX.fasta and PREFIX.phy", "Partition files, gene-inclusion report and missing-block provenance"],
     inputFields: [{ key: "inputs", label: "Alignment input files", flag: "-i, --input", multiple: true, pathList: true }],
     outputLabel: "Matrix prefix", outputHelp: "The command-line script derives supermatrix files from this prefix.", defaultOutput: "supergene",
-    parameters: [{ flag: "--missing-taxa", label: "Missing taxa policy", description: "How records absent from a gene alignment are handled.", type: "select", value: "skip-gene", options: [["skip-gene", "skip-gene"], ["pad-gaps", "pad-gaps"]], token: "missing_taxa" }],
+    parameters: [{ flag: "--missing-taxa", label: "Missing taxa policy", description: "skip-gene excludes incomplete loci; pad-gaps fills absent sequences with ?. Existing alignment gaps remain -.", type: "select", value: "skip-gene", options: [["skip-gene", "skip-gene"], ["pad-gaps", "pad-gaps (fill with ?)"]], token: "missing_taxa" }],
     command: "python get_supergenes.py -i {inputs} -p {prefix} --missing-taxa {missing_taxa}",
   },
   {
@@ -357,7 +357,7 @@ const modules = [
     inputs: ["Two-sequence aligned FASTA (-i, --input)"], outputs: ["AXT file (-o, --out)"],
     inputFields: [{ key: "input", label: "Two-sequence aligned FASTA", flag: "-i, --input" }],
     outputLabel: "Output file name", outputHelp: "AXT output generated locally in the browser.", defaultOutput: "alignment.axt",
-    parameters: [{ flag: "-st", label: "Sequence type", description: "Sequence type used by the converter.", type: "select", value: "DNA", options: [["DNA", "DNA"], ["protein", "protein"]], token: "seqtype" }], command: "python fasta2axt.py -i {input} -o {output} -st {seqtype}",
+    parameters: [{ flag: "-st", label: "Sequence type", description: "Aligned exports preserve missing-data ? and alignment gaps -; other ambiguity is normalized for the selected type.", type: "select", value: "DNA", options: [["DNA", "DNA"], ["protein", "protein"]], token: "seqtype" }], command: "python fasta2axt.py -i {input} -o {output} -st {seqtype}",
   },
   {
     script: "fasta2nex.py", title: "Convert FASTA to NEXUS", category: "Convert", browser: true,
@@ -365,7 +365,7 @@ const modules = [
     inputs: ["Aligned FASTA (-i, --input)"], outputs: ["NEXUS file (-o, --out)"],
     inputFields: [{ key: "input", label: "Aligned FASTA", flag: "-i, --input" }],
     outputLabel: "Output file name", outputHelp: "NEXUS output generated locally in the browser.", defaultOutput: "alignment.nex",
-    parameters: [{ flag: "-st", label: "Sequence type", description: "Alignment type used by the converter.", type: "select", value: "DNA", options: [["DNA", "DNA"], ["RNA", "RNA"], ["protein", "protein"]], token: "seqtype" }], command: "python fasta2nex.py -i {input} -o {output} -st {seqtype}",
+    parameters: [{ flag: "-st", label: "Sequence type", description: "Aligned exports preserve ? and -; NEXUS declares missing=? gap=-.", type: "select", value: "DNA", options: [["DNA", "DNA"], ["RNA", "RNA"], ["protein", "protein"]], token: "seqtype" }], command: "python fasta2nex.py -i {input} -o {output} -st {seqtype}",
   },
   {
     script: "fasta2phy.py", title: "Convert FASTA to PHYLIP", category: "Convert", browser: true,
@@ -373,7 +373,7 @@ const modules = [
     inputs: ["Aligned FASTA (-i, --input)"], outputs: ["PHYLIP file (-o, --out)"],
     inputFields: [{ key: "input", label: "Aligned FASTA", flag: "-i, --input" }],
     outputLabel: "Output file name", outputHelp: "PHYLIP output generated locally in the browser.", defaultOutput: "alignment.phy",
-    parameters: [{ flag: "-st", label: "Sequence type", description: "Sequence type used by the converter.", type: "select", value: "DNA", options: [["DNA", "DNA"], ["protein", "protein"]], token: "seqtype" }], command: "python fasta2phy.py -i {input} -o {output} -st {seqtype}",
+    parameters: [{ flag: "-st", label: "Sequence type", description: "Aligned exports preserve missing-data ? and alignment gaps -; other ambiguity is normalized for the selected type.", type: "select", value: "DNA", options: [["DNA", "DNA"], ["protein", "protein"]], token: "seqtype" }], command: "python fasta2phy.py -i {input} -o {output} -st {seqtype}",
   },
 ];
 
@@ -2012,6 +2012,8 @@ async function buildRunManifest(module, request, result, outputs) {
     provenance: result.provenance || null,
     warnings: result.warnings || [],
     reused_loci: result.reused_loci || result.reusedLoci || 0,
+    matrix_padding: ["phyloprep.py", "get_supergenes.py"].includes(module.script)
+      ? { missing_symbol: "?", gap_symbol: "-", block_table_suffix: ".missing.tsv", policy: request.options.missing_taxa || "skip-gene" } : null,
     runtime: {
       pyodide: "0.27.2",
       workspace_storage: result.workspace_storage || {kind:"memfs"},
