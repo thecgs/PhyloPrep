@@ -1,7 +1,8 @@
+import { PhyloPrepSave } from './test-output-store.mjs';
 import { readFile } from 'node:fs/promises';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
-const scope = vm.createContext({});
+const scope = vm.createContext({ PhyloPrepSave, Blob, });
 vm.runInContext(await readFile('site/browser-save.js', 'utf8'), scope);
 const { createWriter } = scope.PhyloPrepSave;
 function fakeFolder() {
@@ -15,7 +16,7 @@ function fakeFolder() {
         assert.ok(!busy.has(key), `Concurrent overwrite of ${key}`); busy.add(key);
         active++; peak = Math.max(peak, active); let text;
         return {
-          async write(value) { text = value; await Promise.resolve(); },
+          async write(value) { text = typeof value === "string" ? value : await value.text(); await Promise.resolve(); },
           async close() {
             if (failName === name) throw new Error('disk full');
             disk.set(key, text); calls.push(`closed:${key}`); busy.delete(key); active--;
@@ -65,7 +66,7 @@ for (const call of successes) assert.equal(broken.calls.filter(c => c === call).
 const app = await readFile('site/app.js','utf8');
 const slice = (start,end) => app.slice(app.indexOf(start),app.indexOf(end,app.indexOf(start)));
 const published = new Map(); let processed = 0;
-const context = vm.createContext({
+const context = vm.createContext({ PhyloPrepSave, Blob,
   performance:{now:()=>0}, setInterval:()=>1, clearInterval:()=>{},
   showLocusProgress:()=>{}, requireUniqueStems:()=>{}, selectedInputPathList:()=>'',
   externalAlignerLabel:()=> 'MAFFT', batchPathLists:()=>[], mergeTsvContents:()=>'',
@@ -89,7 +90,7 @@ const ui = {
   command:{textContent:"test command"},run:{disabled:false},cancelRun:{},runtimeStatus:{},saveProgress:{},outputName:{value:''},useNextStep:{},downloadAll:{},chooseFolder:{},downloadSelected:{},
 };
 const exported = [{name:'a.fa',content:'A'},{name:'b.fa',content:'B'}];
-const integration = vm.createContext({
+const integration = vm.createContext({ PhyloPrepSave, Blob,
   elements:ui,performance:{now:()=>Date.now()},PhyloPrepSave:scope.PhyloPrepSave,
   setConfigurationLocked:()=>{}, localSaveBusy:false, outputDirectoryHandle:undefined,outputSaveSession:undefined,producedFiles:new Map(),generatedFiles:[],
   resolvedFolderFiles:new Map(),preflightGeneration:0,
@@ -141,7 +142,7 @@ assert.equal(other.disk.get('/alignments/partial.aln.fasta'),'ATG');
 console.log('No-folder behavior, full workflow save completion, paused-save warning, manual retry, destination changes and partial-result retention passed.');
 
 // Portable batch lists and a linear duplicate-stem check use actual app helpers.
-const names = vm.createContext({});
+const names = vm.createContext({ PhyloPrepSave, Blob, });
 vm.runInContext(slice('function fileStem(', 'function mergeTsvContents('), names);
 vm.runInContext(slice('function batchPathLists(', 'function showLocusProgress('), names);
 names.inputs = Array.from({length:60000}, (_,i) => ({name:`gene${i}.fasta`}));
@@ -221,7 +222,7 @@ console.log('Workflow start snapshots survive subsequent UI/option changes.');
 // Full pipeline validates once and lets Python build its own lists/merged report.
 let validations=0, listBuilds=0, reportMerges=0, finalized=0, aligned=0;
 let finalRequest;
-const adapter=vm.createContext({
+const adapter=vm.createContext({ PhyloPrepSave, Blob,
   performance:{now:()=>0},setInterval:()=>1,clearInterval:()=>{},
   showLocusProgress:()=>{},setRunStage:()=>{},elements:{runtimeStatus:{}},
   externalAlignerLabel:()=> 'MAFFT',publishProducedFiles:async()=>{},

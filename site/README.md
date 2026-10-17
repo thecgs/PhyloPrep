@@ -176,6 +176,12 @@ Local-save counts are displayed separately from analysis progress. Completion wa
 
 CLI and browser outputs both use `*_partition_finder.cfg.txt`. The final `.txt` extension avoids browser restrictions on creating `.cfg` files in an authorized output folder. Before using the configuration with PartitionFinder, rename it to `partition_finder.cfg` in the analysis directory. Its contents and matrix references are unchanged.
 
+### Disk-backed saved outputs
+
+With an authorized output folder, outputs use shared storage references. Only after a writable stream closes successfully and a disk snapshot is obtained is the corresponding text removed from the result list and save queue. Preview reads a bounded slice; downloads, ZIP export, tool handoff and copying to a different folder read the saved file on demand without permanently restoring its text. Files must remain accessible and unchanged; size/timestamp changes are reported, and alignment read-back into the analysis also verifies its SHA256.
+
+The full pipeline reloads saved alignments for the current raw/trimmed branch only. Once a branch has completed QC and both independent and paired matrix construction, its original and renamed alignments are exported. The worker removes each eligible MEMFS file only after receiving confirmation of a successful local save. Renamed outputs remain in the exported file manifest and can be previewed/downloaded from disk. Failed saves retain their text and analysis files for retry. Without an output folder, the existing memory-backed behavior is retained. Final matrices stay staged until normal publication; this optimization does not remove Pyodide's memory limit or all input/matrix memory use.
+
 ### Alignment filenames
 
 CLI and browser alignment outputs use the explicit FASTA suffix: `GENE.ALIGNER.TYPE.aln.fasta` for untrimmed alignments and `GENE.ALIGNER.TYPE.trimmed.aln.fasta` for trimmed alignments. Batch pathlists are named `all.TYPE.aln.fasta.pathlist` and `all.TYPE.trimmed.aln.fasta.pathlist`. The file contents remain FASTA; QC, provenance matching, paired trimming and concatenation use the same naming convention.

@@ -323,3 +323,70 @@ def test_incremental_finalize_failure_restores_calling_context(tmp_path, monkeyp
     assert phyloprep.run is original_run
     assert (sys.stdout, sys.stderr) == original_streams
     assert not list((tmp_path / 'out').glob('.matrices-*'))
+
+
+@pytest.mark.parametrize('fail_trim', [False, True])
+def test_disk_backed_branches_release_original_and_renamed_after_use(tmp_path, monkeypatch, fail_trim):
+    """Run real QC/concatenation, simulating successful checkpoint disk writes."""
+    browser = browser_module()
+    source = tmp_path / 'gene.fa'
+    source.write_text('>gene_a\nATGGCT\n>gene_b\nATGGCT\n')
+    mapping = tmp_path / 'map.tsv'
+    mapping.write_text('gene_a\tsp_a\ngene_b\tsp_b\n')
+    root = tmp_path / 'out'
+    products = {
+        'gene.mafft.codon.aln.fasta': '>gene_a\nATGGCT\n>gene_b\nATGGCT\n',
+        'gene.mafft.prot.aln.fasta': '>gene_a\nMA\n>gene_b\nMA\n',
+        'gene.mafft.codon.trimmed.aln.fasta': '>gene_a\nATGGCT\n>gene_b\nATGGCT\n',
+        'gene.mafft.prot.trimmed.aln.fasta': '>gene_a\nMA\n>gene_b\nMA\n',
+    }
+    manifest = [dict(role='source', path=str(source), name=source.name),
+                dict(role='mapping', path=str(mapping), name=mapping.name)]
+    manifest += [dict(role='batch-output', path=str(tmp_path / name), name=name, on_disk=True)
+                 for name in products]
+    steps = browser._phyloprep_finalize_steps(manifest, dict(seqtype='codon'), str(root),
+        str(ROOT), manifest_only=True, incremental=True, disk_backed=True)
+    saved = {}
+    if fail_trim:
+        original_prepare = phyloprep.prepare_variant
+        def prepare(args, root, stage, variant):
+            if variant == 'trimmed':
+                raise phyloprep.NoAlignmentsPassedQCError('trimmed QC rejected all loci')
+            return original_prepare(args, root, stage, variant)
+        monkeypatch.setattr(phyloprep, 'prepare_variant', prepare)
+    try:
+        for variant in ('raw', 'trimmed'):
+            loading = json.loads(browser.advance_phyloprep_finalize(steps))
+            assert loading['pending'] and loading['load_variant'] == variant
+            for name, content in products.items():
+                if ('.trimmed.aln.fasta' in name) == (variant == 'trimmed'):
+                    (root / 'alignments' / name).write_text(content)
+            checkpoint = json.loads(browser.advance_phyloprep_finalize(steps))
+            if fail_trim and variant == 'trimmed':
+                assert checkpoint['recoverable']
+                names = {file['name'] for file in checkpoint['files']}
+                assert 'renamed/codon/raw/gene.mafft.codon.aln.fasta' in names
+                assert not (root / 'matrices').exists()
+                return
+            assert checkpoint.get('pending'), checkpoint
+            releasable = [file for file in checkpoint['files'] if file.get('release')]
+            assert len(releasable) == 4  # original and renamed codon/protein
+            assert all(('.trimmed.aln.fasta' in file['name']) == (variant == 'trimmed')
+                       for file in releasable)
+            for file in checkpoint['files']:
+                saved[file['name']] = Path(file['path']).read_bytes()
+            for file in releasable:
+                Path(file['path']).unlink()
+            assert not list((root / 'renamed').rglob('*.aln.fasta'))
+        result = json.loads(browser.advance_phyloprep_finalize(steps))
+        assert result['ok'], result
+        files = {file['name']: file for file in result['files']}
+        assert all('alignments/' + name in files for name in products)
+        assert len([name for name in files if name.startswith('renamed/')]) == 4
+        assert (root / 'matrices/codon/raw/supermatrix.fasta').read_text() == '>sp_a\nATGGCT\n>sp_b\nATGGCT\n'
+        assert (root / 'matrices/paired/codon/raw/supermatrix.fasta').read_text() == '>sp_a\nATGGCT\n>sp_b\nATGGCT\n'
+        for name in ('qc/codon/raw/alignment.pass.tsv', 'qc/codon/trimmed/alignment.pass.tsv'):
+            assert str(root).encode() not in Path(files[name]['path']).read_bytes()
+        assert source.read_text().startswith('>gene_a')
+    finally:
+        steps.close()

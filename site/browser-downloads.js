@@ -31,12 +31,11 @@
   function checkZipCount(files) {
     if (files.length >= 0xffff) throw new Error('This archive exceeds the ZIP32 file-count limit. Select an output folder and save all files there.');
   }
-  function* zipParts(files) {
-    checkZipCount(files);
+  function zipBuilder() {
     const encoder = new TextEncoder(), directory = [];
     let offset = 0;
-    for (const file of files) {
-      const name = encoder.encode(file.name), content = encoder.encode(file.content);
+    function* add(filename, content) {
+      const name = encoder.encode(filename);
       if (name.length > 0xffff || content.length >= 0xffffffff || offset + 30 + name.length + content.length >= 0xffffffff) {
         throw new Error('This archive exceeds ZIP32 limits. Select an output folder and save all files there.');
       }
@@ -56,22 +55,40 @@
       central.set(name, 46); directory.push(central);
       offset += local.length + content.length;
     }
-    const centralSize = directory.reduce((sum, part) => sum + part.length, 0);
-    if (offset + centralSize + 22 >= 0xffffffff) throw new Error('This archive exceeds ZIP32 size limits. Save files to an output folder.');
-    for (const part of directory) yield part;
-    const end = new Uint8Array(22), ev = new DataView(end.buffer);
-    ev.setUint32(0, 0x06054b50, true); ev.setUint16(8, files.length, true); ev.setUint16(10, files.length, true);
-    ev.setUint32(12, centralSize, true); ev.setUint32(16, offset, true);
-    yield end;
+    function* finish() {
+      const centralSize = directory.reduce((sum, part) => sum + part.length, 0);
+      if (offset + centralSize + 22 >= 0xffffffff) throw new Error('This archive exceeds ZIP32 size limits. Save files to an output folder.');
+      for (const part of directory) yield part;
+      const end = new Uint8Array(22), ev = new DataView(end.buffer);
+      ev.setUint32(0, 0x06054b50, true); ev.setUint16(8, directory.length, true); ev.setUint16(10, directory.length, true);
+      ev.setUint32(12, centralSize, true); ev.setUint32(16, offset, true);
+      yield end;
+    }
+    return { add, finish };
   }
-  async function writeZip(files, writable) {
+  function* zipParts(files) {
+    checkZipCount(files);
+    const zip = zipBuilder(), encoder = new TextEncoder();
+    for (const file of files) yield* zip.add(file.name, encoder.encode(file.content));
+    yield* zip.finish();
+  }
+  async function* zipPartsAsync(files, readBlob) {
+    checkZipCount(files);
+    const zip = zipBuilder();
+    for (const file of files) {
+      const bytes = new Uint8Array(await (await readBlob(file)).arrayBuffer());
+      yield* zip.add(file.name, bytes);
+    }
+    yield* zip.finish();
+  }
+  async function writeZip(files, writable, readBlob) {
     try {
-      for (const part of zipParts(files)) await writable.write(part);
+      for await (const part of (readBlob ? zipPartsAsync(files, readBlob) : zipParts(files))) await writable.write(part);
       await writable.close();
     } catch (error) {
       try { await writable.abort(); } catch {}
       throw error;
     }
   }
-  globalThis.PhyloPrepDownloads = { requestDownload, zipParts, writeZip, checkZipCount };
+  globalThis.PhyloPrepDownloads = { requestDownload, zipParts, zipPartsAsync, writeZip, checkZipCount };
 })();

@@ -416,13 +416,13 @@ def _export_output_files(root, files, path_lists=()):
                         if not candidate.is_absolute():
                             candidate = path.parent / candidate
                         candidate = candidate.resolve()
-                        if candidate.is_file():
-                            if candidate.is_relative_to(root):
-                                entry = Path(os.path.relpath(candidate, path.parent)).as_posix()
-                            else:
-                                # Inputs are not bundled: place the original FASTA
-                                # alongside this exported list before CLI reuse.
-                                entry = candidate.name
+                        if candidate.is_relative_to(root):
+                            # Completed branches may already be safely stored on disk.
+                            entry = Path(os.path.relpath(candidate, path.parent)).as_posix()
+                        elif candidate.is_file():
+                            # Inputs are not bundled: place the original FASTA
+                            # alongside this exported list before CLI reuse.
+                            entry = candidate.name
                     target.write(entry + '\n')
             path = exported
             item.update(path=str(path), size=path.stat().st_size)
@@ -434,7 +434,7 @@ def _export_output_files(root, files, path_lists=()):
     return files
 
 
-def _phyloprep_finalize_steps(file_manifest, options, output_root, engine_root="/engine", progress_callback=None, manifest_only=False, incremental=False):
+def _phyloprep_finalize_steps(file_manifest, options, output_root, engine_root="/engine", progress_callback=None, manifest_only=False, incremental=False, disk_backed=False):
     """Finish the browser pipeline with the repository's original downstream modules."""
     engine = Path(engine_root).resolve()
     root = Path(output_root).resolve()
@@ -442,6 +442,15 @@ def _phyloprep_finalize_steps(file_manifest, options, output_root, engine_root="
     stdout, stderr = BoundedLog(), BoundedLog()
     mapping_supplied = False
     phyloprep = None
+    archived = {}
+
+    def current_outputs():
+        files = _visible_output_files(root, manifest_only=manifest_only)
+        if manifest_only:
+            files = _export_output_files(root, files)
+            return list({**archived, **{item['name']: item for item in files}}.values())
+        return files
+
     try:
         if str(engine) not in sys.path:
             sys.path.insert(0, str(engine))
@@ -462,10 +471,18 @@ def _phyloprep_finalize_steps(file_manifest, options, output_root, engine_root="
         alignments = root / "alignments"
         alignments.mkdir(parents=True, exist_ok=True)
         change_reports = []
+        alignment_targets = []
         for item in batch_outputs:
             source = Path(item["path"])
             target = alignments / Path(item["name"]).name
-            shutil.copyfile(source, target)
+            if source.exists():
+                if disk_backed:
+                    source.replace(target)
+                else:
+                    shutil.copyfile(source, target)
+            elif not (disk_backed and item.get("on_disk")):
+                raise FileNotFoundError(source)
+            alignment_targets.append(target)
             if target.name.endswith(".sequence_changes.tsv"):
                 change_reports.append(target)
 
@@ -474,8 +491,8 @@ def _phyloprep_finalize_steps(file_manifest, options, output_root, engine_root="
         for kind in ("nucl", "prot", "codon"):
             for variant, suffix in (("raw", f".{kind}.aln.fasta"), ("trimmed", f".{kind}.trimmed.aln.fasta")):
                 files = sorted(
-                    path.resolve() for path in alignments.iterdir()
-                    if path.is_file() and path.name.endswith(suffix)
+                    path.resolve() for path in alignment_targets
+                    if path.name.endswith(suffix)
                 )
                 if files:
                     list_name = f"all.{kind}.aln.fasta.pathlist" if variant == "raw" else f"all.{kind}.trimmed.aln.fasta.pathlist"
@@ -547,6 +564,8 @@ def _phyloprep_finalize_steps(file_manifest, options, output_root, engine_root="
         with tempfile.TemporaryDirectory(prefix=".matrices-", dir=root) as temporary:
             matrix_root = Path(temporary)
             for index, variant in enumerate(variants):
+                if disk_backed:
+                    yield {"load_variant": variant, "files": []}
                 # Each runPythonAsync call can have a different Context. Leave
                 # progress/log/engine scopes before yielding files to JavaScript.
                 with analysis_step():
@@ -560,15 +579,25 @@ def _phyloprep_finalize_steps(file_manifest, options, output_root, engine_root="
                         for item in _visible_output_files(root / folder, manifest_only=True):
                             item['name'] = folder + '/' + item['name']
                             checkpoint.append(item)
-                    yield _export_output_files(root, checkpoint)
+                    if disk_backed:
+                        for folder in ('alignments', 'renamed'):
+                            for item in _visible_output_files(root / folder, manifest_only=True):
+                                if not item['name'].endswith('.aln.fasta'):
+                                    continue
+                                trimmed = item['name'].endswith('.trimmed.aln.fasta')
+                                if trimmed != (variant == 'trimmed'):
+                                    continue
+                                item.update(name=folder + '/' + item['name'], release=True)
+                                checkpoint.append(item)
+                    checkpoint = _export_output_files(root, checkpoint)
+                    archived.update((item['name'], dict(item)) for item in checkpoint)
+                    yield checkpoint
             with analysis_step():
                 report_phase(args, 'Publishing matrices')
                 phyloprep.publish_matrices(matrix_root, root, variants, block_signals=False)
                 args._progress.update('Complete', completed=len(variants) + 1)
 
-        files = _visible_output_files(root, manifest_only=manifest_only)
-        if manifest_only:
-            files = _export_output_files(root, files)
+        files = current_outputs()
         if not files:
             raise ValueError("PhyloPrep produced no downloadable output files.")
         return json.dumps({
@@ -585,8 +614,7 @@ def _phyloprep_finalize_steps(file_manifest, options, output_root, engine_root="
             return json.dumps({
                 "ok": False,
                 "recoverable": True,
-                "files": (_export_output_files(root, _visible_output_files(root, manifest_only=True))
-                          if manifest_only else _visible_output_files(root)),
+                "files": current_outputs(),
                 "user_error": str(error),
                 "summary": "No loci passed QC; diagnostic reports were preserved.",
                 "stdout": stdout.getvalue(),
@@ -595,9 +623,7 @@ def _phyloprep_finalize_steps(file_manifest, options, output_root, engine_root="
         traceback.print_exc(file=stderr)
         technical_error = stderr.getvalue().strip() or "The browser PhyloPrep pipeline failed."
         if phyloprep is not None and isinstance(error, phyloprep.NoGenesIncludedError):
-            files = _visible_output_files(root, manifest_only=manifest_only)
-            if manifest_only:
-                files = _export_output_files(root, files)
+            files = current_outputs()
             if mapping_supplied:
                 user_error = (
                     "No supermatrix could be built with missing-taxa=skip-gene because no locus retained the full "
@@ -637,7 +663,8 @@ def advance_phyloprep_finalize(steps):
         files = next(steps)
     except StopIteration as completed:
         return completed.value
-    return json.dumps({"pending": True, "files": files})
+    return json.dumps({"pending": True, **files} if isinstance(files, dict)
+                      else {"pending": True, "files": files})
 
 
 @memory_safe_result

@@ -35,18 +35,20 @@ async function streamOutputFiles(runtime, runId, files, transferId, waitForSave 
         position += read;
       }
       const end = { type: "output-file-end", runId, index, name: file.name, transferId, size: file.size, sha256: file.sha256 };
+      let acknowledgement;
       if (waitForSave) {
         const sequence = ++outputSequence;
-        await new Promise((resolve, reject) => {
+        acknowledgement = await new Promise((resolve, reject) => {
           const timer = setTimeout(() => {
             outputAcknowledgements.delete(sequence);
             reject(new Error(`Local output queue acknowledgement timed out: ${file.name}`));
           }, 300000);
-          outputAcknowledgements.set(sequence, { runId, resolve: () => { clearTimeout(timer); resolve(); } });
+          outputAcknowledgements.set(sequence, { runId, resolve: ack => { clearTimeout(timer); resolve(ack); } });
           self.postMessage({ ...end, sequence });
         });
       } else self.postMessage(end);
       if (file.sha256) transferred.set(file.name, file.sha256);
+      if (file.release && acknowledgement?.saved) runtime.FS.unlink(file.path);
     } finally {
       runtime.FS.close(stream);
     }
@@ -130,7 +132,18 @@ async function ensureRuntime(runId) {
   return runtimePromise;
 }
 
-function stageBrowserInputs(runtime, request) {
+async function readDiskInput(file) {
+  const saved = file.disk;
+  const source = await saved.handle.getFile();
+  if (source.size !== saved.size || source.lastModified !== saved.lastModified) {
+    throw new Error(`Saved input changed on disk: ${file.name}. Restore the original file before retrying.`);
+  }
+  const bytes = new Uint8Array(await source.arrayBuffer());
+  if (file.sha256 && await hashSourceBytes(bytes) !== file.sha256) throw new Error(`Saved input checksum mismatch: ${file.name}`);
+  return bytes;
+}
+
+async function stageBrowserInputs(runtime, request) {
   const runRoot = `/work/runs/run-${request.runId}`;
   const inputRoot = `${runRoot}/input`;
   const optionsRoot = `${runRoot}/options`;
@@ -139,12 +152,17 @@ function stageBrowserInputs(runtime, request) {
   runtime.FS.mkdirTree(optionsRoot);
   runtime.FS.mkdirTree(outputRoot);
   const names = new Set();
-  const files = request.files.map((file) => {
+  const files = [];
+  for (const file of request.files) {
     const name = uniqueFileName(file.name, names);
     const path = `${inputRoot}/${name}`;
-    runtime.FS.writeFile(path, file.content);
-    return { ...file, name, path, fasta: isFasta(file) };
-  });
+    const deferred = request.incrementalSave && request.type === "phyloprep-finalize" && file.role === "batch-output" && file.disk && name.endsWith('.aln.fasta');
+    if (!deferred) runtime.FS.writeFile(path, file.disk ? await readDiskInput(file) : file.content);
+    const staged = { ...file, name, path, on_disk: Boolean(deferred), fasta: file.disk ? /\.(fa|fas|fasta)$/i.test(name) : isFasta(file) };
+    delete staged.content;
+    delete file.content;
+    files.push(staged);
+  }
   const fastaFiles = files.filter((file) => file.fasta);
   let pathList;
   if (request.usesPathList && fastaFiles.length > 1) {
@@ -317,7 +335,7 @@ self.addEventListener("message", async (event) => {
     const pending = outputAcknowledgements.get(request.sequence);
     if (pending?.runId === request.runId) {
       outputAcknowledgements.delete(request.sequence);
-      pending.resolve();
+      pending.resolve(request);
     }
     return;
   }
@@ -328,7 +346,7 @@ self.addEventListener("message", async (event) => {
   const transferred = new Map();
   try {
     runtime = await ensureRuntime(runId);
-    stage = stageBrowserInputs(runtime, request);
+    stage = await stageBrowserInputs(runtime, request);
 
     if (request.type === "msap-probe") {
       self.postMessage({ type: "stage", runId, stage: "process", label: "Preparing MSAP.py alignment input" });
@@ -363,7 +381,7 @@ self.addEventListener("message", async (event) => {
 
     if (request.type === "phyloprep-finalize") {
       self.postMessage({ type: "stage", runId, stage: "process", label: "Running PhyloPrep QC and matrix construction" });
-      const manifest = stage.files.map(({ name, path, role, inputKey, fasta }) => ({ name, path, role, inputKey, fasta }));
+      const manifest = stage.files.map(({ name, path, role, inputKey, fasta, on_disk }) => ({ name, path, role, inputKey, fasta, on_disk }));
       runtime.globals.set("_phyloprep_progress_callback", (eventJson) => {
         self.postMessage({ type: "progress", runId, progress: JSON.parse(eventJson) });
       });
@@ -371,13 +389,20 @@ self.addEventListener("message", async (event) => {
       let stepsStarted = false;
       try {
         if (request.incrementalSave) {
-          await runtime.runPythonAsync(`_phyloprep_steps = _phyloprep_finalize_steps(${pythonJson(manifest)}, ${pythonJson(request.options)}, ${JSON.stringify(stage.outputRoot)}, progress_callback=_phyloprep_progress_callback, manifest_only=True, incremental=True)`);
+          await runtime.runPythonAsync(`_phyloprep_steps = _phyloprep_finalize_steps(${pythonJson(manifest)}, ${pythonJson(request.options)}, ${JSON.stringify(stage.outputRoot)}, progress_callback=_phyloprep_progress_callback, manifest_only=True, incremental=True, disk_backed=True)`);
           stepsStarted = true;
           let checkpoint = 0;
           while (true) {
             raw = await runtime.runPythonAsync("advance_phyloprep_finalize(_phyloprep_steps)");
             const step = JSON.parse(raw);
             if (!step.pending) break;
+            if (step.load_variant) {
+              for (const file of stage.files) {
+                if (!file.on_disk || file.name.endsWith('.trimmed.aln.fasta') !== (step.load_variant === 'trimmed')) continue;
+                const target = `${stage.outputRoot}/alignments/${file.name}`;
+                runtime.FS.writeFile(target, await readDiskInput(file));
+              }
+            }
             await streamOutputFiles(runtime, runId, step.files || [], `checkpoint-${checkpoint++}`, true, transferred);
           }
         } else {
