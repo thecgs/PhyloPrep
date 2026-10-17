@@ -179,7 +179,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, [tabindex]:focu
 /* Keep the centered label together and reserve both button rows. */
 .execution-heading { display: grid; grid-template-columns: 6.5rem minmax(0, 1fr) max-content; column-gap: 12px; }
 .execution-label { min-width: 0; text-align: center; }
-.execution-heading h2 { font-size: 18px; line-height: 1.3; overflow-wrap: anywhere; }
+.execution-label .eyebrow { font-size: 15px; }
+.execution-heading h2 { font-size: 20px; line-height: 1.3; overflow-wrap: anywhere; }
 .execution-heading .mode-badge { grid-column: 3; grid-row: 1; justify-self: end; font-size: 11px; line-height: 1.3; white-space: nowrap; }
 .run-actions { display: grid; grid-row: 1 / span 2; grid-template-columns: 6.5rem; grid-template-rows: repeat(2, 45px); gap: 8px; align-items: stretch; }
 .execution-heading .run-button, .execution-heading .cancel-button { font-size: 14px; }

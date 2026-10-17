@@ -1934,6 +1934,7 @@ async function buildRunManifest(module, request, result, outputs) {
     warnings: result.warnings || [],
     runtime: {
       pyodide: "0.27.2",
+      workspace_storage: result.workspace_storage || {kind:"memfs"},
       aligner: ["phyloprep.py", "MSAP_batch.py"].includes(module.script)
         ? externalAlignerLabel(request.options.align_software || "mafft")
         : null,

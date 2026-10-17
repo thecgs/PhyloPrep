@@ -343,9 +343,17 @@ self.addEventListener("message", async (event) => {
   const { runId } = request;
   let runtime;
   let stage;
+  let diskWorkspace;
   const transferred = new Map();
   try {
     runtime = await ensureRuntime(runId);
+    if (request.type === "phyloprep-finalize" && request.incrementalSave) {
+      if (!globalThis.PhyloPrepDiskFS) importScripts('browser-disk-fs.js');
+      diskWorkspace = await PhyloPrepDiskFS.open(runtime, `/work/runs/run-${runId}`);
+      self.postMessage({type:'stage',runId,stage:'process',label:diskWorkspace
+        ? 'Using temporary disk for per-locus alignment processing'
+        : 'Temporary disk is unavailable; using branch-level memory storage'});
+    }
     stage = await stageBrowserInputs(runtime, request);
 
     if (request.type === "msap-probe") {
@@ -426,6 +434,7 @@ self.addEventListener("message", async (event) => {
           ...result,
           engineMetadata: engineManifest,
           partial: Boolean(result.recoverable),
+          workspace_storage: diskWorkspace ? diskWorkspace.stats() : {kind:'memfs'},
           provenance: `Browser phyloprep.py adapter · original downstream modules · source bundle ${engineManifest.bundleSha256.slice(0, 12)}`,
         },
       });
@@ -468,8 +477,13 @@ self.addEventListener("message", async (event) => {
       },
     });
   } catch (error) {
-    self.postMessage({ type: "error", runId, message: error.message || String(error) });
+    self.postMessage({ type: "error", runId, message: diskWorkspace?.failure || error.message || String(error) });
   } finally {
     if (runtime && stage?.runRoot) removeTree(runtime, stage.runRoot);
+    else if (runtime && diskWorkspace) removeTree(runtime, diskWorkspace.path);
+    if (diskWorkspace) {
+      try {await diskWorkspace.close();}
+      catch(error) {console.warn(`Could not remove temporary disk cache: ${error.message}`);}
+    }
   }
 });
