@@ -6,44 +6,22 @@
 The Biopython NEXUS reader builds interleaved alignments by repeatedly
 concatenating short blocks. That makes its own round-trip check impractical
 for multi-million-column supermatrices. This module writes a conventional
-interleaved matrix from temporary per-taxon sequence spools instead.
+interleaved matrix from a temporary disk spool in bounded pages instead.
 """
 
 import argparse
+import csv
 import tempfile
+from pathlib import Path
+from msap_matrix import AlignmentSpool
 
 from msap_io import atomic_output, check_output_path
-from sequence_audit import event, normalize_nucleotides, write_report
+from sequence_audit import FIELDS, event, normalize_nucleotides
 
 
 _NEXUS_PUNCTUATION = set("()[]{}\\,;:=*'\"`+-<>")
 _NEXUS_WHITESPACE = set(" \t\n")
 _LINE_WIDTH = 70
-
-
-def fasta_records(infile):
-    """Yield ``(id, sequence)`` records with SeqIO-compatible FASTA IDs."""
-    identifier = None
-    sequence = []
-    with open(infile, encoding='utf-8') as handle:
-        for raw_line in handle:
-            line = raw_line.strip()
-            if not line:
-                continue
-            if line.startswith('>'):
-                if identifier is not None:
-                    yield identifier, ''.join(sequence)
-                header = line[1:].strip()
-                if not header:
-                    raise ValueError('FASTA record has an empty identifier')
-                identifier = header.split()[0]
-                sequence = []
-            elif identifier is None:
-                raise ValueError('FASTA sequence data appears before its first header')
-            else:
-                sequence.append(''.join(line.split()))
-    if identifier is not None:
-        yield identifier, ''.join(sequence)
 
 
 def nexus_name(identifier):
@@ -54,10 +32,10 @@ def nexus_name(identifier):
     return escaped
 
 
-def normalize_sequence(source, seqtype, infile, identifier, changes):
+def normalize_sequence(source, seqtype, infile, identifier, changes, offset=0):
     if seqtype == 'DNA':
         sequence = normalize_nucleotides(source)
-        for index, (original, replacement) in enumerate(zip(source, sequence), 1):
+        for index, (original, replacement) in enumerate(zip(source, sequence), offset + 1):
             if original.upper() != replacement:
                 changes.append(event(infile, identifier,
                                      'uracil_to_thymine' if original.upper() == 'U' else 'nucleotide_ambiguity',
@@ -65,7 +43,7 @@ def normalize_sequence(source, seqtype, infile, identifier, changes):
                                      original=original, replacement=replacement, action='replace'))
     elif seqtype == 'RNA':
         sequence = normalize_nucleotides(source).replace('T', 'U')
-        for index, (original, replacement) in enumerate(zip(source, sequence), 1):
+        for index, (original, replacement) in enumerate(zip(source, sequence), offset + 1):
             if original.upper() != replacement:
                 changes.append(event(infile, identifier,
                                      'thymine_to_uracil' if original.upper() == 'T' else 'nucleotide_ambiguity',
@@ -74,7 +52,7 @@ def normalize_sequence(source, seqtype, infile, identifier, changes):
     else:
         sequence = ''.join(char.upper() if char.upper() in 'ACDEFGHIKLMNPQRSTVWYX-' else 'X'
                            for char in source)
-        for index, (original, replacement) in enumerate(zip(source, sequence), 1):
+        for index, (original, replacement) in enumerate(zip(source, sequence), offset + 1):
             if original.upper() != replacement:
                 changes.append(event(infile, identifier, 'protein_unsupported_residue', 'NA',
                                      source_aa_positions=f'{index}-{index}', original=original,
@@ -82,67 +60,89 @@ def normalize_sequence(source, seqtype, infile, identifier, changes):
     return sequence
 
 
-def prepare_records(infile, seqtype):
-    """Validate FASTA and spool normalized sequences for interleaved output."""
-    ids = set()
-    changes = []
-    records = []
-    count = 0
-    length = None
-    for identifier, source in fasta_records(infile):
-        if identifier in ids:
-            raise ValueError(f'Duplicate sequence ID: {identifier}')
-        ids.add(identifier)
-        sequence = normalize_sequence(source, seqtype, infile, identifier, changes)
-        if not sequence:
-            raise ValueError(f'{identifier}: sequence is empty')
-        if length is None:
-            length = len(sequence)
-        elif len(sequence) != length:
-                raise ValueError(f'Alignment length mismatch: {identifier} has length {len(sequence)}, expected {length}')
-        spool = tempfile.SpooledTemporaryFile(max_size=8 * 1024 * 1024, mode='w+t', encoding='utf-8')
-        spool.write(sequence)
-        spool.seek(0)
-        records.append((identifier, spool))
-        count += 1
-    if not count:
-        raise ValueError('No sequences found in input FASTA.')
-    return records, count, length, changes
+class ChangeLog:
+    """Spool export edits too; ambiguity-heavy matrices can have many edits."""
+    def __init__(self, directory, protein):
+        self.file = tempfile.TemporaryFile(mode='w+t', encoding='utf-8', newline='',
+                                          dir=directory)
+        self.count = 0
+        fields = FIELDS + (['source_aa_positions'] if protein else [])
+        self.writer = csv.DictWriter(self.file, fieldnames=fields, delimiter='\t', restval='NA')
+        self.writer.writeheader()
+
+    def append(self, row):
+        self.writer.writerow(row)
+        self.count += 1
+
+    def __bool__(self):
+        return bool(self.count)
+
+    def publish(self, path):
+        self.file.seek(0)
+        with atomic_output(path) as handle:
+            while True:
+                chunk = self.file.read(65536)
+                if not chunk:
+                    break
+                handle.write(chunk)
+
+    def close(self):
+        self.file.close()
 
 
-def write_nexus(records, handle, seqtype, count, length):
-    """Write a standards-compliant, wrapped interleaved NEXUS matrix."""
+def prepare_records(infile, seqtype, directory=None):
+    changes = ChangeLog(directory, seqtype == 'protein')
+    try:
+        matrix = AlignmentSpool(infile, directory=directory, transform=lambda identifier, chunk, offset:
+                                normalize_sequence(chunk, seqtype, infile, identifier, changes, offset))
+        return matrix, changes
+    except BaseException:
+        changes.close()
+        raise
+
+
+def write_nexus(matrix, handle, seqtype):
     datatype = {'DNA': 'dna', 'RNA': 'rna', 'protein': 'protein'}[seqtype]
     handle.write('#NEXUS\n\nbegin data;\n')
-    handle.write(f'  dimensions ntax={count} nchar={length};\n')
+    handle.write(f'  dimensions ntax={len(matrix.records)} nchar={matrix.length};\n')
     handle.write(f'  format datatype={datatype} missing=? gap=- interleave;\n  matrix\n')
-    labels = [(nexus_name(identifier), spool) for identifier, spool in records]
-    label_width = max(len(label) for label, _ in labels)
-    for start in range(0, length, _LINE_WIDTH):
-        for label, spool in labels:
-            handle.write(f'{label:<{label_width}} {spool.read(_LINE_WIDTH)}\n')
-        handle.write('\n')
+    labels = [nexus_name(identifier) for identifier, _, _ in matrix.records]
+    label_width = max(map(len, labels))
+    positions = [record[1] for record in matrix.records]
+    # Reuse a small page per taxon instead of seeking disk for every 70 bases.
+    page_width = _LINE_WIDTH * 64
+    for start in range(0, matrix.length, page_width):
+        size = min(page_width, matrix.length - start)
+        pages = []
+        for index in range(len(labels)):
+            matrix.file.seek(positions[index])
+            pages.append(matrix.file.read(size))
+            positions[index] = matrix.file.tell()
+        for offset in range(0, size, _LINE_WIDTH):
+            for label, page in zip(labels, pages):
+                handle.write(f'{label:<{label_width}} {page[offset:offset + _LINE_WIDTH]}\n')
+            handle.write('\n')
     handle.write('  ;\nend;\n')
 
 
 def fasta2nex(infile, outfile=None, seqtype='DNA', changes_report=None):
     """Convert an aligned FASTA file to NEXUS using bounded memory."""
     check_output_path(outfile, inputs=[infile])
-    records, count, length, changes = prepare_records(infile, seqtype)
-    if changes:
-        if changes_report is None:
-            if outfile is None:
-                raise ValueError('Use --changes-report when normalizing input while writing NEXUS to stdout')
-            changes_report = str(outfile) + '.sequence_changes.tsv'
-        check_output_path(changes_report, inputs=[infile, outfile])
+    matrix, changes = prepare_records(infile, seqtype, Path(outfile).absolute().parent if outfile else None)
     try:
-        with atomic_output(outfile, inputs=[infile]) as handle:
-            write_nexus(records, handle, seqtype, count, length)
         if changes:
-            write_report(changes_report, changes, protein=seqtype == 'protein')
+            if changes_report is None:
+                if outfile is None:
+                    raise ValueError('Use --changes-report when normalizing input while writing NEXUS to stdout')
+                changes_report = str(outfile) + '.sequence_changes.tsv'
+            check_output_path(changes_report, inputs=[infile, outfile])
+        with atomic_output(outfile, inputs=[infile]) as handle:
+            write_nexus(matrix, handle, seqtype)
+        if changes:
+            changes.publish(changes_report)
     finally:
-        for _, spool in records:
-            spool.close()
+        matrix.close()
+        changes.close()
 
 
 if __name__ == '__main__':

@@ -19,8 +19,9 @@ import tempfile
 from msap_progress import ProgressReporter, progress_context, report_phase, heartbeat
 from sequence_audit import normalize_workflow, merge_reports
 from MSAP_batch import build_parser as batch_parser
-from msap_io import (atomic_output, expand_input_paths, read_fasta_alignment,
+from msap_io import (atomic_output, expand_input_paths,
                      file_digest, file_signature, read_json, NoGenesIncludedError)
+from msap_matrix import AlignmentSpool
 from rename_taxa import rename_fasta, read_mapping_snapshot, normalized_taxon_id
 
 SCRIPTS = Path(__file__).resolve().parent
@@ -293,10 +294,13 @@ def publish_matrices(stage_root, root, variants, block_signals=True):
 
 
 def rename_alignment_matrices(args, paths, root, seqtype, variant):
+    return list(iter_renamed_alignments(args, paths, root, seqtype, variant))
+
+
+def iter_renamed_alignments(args, paths, root, seqtype, variant):
     """Rename all aligned matrices after MSA has used unique gene IDs."""
     renamed_dir = root / "renamed" / seqtype / variant
     renamed_dir.mkdir(parents=True, exist_ok=True)
-    renamed = []
     mapping_signature = getattr(args, "mapping_signature", None)
     if mapping_signature is None:
         args.taxon_mapping, mapping_signature = read_mapping_snapshot(args.mapping)
@@ -310,7 +314,7 @@ def rename_alignment_matrices(args, paths, root, seqtype, variant):
         if not args.no_resume and valid_rename_state(
                 read_json(state_path), source, args.mapping, target, mapping_signature, script_digest):
             print(f"[phyloprep] rename {source.name}: skipped (already complete)", flush=True)
-            renamed.append(target)
+            yield target
             continue
         source_signature = file_signature(source)
         try:
@@ -326,11 +330,10 @@ def rename_alignment_matrices(args, paths, root, seqtype, variant):
                 f"Rename inputs changed while processing {source}; outputs were not checkpointed. Rerun the pipeline."
             )
         write_rename_state(state_path, source_signature, mapping_signature, script_digest, target)
-        renamed.append(target)
+        yield target
     if (file_signature(args.mapping) != mapping_signature or
             file_digest(SCRIPTS / "rename_taxa.py") != script_digest):
         raise ValueError("Rename mapping or implementation changed during processing; rerun the pipeline")
-    return renamed
 
 
 def preserve_concat_report(stage, root, seqtype, variant, label):
@@ -348,19 +351,18 @@ def annotate_change_report(path, mapping):
     """Append mapped taxon IDs without changing primary audit provenance."""
     if not path.is_file():
         return
-    with path.open(newline="") as handle:
-        reader = csv.DictReader(handle, delimiter="\t")
-        rows = list(reader)
-    fields = list(reader.fieldnames or [])
-    if "mapped_taxa_id" not in fields:
-        fields.append("mapped_taxa_id")
-    for row in rows:
-        normalized = normalized_taxon_id(row["taxa_id"])
-        row["mapped_taxa_id"] = mapping.get(normalized, normalized)
-    with atomic_output(path) as handle:
-        writer = csv.DictWriter(handle, fieldnames=fields, delimiter="\t", restval="NA")
-        writer.writeheader()
-        writer.writerows(rows)
+    with atomic_output(path) as output:
+        with path.open(newline="") as handle:
+            reader = csv.DictReader(handle, delimiter="\t")
+            fields = list(reader.fieldnames or [])
+            if "mapped_taxa_id" not in fields:
+                fields.append("mapped_taxa_id")
+            writer = csv.DictWriter(output, fieldnames=fields, delimiter="\t", restval="NA")
+            writer.writeheader()
+            for row in reader:
+                normalized = normalized_taxon_id(row["taxa_id"])
+                row["mapped_taxa_id"] = mapping.get(normalized, normalized)
+                writer.writerow(row)
 
 
 def prepare(args, inputs, root):
@@ -428,10 +430,7 @@ def _alignment_locus_key(path, args, seqtype, variant):
     return name[:-len(suffix)] if name.endswith(suffix) else Path(name).stem
 
 
-def run_group_qc(args, root, stage, seqtype, variant):
-    """Run one representation-specific QC pass and return its pairing context."""
-    report_phase(args, f'{variant}/{seqtype}: renaming and QC')
-    print(f"[phyloprep] QC {seqtype}/{variant}", flush=True)
+def alignment_paths(args, root, seqtype, variant):
     list_suffix = f"{seqtype}.aln.fasta" if variant == "raw" else f"{seqtype}.trimmed.aln.fasta"
     batch_list = root / "alignments" / "path-lists" / f"all.{list_suffix}.pathlist"
     if not batch_list.is_file():
@@ -446,10 +445,20 @@ def run_group_qc(args, root, stage, seqtype, variant):
     if not selected:
         raise ValueError(f"No validated completed alignments are available for {seqtype}/{variant}")
 
+    return selected
+
+
+def run_group_qc(args, root, stage, seqtype, variant):
+    """Run one representation-specific QC pass and return its pairing context."""
+    report_phase(args, f'{variant}/{seqtype}: renaming and QC')
+    print(f"[phyloprep] QC {seqtype}/{variant}", flush=True)
+    selected = alignment_paths(args, root, seqtype, variant)
+
     qc_dir = root / "qc" / ("pseudogene" if args.seqtype == "pseudogene" else "") / seqtype / variant
     qc_paths = selected
     if args.mapping:
-        qc_paths = rename_alignment_matrices(args, selected, root, seqtype, variant)
+        prepared = getattr(args, '_prepared_renamed', {}).get((seqtype, variant))
+        qc_paths = prepared if prepared is not None else rename_alignment_matrices(args, selected, root, seqtype, variant)
     qc_dir.mkdir(parents=True, exist_ok=True)
     qc_inputs = qc_dir / "inputs.pathlist"
     write_paths(qc_inputs, qc_paths)
@@ -664,6 +673,7 @@ def build_group_matrices(args, root, context):
 
     supermatrix = stage / "supermatrix.fasta"
     try:
+        report_phase(args, f'{variant}/{seqtype}: concatenating loci')
         run("get_supergenes.py", "-i", passed, "-p", stage / "supermatrix",
             "--missing-taxa", args.missing_taxa, "--no-phylip")
     except subprocess.CalledProcessError as error:
@@ -692,14 +702,17 @@ def build_group_matrices(args, root, context):
 
     matrices = [supermatrix]
     if seqtype == 'codon':
+        report_phase(args, f'{variant}/{seqtype}: splitting codon positions')
         run("split_codon_seqence_alignment.py", "-i", supermatrix, cwd=stage)
         matrices.extend(stage / f"codon{position}.supermatrix.fasta"
                         for position in ("1st", "2nd", "3rd"))
         fourfold = stage / "fourfold.fasta"
+        report_phase(args, f'{variant}/{seqtype}: extracting four-fold sites')
         run("extract_4-fold_degenerated_sites.py", "-i", supermatrix,
             "-o", fourfold, "-g", args.genetic_code)
         try:
-            read_fasta_alignment(fourfold)
+            with AlignmentSpool(fourfold, directory=fourfold.parent):
+                pass
         except ValueError as error:
             if args.seqtype != 'pseudogene':
                 raise ValueError(f"No usable four-fold matrix for {seqtype}/{variant} "

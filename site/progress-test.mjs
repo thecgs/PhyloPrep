@@ -12,7 +12,7 @@ const elements = {
   runStages: { querySelectorAll: () => [] }, outputName: { value: '' }, useNextStep: {},
   log: { set textContent(value) { messages.push(value); }, get textContent() { return messages.at(-1); } },
 };
-const context = vm.createContext({ PhyloPrepSave, Blob,
+const context = vm.createContext({releaseIdleWorkers:()=>{}, PhyloPrepSave, Blob,
   elements, performance: { now: () => clock += 101 }, Map,
   setInterval: callback => { timers.add(callback); return callback; },
   clearInterval: callback => timers.delete(callback),

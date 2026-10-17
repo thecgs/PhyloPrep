@@ -78,6 +78,7 @@ const context = vm.createContext({ PhyloPrepSave, Blob,
   },
 });
 vm.runInContext(slice('async function runMsapBatchBrowserWorkflow(', 'async function runPhyloPrepBrowserWorkflow('),context);
+context.outputSaveSession=undefined;
 context.request={pipelineOutput:true,options:{},files:[{inputKey:'inputs',name:'first.fa',content:'>a\nATG'},{inputKey:'inputs',name:'second.fa',content:'>a\nATG'}]};
 const batch=await vm.runInContext('runMsapBatchBrowserWorkflow(request)',context);
 assert.ok(batch.files.some(file => file.name === 'first.codon.aln.fasta'), 'Internal batch names must stay unchanged');
@@ -90,7 +91,7 @@ const ui = {
   command:{textContent:"test command"},run:{disabled:false},cancelRun:{},runtimeStatus:{},saveProgress:{},outputName:{value:''},useNextStep:{},downloadAll:{},chooseFolder:{},downloadSelected:{},
 };
 const exported = [{name:'a.fa',content:'A'},{name:'b.fa',content:'B'}];
-const integration = vm.createContext({ PhyloPrepSave, Blob,
+const integration = vm.createContext({releaseIdleWorkers:()=>{}, PhyloPrepSave, Blob,
   elements:ui,performance:{now:()=>Date.now()},PhyloPrepSave:scope.PhyloPrepSave,
   setConfigurationLocked:()=>{}, localSaveBusy:false, outputDirectoryHandle:undefined,outputSaveSession:undefined,producedFiles:new Map(),generatedFiles:[],
   resolvedFolderFiles:new Map(),preflightGeneration:0,
@@ -222,7 +223,7 @@ console.log('Workflow start snapshots survive subsequent UI/option changes.');
 // Full pipeline validates once and lets Python build its own lists/merged report.
 let validations=0, listBuilds=0, reportMerges=0, finalized=0, aligned=0;
 let finalRequest;
-const adapter=vm.createContext({ PhyloPrepSave, Blob,
+const adapter=vm.createContext({ PhyloPrepSave, Blob, outputSaveSession:undefined,
   performance:{now:()=>0},setInterval:()=>1,clearInterval:()=>{},
   showLocusProgress:()=>{},setRunStage:()=>{},elements:{runtimeStatus:{}},
   externalAlignerLabel:()=> 'MAFFT',publishProducedFiles:async()=>{},
@@ -234,6 +235,7 @@ const adapter=vm.createContext({ PhyloPrepSave, Blob,
       {name:`${stem}.cds.fasta`,content:'unused intermediate'},
     ]};
   },
+  releaseIdleWorkers:()=>{},
   runInWorker:async request=>{finalized++;finalRequest=request;return {files:[{name:'matrices/result.fasta',content:'matrix'}]};},
 });
 vm.runInContext(slice('function fileStem(', 'function showLocusProgress('),adapter);

@@ -383,9 +383,11 @@ python calulate_4dtv_and_correction.py -i pairwise.pathlist -o 4dtv.tsv -g 1
 
 Its TSV columns are described in the [4DTV section](#divergence-statistics-4dtv-and-related-values).
 
-### `sequence_audit.py` and `msap_io.py` — internal libraries
+### `sequence_audit.py`, `msap_io.py` and `msap_matrix.py` — internal libraries
 
 These are imported by workflow scripts. They implement normalization, MACSE provenance, report merging, FASTA/path-list validation, stop-codon logic, atomic writes, and output-path protection.
+
+`msap_matrix.py` provides a bounded disk-backed reader for supermatrix derivatives and PHYLIP/NEXUS conversion. Codon-position splitting, fourfold-site selection, export normalization reports and fourfold validation avoid retaining whole concatenated matrices in Python. Temporary files are created beside outputs, including inside the browser's OPFS workspace when active.
 
 ## QC and tree building
 
@@ -515,8 +517,10 @@ With an authorized output directory, the browser saves completed locus alignment
 
 Browser exports use relative references for output pathlists and QC pass/fail/retained lists, so the complete saved output folder can be moved and reused by the CLI. Original input sequences are not bundled: input-only lists reference basenames and require those original FASTAs beside the list. Independent browser tools also use chunked output transfer, and unchanged checkpoint files are reused during final result transfer.
 
-With an authorized output folder, successfully saved browser outputs release their cached text and are read from disk for preview, download or reuse. The full pipeline loads saved alignments by raw/trimmed branch and releases original and renamed alignment files after that branch's QC and independent/paired concatenation finish and local saving is confirmed. Files must remain accessible and unchanged. Failed saves retain their content for retry; runs without an output folder retain the memory-backed behavior.
+With an authorized output folder, successfully saved browser outputs release their cached text and are read from disk for preview, download or reuse. The full pipeline loads saved alignments by raw/trimmed branch, exports each renamed locus before QC/concatenation, and releases eligible working files after downstream use and confirmed local saving. Files must remain accessible and unchanged. Failed saves retain their content for retry; runs without an output folder retain the memory-backed behavior.
 
 During full-pipeline finalization with an output folder, supported browsers use an OPFS temporary disk workspace: original and renamed alignments and concatenation working files no longer accumulate as MEMFS file contents. Files are flushed on close and read on demand, while renaming streams sequence records. The temporary cache is cleaned after use, and unsupported browsers retain the previous memory mode. This reduces retained file data but uses browser-managed disk space and does not raise the Python/WebAssembly memory limit.
 
 The browser verifies the SHA256 of bundled Python sources and its browser adapter before execution, using content-addressed source assets. Run parameters and the equivalent CLI command are captured at startup. Existing output fingerprints are reused when building the run manifest to reduce memory duplication for large matrices.
+
+Browser inputs are staged lazily from File/Blob references, and large exports remain binary until saved. With a selected output folder, completed loci can be reused after verifying input content, relevant alignment settings/source versions and saved output checksums. Per-locus checkpoints in `reports/alignment-cache/` support reuse after interrupted workflows; a compatible prior `phyloprep-run.json` also works. QC/mapping changes rebuild renaming, QC and matrices while preserving compatible alignment work. **Recompute existing alignments** (`--no-resume`) forces alignment/trimming to rerun. Saved files without matching provenance are recomputed. Idle WebAssembly workers are released between alignment and finalization and after completion.

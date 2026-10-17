@@ -3,8 +3,9 @@
   function record(file) {
     const descriptor = Object.getOwnPropertyDescriptor(file, 'content');
     if (!file.storage || (descriptor && 'value' in descriptor && descriptor.value !== file.storage.content)) {
-      file.storage = { content: file.content };
+      file.storage = { content: file.content, ...(file.blob ? {blob:file.blob} : {}) };
     }
+    if (file.storage.blob) delete file.blob;
     if (Object.prototype.hasOwnProperty.call(file, 'content')) delete file.content;
     Object.defineProperty(file, 'content', {
       configurable: true, enumerable: false,
@@ -18,6 +19,7 @@
     if (typeof (storage ? storage.content : file.content) === 'string') {
       return new Blob([storage ? storage.content : file.content]);
     }
+    if (storage?.blob || file.blob) return storage?.blob || file.blob;
     const disk = storage?.disk || file.disk;
     if (!disk) throw new Error(`Output content is unavailable: ${file.name}`);
     const source = await disk.handle.getFile();
@@ -30,7 +32,8 @@
   function wireFile(file) {
     const { storage, ...metadata } = file;
     const content = storage ? storage.content : file.content;
-    return typeof content === 'string' ? { ...metadata, content } : { ...metadata, disk: storage?.disk || file.disk };
+    return typeof content === 'string' ? { ...metadata, content } : storage?.blob || file.blob
+      ? {...metadata, blob:storage?.blob || file.blob} : { ...metadata, disk: storage?.disk || file.disk };
   }
   function createWriter(root, { concurrency = 4, onProgress = () => {} } = {}) {
     const directories = new Map([['', Promise.resolve(root)]]);
@@ -70,6 +73,7 @@
           const snapshot = await file.getFile();
           item.storage.disk = { handle: file, size: snapshot.size, lastModified: snapshot.lastModified };
           delete item.storage.content;
+          delete item.storage.blob;
         }
       } catch (error) {
         if (stream) { try { await stream.abort(); } catch {} }
@@ -123,6 +127,13 @@
       else enqueue();
       return item.promise;
     }
+    function adopt(file) {
+      record(file);
+      const name=file.name.replaceAll('\\','/');
+      if(latest.has(name) || !file.storage.disk)return;
+      const item={name,file,storage:file.storage,status:'saved'};
+      item.promise=Promise.resolve(item);latest.set(name,item);counts.saved++;notify();
+    }
     async function settle() { while (pending.size) await Promise.all([...pending]); notify(true); return stats(); }
     async function ready(limit = 8) { while (!failure && pending.size > limit) await Promise.race([...pending]); }
     function state(file) {
@@ -131,7 +142,7 @@
     }
     function saved(file) { return state(file) === 'saved'; }
     async function retry() { await settle(); failure = null; }
-    return { root, save, settle, ready, saved, state, retry, stats, get error() { return failure; } };
+    return { root, save, adopt, settle, ready, saved, state, retry, stats, get error() { return failure; } };
   }
   globalThis.PhyloPrepSave = { createWriter, record, readBlob, readText, wireFile };
 })();

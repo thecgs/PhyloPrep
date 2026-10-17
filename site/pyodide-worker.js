@@ -74,7 +74,7 @@ function uniqueFileName(name, used) {
 }
 
 function isFasta(file) {
-  return file.content.trimStart().startsWith(">");
+  return file.fasta ?? String(file.content || "").trimStart().startsWith(">");
 }
 
 async function hashSourceBytes(bytes) {
@@ -138,9 +138,24 @@ async function readDiskInput(file) {
   if (source.size !== saved.size || source.lastModified !== saved.lastModified) {
     throw new Error(`Saved input changed on disk: ${file.name}. Restore the original file before retrying.`);
   }
-  const bytes = new Uint8Array(await source.arrayBuffer());
-  if (file.sha256 && await hashSourceBytes(bytes) !== file.sha256) throw new Error(`Saved input checksum mismatch: ${file.name}`);
-  return bytes;
+  if (!globalThis.PhyloPrepHash) importScripts('browser-hash.js');
+  if (file.sha256 && await PhyloPrepHash.blob(source) !== file.sha256) throw new Error(`Saved input checksum mismatch: ${file.name}`);
+  return source;
+}
+
+async function writeBlobInput(runtime, path, source) {
+  const stream=runtime.FS.open(path,'w');
+  try {
+    for(let position=0;position<source.size;position+=1024*1024) {
+      const bytes=new Uint8Array(await source.slice(position,position+1024*1024).arrayBuffer());
+      let done=0;
+      while(done<bytes.length) {
+        const count=runtime.FS.write(stream,bytes,done,bytes.length-done,position+done);
+        if(!count)throw Error(`Incomplete input write: ${path}`);
+        done+=count;
+      }
+    }
+  } finally {runtime.FS.close(stream);}
 }
 
 async function stageBrowserInputs(runtime, request) {
@@ -157,10 +172,18 @@ async function stageBrowserInputs(runtime, request) {
     const name = uniqueFileName(file.name, names);
     const path = `${inputRoot}/${name}`;
     const deferred = request.incrementalSave && request.type === "phyloprep-finalize" && file.role === "batch-output" && file.disk && name.endsWith('.aln.fasta');
-    if (!deferred) runtime.FS.writeFile(path, file.disk ? await readDiskInput(file) : file.content);
-    const staged = { ...file, name, path, on_disk: Boolean(deferred), fasta: file.disk ? /\.(fa|fas|fasta)$/i.test(name) : isFasta(file) };
+    if (request.type === 'phyloprep-finalize' && file.role === 'source') {
+      // Finalization only needs source names; alignments and audit reports are supplied separately.
+      runtime.FS.writeFile(path,'');
+    } else if (!deferred) {
+      if(file.disk || file.blob) await writeBlobInput(runtime,path,file.disk ? await readDiskInput(file) : file.blob);
+      else runtime.FS.writeFile(path,file.content);
+    }
+    const staged = { ...file, name, path, on_disk: Boolean(deferred), fasta: file.fasta ?? (file.disk ? /\.(fa|fas|fasta)$/i.test(name) : isFasta(file)) };
     delete staged.content;
+    delete staged.blob;
     delete file.content;
+    delete file.blob;
     files.push(staged);
   }
   const fastaFiles = files.filter((file) => file.fasta);
@@ -234,7 +257,8 @@ function orthofinderArguments(runtime, request, stage) {
   const sequenceDir = `${stage.optionsRoot}/orthofinder-sequences`;
   runtime.FS.mkdirTree(sequenceDir);
   sequences.forEach((file) => {
-    runtime.FS.writeFile(`${sequenceDir}/${file.name}`, file.content);
+    runtime.FS.rename(file.path, `${sequenceDir}/${file.name}`);
+    file.path = `${sequenceDir}/${file.name}`;
   });
   const outdir = outputPath(stage, request.outputName, "one-to-one_orthologs");
   const args = [
@@ -347,7 +371,8 @@ self.addEventListener("message", async (event) => {
   const transferred = new Map();
   try {
     runtime = await ensureRuntime(runId);
-    if (request.type === "phyloprep-finalize" && request.incrementalSave) {
+    if(request.expectedBundle && request.expectedBundle!==engineManifest.bundleSha256)throw Error("The engine build changed. Reload the page before reusing saved alignments.");
+    if (request.incrementalSave) {
       if (!globalThis.PhyloPrepDiskFS) importScripts('browser-disk-fs.js');
       diskWorkspace = await PhyloPrepDiskFS.open(runtime, `/work/runs/run-${runId}`);
       self.postMessage({type:'stage',runId,stage:'process',label:diskWorkspace
@@ -370,6 +395,7 @@ self.addEventListener("message", async (event) => {
       self.postMessage({ type: "stage", runId, stage: "process", label: "Finishing original MSAP.py workflow" });
       const alignmentPath = `${stage.optionsRoot}/biowasm-alignment.aln.fasta`;
       runtime.FS.writeFile(alignmentPath, request.alignmentContent || "");
+      delete request.alignmentContent;
       const args = msapArguments(request, stage);
       const raw = await runtime.runPythonAsync(`run_msap_complete(${JSON.stringify(args)}, ${JSON.stringify(stage.outputRoot)}, ${JSON.stringify(alignmentPath)}, manifest_only=True)`);
       const result = JSON.parse(raw);
@@ -408,7 +434,7 @@ self.addEventListener("message", async (event) => {
               for (const file of stage.files) {
                 if (!file.on_disk || file.name.endsWith('.trimmed.aln.fasta') !== (step.load_variant === 'trimmed')) continue;
                 const target = `${stage.outputRoot}/alignments/${file.name}`;
-                runtime.FS.writeFile(target, await readDiskInput(file));
+                await writeBlobInput(runtime,target,await readDiskInput(file));
               }
             }
             await streamOutputFiles(runtime, runId, step.files || [], `checkpoint-${checkpoint++}`, true, transferred);
