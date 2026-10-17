@@ -424,7 +424,7 @@ def _group_stage(stage_root, workflow, seqtype, variant, paired=False):
 def _alignment_locus_key(path, args, seqtype, variant):
     name = Path(path).name
     suffix = f".{args.align_software}.{seqtype}"
-    suffix += ".aln" if variant == "raw" else ".trimmed.aln"
+    suffix += ".aln.fasta" if variant == "raw" else ".trimmed.aln.fasta"
     return name[:-len(suffix)] if name.endswith(suffix) else Path(name).stem
 
 
@@ -432,7 +432,7 @@ def run_group_qc(args, root, stage, seqtype, variant):
     """Run one representation-specific QC pass and return its pairing context."""
     report_phase(args, f'{variant}/{seqtype}: renaming and QC')
     print(f"[phyloprep] QC {seqtype}/{variant}", flush=True)
-    list_suffix = f"{seqtype}.aln" if variant == "raw" else f"{seqtype}.trimmed.aln"
+    list_suffix = f"{seqtype}.aln.fasta" if variant == "raw" else f"{seqtype}.trimmed.aln.fasta"
     batch_list = root / "alignments" / "path-lists" / f"all.{list_suffix}.pathlist"
     if not batch_list.is_file():
         raise ValueError(

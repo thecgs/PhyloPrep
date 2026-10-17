@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import io
 import importlib
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -84,7 +85,9 @@ def _exit_code(value):
     return 1
 
 
-def _output_files(output_root: Path):
+def _output_files(output_root: Path, manifest_only=False, path_lists=()):
+    if manifest_only:
+        return _export_output_files(output_root, _visible_output_files(output_root, manifest_only=True), path_lists=path_lists)
     files = []
     for path in sorted(output_root.rglob("*")):
         if path.is_file():
@@ -96,7 +99,7 @@ def _output_files(output_root: Path):
 
 
 @memory_safe_result
-def run_original_module(module, argv, output_root, engine_root="/engine"):
+def run_original_module(module, argv, output_root, engine_root="/engine", manifest_only=False):
     """Run an untouched source script as its CLI entry point and return its files."""
     engine = Path(engine_root).resolve()
     script = engine / module
@@ -133,7 +136,14 @@ def run_original_module(module, argv, output_root, engine_root="/engine"):
             "stdout": stdout.getvalue(),
             "stderr": stderr.getvalue(),
         })
-    files = _output_files(output)
+    list_paths = []
+    for index, argument in enumerate(argv):
+        if str(argument) == '--pathlist-output' and index + 1 < len(argv):
+            list_paths.append(argv[index + 1])
+        elif str(argument).startswith('--pathlist-output='):
+            list_paths.append(str(argument).split('=', 1)[1])
+    list_paths = [Path(value) if Path(value).is_absolute() else output / value for value in list_paths]
+    files = _output_files(output, manifest_only=manifest_only, path_lists=list_paths)
     if not files:
         return json.dumps({"ok": False, "error": f"{module} did not create an output file."})
     return json.dumps({
@@ -280,7 +290,7 @@ def run_msap_probe(argv, output_root, engine_root="/engine"):
 
 
 @memory_safe_result
-def run_msap_complete(argv, output_root, alignment_file, engine_root="/engine"):
+def run_msap_complete(argv, output_root, alignment_file, engine_root="/engine", manifest_only=False):
     """Rerun untouched MSAP.py and satisfy its browser-supported alignment call."""
     alignment = Path(alignment_file)
     if not alignment.is_file():
@@ -324,7 +334,7 @@ def run_msap_complete(argv, output_root, alignment_file, engine_root="/engine"):
             "stdout": stdout,
             "stderr": stderr,
         })
-    files = _output_files(Path(output_root).resolve())
+    files = _output_files(Path(output_root).resolve(), manifest_only=manifest_only)
     if not files:
         return json.dumps({"ok": False, "error": "MSAP.py did not create output files."})
     return json.dumps({
@@ -389,8 +399,42 @@ def _visible_output_files(root, manifest_only=False):
     return files
 
 
-@memory_safe_result
-def run_phyloprep_finalize(file_manifest, options, output_root, engine_root="/engine", progress_callback=None, manifest_only=False):
+def _export_output_files(root, files, path_lists=()):
+    """Prepare portable list copies; never change paths used by the engine."""
+    root = Path(root).resolve()
+    list_paths = {Path(path).resolve() for path in path_lists}
+    for item in files:
+        path = Path(item['path'])
+        if path.resolve() in list_paths or path.suffix in {'.pathlist', '.list'} or path.name.endswith(('.pass.tsv', '.fail.tsv', '.retained.tsv')):
+            exported = root / '.browser-export' / item['name']
+            exported.parent.mkdir(parents=True, exist_ok=True)
+            with path.open(encoding='utf-8') as source, exported.open('w', encoding='utf-8') as target:
+                for line in source:
+                    entry = line.strip()
+                    candidate = Path(entry)
+                    if entry and not entry.startswith(('#', ';')):
+                        if not candidate.is_absolute():
+                            candidate = path.parent / candidate
+                        candidate = candidate.resolve()
+                        if candidate.is_file():
+                            if candidate.is_relative_to(root):
+                                entry = Path(os.path.relpath(candidate, path.parent)).as_posix()
+                            else:
+                                # Inputs are not bundled: place the original FASTA
+                                # alongside this exported list before CLI reuse.
+                                entry = candidate.name
+                    target.write(entry + '\n')
+            path = exported
+            item.update(path=str(path), size=path.stat().st_size)
+        digest = hashlib.sha256()
+        with path.open('rb') as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b''):
+                digest.update(chunk)
+        item['sha256'] = digest.hexdigest()
+    return files
+
+
+def _phyloprep_finalize_steps(file_manifest, options, output_root, engine_root="/engine", progress_callback=None, manifest_only=False, incremental=False):
     """Finish the browser pipeline with the repository's original downstream modules."""
     engine = Path(engine_root).resolve()
     root = Path(output_root).resolve()
@@ -428,13 +472,13 @@ def run_phyloprep_finalize(file_manifest, options, output_root, engine_root="/en
         path_lists = alignments / "path-lists"
         path_lists.mkdir(parents=True, exist_ok=True)
         for kind in ("nucl", "prot", "codon"):
-            for variant, suffix in (("raw", f".{kind}.aln"), ("trimmed", f".{kind}.trimmed.aln")):
+            for variant, suffix in (("raw", f".{kind}.aln.fasta"), ("trimmed", f".{kind}.trimmed.aln.fasta")):
                 files = sorted(
                     path.resolve() for path in alignments.iterdir()
                     if path.is_file() and path.name.endswith(suffix)
                 )
                 if files:
-                    list_name = f"all.{kind}.aln.pathlist" if variant == "raw" else f"all.{kind}.trimmed.aln.pathlist"
+                    list_name = f"all.{kind}.aln.fasta.pathlist" if variant == "raw" else f"all.{kind}.trimmed.aln.fasta.pathlist"
                     phyloprep.write_paths(path_lists / list_name, files)
 
         reports = root / "reports"
@@ -502,6 +546,15 @@ def run_phyloprep_finalize(file_manifest, options, output_root, engine_root="/en
                         report_phase(args, f'{variant}: QC and matrix preparation')
                         phyloprep.prepare_variant(args, root, matrix_root, variant)
                         args._progress.update(f'{variant}: complete', completed=index + 1)
+                        if incremental:
+                            # Export completed QC/report branches only; staged matrices
+                            # stay private until normal publication succeeds.
+                            checkpoint = []
+                            for folder in ('qc', 'reports'):
+                                for item in _visible_output_files(root / folder, manifest_only=True):
+                                    item['name'] = folder + '/' + item['name']
+                                    checkpoint.append(item)
+                            yield _export_output_files(root, checkpoint)
                     report_phase(args, 'Publishing matrices')
                     phyloprep.publish_matrices(matrix_root, root, variants, block_signals=False)
                     args._progress.update('Complete', completed=len(variants) + 1)
@@ -509,6 +562,8 @@ def run_phyloprep_finalize(file_manifest, options, output_root, engine_root="/en
             phyloprep.run = original_run
 
         files = _visible_output_files(root, manifest_only=manifest_only)
+        if manifest_only:
+            files = _export_output_files(root, files)
         if not files:
             raise ValueError("PhyloPrep produced no downloadable output files.")
         return json.dumps({
@@ -525,7 +580,8 @@ def run_phyloprep_finalize(file_manifest, options, output_root, engine_root="/en
             return json.dumps({
                 "ok": False,
                 "recoverable": True,
-                "files": _visible_output_files(root, manifest_only=manifest_only),
+                "files": (_export_output_files(root, _visible_output_files(root, manifest_only=True))
+                          if manifest_only else _visible_output_files(root)),
                 "user_error": str(error),
                 "summary": "No loci passed QC; diagnostic reports were preserved.",
                 "stdout": stdout.getvalue(),
@@ -535,6 +591,8 @@ def run_phyloprep_finalize(file_manifest, options, output_root, engine_root="/en
         technical_error = stderr.getvalue().strip() or "The browser PhyloPrep pipeline failed."
         if phyloprep is not None and isinstance(error, phyloprep.NoGenesIncludedError):
             files = _visible_output_files(root, manifest_only=manifest_only)
+            if manifest_only:
+                files = _export_output_files(root, files)
             if mapping_supplied:
                 user_error = (
                     "No supermatrix could be built with missing-taxa=skip-gene because no locus retained the full "
@@ -565,3 +623,27 @@ def run_phyloprep_finalize(file_manifest, options, output_root, engine_root="/en
             "stdout": stdout.getvalue(),
             "stderr": stderr.getvalue(),
         })
+
+
+@memory_safe_result
+def advance_phyloprep_finalize(steps):
+    """One synchronous analysis step, followed by bounded asynchronous JS export."""
+    try:
+        files = next(steps)
+    except StopIteration as completed:
+        return completed.value
+    return json.dumps({"pending": True, "files": files})
+
+
+@memory_safe_result
+def run_phyloprep_finalize(file_manifest, options, output_root, engine_root="/engine", progress_callback=None, manifest_only=False):
+    """Existing synchronous interface; incremental exports are browser opt-in."""
+    steps = _phyloprep_finalize_steps(file_manifest, options, output_root, engine_root,
+                                     progress_callback, manifest_only)
+    try:
+        while True:
+            next(steps)
+    except StopIteration as completed:
+        return completed.value
+    finally:
+        steps.close()

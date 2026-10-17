@@ -40,9 +40,9 @@ def test_codon_pipeline_and_resume(tmp_path, fake_aligner, mapping_alias):
     assert result.returncode == 0, result.stdout + result.stderr
     a, b = ("Species_A", "Species_B") if mapping_alias else ("a", "b")
     if mapping_alias:
-        raw_alignment = output / "alignments/gene.mafft.codon.aln"
+        raw_alignment = output / "alignments/gene.mafft.codon.aln.fasta"
         assert [record.id for record in AlignIO.read(raw_alignment, "fasta")] == ["a", "b"]
-        renamed_alignment = output / "renamed/codon/raw/gene.mafft.codon.aln"
+        renamed_alignment = output / "renamed/codon/raw/gene.mafft.codon.aln.fasta"
         assert [record.id for record in AlignIO.read(renamed_alignment, "fasta")] == ["Species_A", "Species_B"]
     for variant in ("raw", "trimmed"):
         directory = output / "matrices" / "codon" / variant
@@ -55,7 +55,7 @@ def test_codon_pipeline_and_resume(tmp_path, fake_aligner, mapping_alias):
         check_formats(protein_dir, "supermatrix", {a: "AG", b: "AG"})
         assert "datatype=protein" in (protein_dir / "supermatrix.nex").read_text().lower()
         assert not list(protein_dir.glob("codon*"))
-        suffix = ".aln" if variant == "raw" else ".trimmed.aln"
+        suffix = ".aln.fasta" if variant == "raw" else ".trimmed.aln.fasta"
         for seqtype in ("codon", "prot"):
             paths = (output / "qc" / seqtype / variant / "alignment.pass.tsv").read_text()
             assert f".{seqtype}{suffix}" in paths
@@ -64,7 +64,7 @@ def test_codon_pipeline_and_resume(tmp_path, fake_aligner, mapping_alias):
     assert result.returncode == 0, result.stdout + result.stderr
     assert "skipped (already complete)" in result.stdout
     if mapping_alias:
-        assert "rename gene.mafft.codon.aln: skipped (already complete)" in result.stdout
+        assert "rename gene.mafft.codon.aln.fasta: skipped (already complete)" in result.stdout
     assert Path(env["MSAP_TEST_LOG"]).read_text().splitlines() == ["run"]
 
 
@@ -95,7 +95,7 @@ def test_mapping_that_collapses_paralogs_is_reported_by_qc(tmp_path, fake_aligne
     assert result.returncode == 2
     assert "No alignments passed QC" in result.stderr
     assert "ASTRAL-Pro3" in result.stderr
-    assert (output / "alignments/all_copies.mafft.nucl.aln").exists()
+    assert (output / "alignments/all_copies.mafft.nucl.aln.fasta").exists()
     details = (output / "qc/nucl/raw/alignment.details.tsv").read_text()
     assert "duplicate_ids" in details
 
@@ -113,7 +113,7 @@ def test_rename_checkpoint_is_invalidated_when_mapping_changes(tmp_path, fake_al
     mapping.write_text("a\tSpecies_C\nb\tSpecies_D\n")
     second = invoke(tmp_path, env, *args)
     assert second.returncode == 0, second.stdout + second.stderr
-    assert "rename gene.mafft.codon.aln: skipped" not in second.stdout
+    assert "rename gene.mafft.codon.aln.fasta: skipped" not in second.stdout
     check_formats(output / "matrices/codon/raw", "supermatrix",
                   {"Species_C": "GCTGGT", "Species_D": "GCCGGA"})
     assert Path(env["MSAP_TEST_LOG"]).read_text().splitlines() == ["run"]
@@ -285,9 +285,9 @@ def test_paired_qc_keeps_representation_reports_and_uses_retained_manifests(tmp_
     paired = (output / 'qc/paired/raw/loci.details.tsv').read_text()
     assert 'ambiguous' in paired
     assert 'codon_qc_failed' in paired
-    assert 'ambiguous.mafft.prot.aln' in (output / 'qc/prot/raw/alignment.pass.tsv').read_text()
-    assert 'ambiguous.mafft.prot.aln' not in (output / 'qc/paired/raw/prot.retained.tsv').read_text()
-    assert 'ambiguous.mafft.codon.aln' not in (output / 'qc/paired/raw/codon.retained.tsv').read_text()
+    assert 'ambiguous.mafft.prot.aln.fasta' in (output / 'qc/prot/raw/alignment.pass.tsv').read_text()
+    assert 'ambiguous.mafft.prot.aln.fasta' not in (output / 'qc/paired/raw/prot.retained.tsv').read_text()
+    assert 'ambiguous.mafft.codon.aln.fasta' not in (output / 'qc/paired/raw/codon.retained.tsv').read_text()
 
     for kind in ('codon', 'prot'):
         assert (output / f'qc/{kind}/trimmed/independent.retained.tsv').read_text().count('\n') == 2
@@ -305,8 +305,8 @@ def test_codon_default_trimming_uses_one_shared_site_mask(tmp_path, fake_aligner
         '-N', '0', '-X', '1'
     )
     assert result.returncode == 0, result.stdout + result.stderr
-    codon = AlignIO.read(output / 'alignments/gene.mafft.codon.trimmed.aln', 'fasta')
-    protein = AlignIO.read(output / 'alignments/gene.mafft.prot.trimmed.aln', 'fasta')
+    codon = AlignIO.read(output / 'alignments/gene.mafft.codon.trimmed.aln.fasta', 'fasta')
+    protein = AlignIO.read(output / 'alignments/gene.mafft.prot.trimmed.aln.fasta', 'fasta')
     assert {r.id: str(r.seq) for r in codon} == {'a': 'GGT', 'b': 'GGA'}
     assert {r.id: str(r.seq) for r in protein} == {'a': 'G', 'b': 'G'}
     assert len(codon[0].seq) == 3 * len(protein[0].seq)

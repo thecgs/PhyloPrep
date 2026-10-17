@@ -1,4 +1,4 @@
-const CACHE_NAME = "phyloprep-web-v58";
+const CACHE_NAME = "phyloprep-web-v64";
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -7,10 +7,10 @@ const APP_SHELL = [
   "./browser-inputs.js",
   "./browser-downloads.js",
   "./browser-results.js",
+  "./browser-save.js",
   "./orthogroup-defaults.js",
   "./pyodide-worker.js",
   "./alignment-worker.js",
-  "./browser_runner.py",
   "./manifest.webmanifest",
   "./icon.svg",
 ];
@@ -29,11 +29,28 @@ self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
   const cacheable = url.origin === self.location.origin || url.href.startsWith(PYODIDE_PREFIX);
   if (!cacheable) return;
-  event.respondWith(caches.match(event.request).then((cached) => {
-    const network = fetch(event.request).then((response) => {
-      if (response.ok || response.type === "opaque") caches.open(CACHE_NAME).then((cache) => cache.put(event.request, response.clone()));
-      return response;
-    });
-    return cached || network;
-  }));
+  if (event.request.cache === "no-store") {
+    event.respondWith(fetch(event.request));
+    return;
+  }
+  const refresh = event.request.cache === "no-cache" || url.pathname.endsWith("/engine/manifest.json");
+  const network = () => fetch(event.request).then(async response => {
+    if (response.ok || response.type === "opaque") {
+      const cache = await caches.open(CACHE_NAME);
+      await cache.put(event.request, response.clone());
+    }
+    return response;
+  });
+  event.respondWith((async () => {
+    const cached = await caches.match(event.request);
+    if (refresh) {
+      try {
+        const response = await network();
+        if (response.ok || !cached) return response;
+      } catch (error) { if (!cached) throw error; }
+      return cached;
+    }
+    if (cached) return cached;
+    return network();
+  })());
 });

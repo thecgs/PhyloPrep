@@ -137,7 +137,7 @@ def test_msap_can_use_trimal_with_a_path_containing_spaces(tmp_path):
         env=env,
     )
 
-    output = tmp_path / "input with spaces.mafft.nucl.trimmed.aln"
+    output = tmp_path / "input with spaces.mafft.nucl.trimmed.aln.fasta"
     assert output.read_text() == input_file.read_text()
     assert "-automated1" in (tmp_path / "trimal.args").read_text().splitlines()
 
@@ -184,8 +184,8 @@ def test_msap_can_use_trimal_with_a_path_containing_spaces(tmp_path):
         env=env,
     )
 
-    assert (tmp_path / "untrimmed input.mafft.nucl.aln").read_text() == untrimmed_input.read_text()
-    assert not (tmp_path / "untrimmed input.mafft.nucl.trimmed.aln").exists()
+    assert (tmp_path / "untrimmed input.mafft.nucl.aln.fasta").read_text() == untrimmed_input.read_text()
+    assert not (tmp_path / "untrimmed input.mafft.nucl.trimmed.aln.fasta").exists()
 
 
 @pytest.mark.parametrize(
@@ -228,10 +228,10 @@ def _fake_trimal(path, output_fasta, columns):
 
 
 def test_trimal_codon_columns_are_transferred_as_whole_triplets(tmp_path):
-    protein = tmp_path / "protein.aln"
-    codon = tmp_path / "codon.aln"
-    protein_out = tmp_path / "protein.trimmed.aln"
-    codon_out = tmp_path / "codon.trimmed.aln"
+    protein = tmp_path / "protein.aln.fasta"
+    codon = tmp_path / "codon.aln.fasta"
+    protein_out = tmp_path / "protein.trimmed.aln.fasta"
+    codon_out = tmp_path / "codon.trimmed.aln.fasta"
     trimal = tmp_path / "trimal"
     protein.write_text(">a\nMKA\n>b\nMKA\n")
     codon.write_text(">a\nATGAAAGCT\n>b\nATGAAGGCC\n")
@@ -248,10 +248,10 @@ def test_trimal_codon_columns_are_transferred_as_whole_triplets(tmp_path):
 
 
 def test_trimal_codon_rejects_changed_sequence_set_without_writing_outputs(tmp_path):
-    protein = tmp_path / "protein.aln"
-    codon = tmp_path / "codon.aln"
-    protein_out = tmp_path / "protein.trimmed.aln"
-    codon_out = tmp_path / "codon.trimmed.aln"
+    protein = tmp_path / "protein.aln.fasta"
+    codon = tmp_path / "codon.aln.fasta"
+    protein_out = tmp_path / "protein.trimmed.aln.fasta"
+    codon_out = tmp_path / "codon.trimmed.aln.fasta"
     trimal = tmp_path / "trimal"
     protein.write_text(">a\nMKA\n>b\nMKA\n")
     codon.write_text(">a\nATGAAAGCT\n>b\nATGAAGGCC\n")
@@ -270,8 +270,8 @@ def test_trimal_codon_rejects_changed_sequence_set_without_writing_outputs(tmp_p
 
 @pytest.mark.parametrize("option", ["-in", "-out", "-fasta", "-backtrans", "-colnumbering"])
 def test_trimal_codon_rejects_arguments_that_override_its_mapping_contract(tmp_path, option):
-    protein = tmp_path / "protein.aln"
-    codon = tmp_path / "codon.aln"
+    protein = tmp_path / "protein.aln.fasta"
+    codon = tmp_path / "codon.aln.fasta"
     protein.write_text(">a\nMKA\n>b\nMKA\n")
     codon.write_text(">a\nATGAAAGCT\n>b\nATGAAGGCC\n")
 

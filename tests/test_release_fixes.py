@@ -130,12 +130,12 @@ def test_protein_stops_and_u_preprocessed(tmp_path, fake_aligner):
     source.write_text('>a\nMA*G\n>b\nMAAG\n')
     result = cli('MSAP.py', '-i', source, '-st', 'prot', '--notrim', cwd=tmp_path, env=env)
     assert result.returncode == 0, result.stderr
-    assert records(tmp_path / 'protein.mafft.prot.aln')['a'] == 'MAXG'
+    assert records(tmp_path / 'protein.mafft.prot.aln.fasta')['a'] == 'MAXG'
     assert Path(env['MSAP_TEST_LOG']).exists()
     source.write_text('>a\nMAUG\n>b\nMAAG\n')
     result = cli('MSAP.py', '-i', source, '-st', 'prot', '--notrim', cwd=tmp_path, env=env)
     assert result.returncode == 0, result.stderr
-    assert records(tmp_path / 'protein.mafft.prot.aln')['a'] == 'MAXG'
+    assert records(tmp_path / 'protein.mafft.prot.aln.fasta')['a'] == 'MAXG'
 
 
 def test_aligner_cannot_silently_change_residues(tmp_path, fake_aligner):
@@ -145,7 +145,7 @@ def test_aligner_cannot_silently_change_residues(tmp_path, fake_aligner):
     source.write_text('>a\nMAUG\n>b\nMAAG\n')
     result = cli('MSAP_batch.py', '-i', source, '-st', 'prot', '--notrim', '-o', tmp_path/'out', cwd=tmp_path, env=env)
     assert result.returncode != 0 and 'non-gap sequence content' in result.stderr
-    assert not (tmp_path/'out/protein.mafft.prot.aln').exists()
+    assert not (tmp_path/'out/protein.mafft.prot.aln.fasta').exists()
 
 
 @pytest.mark.parametrize('text', ['', '# empty list\n; comment\n'])
@@ -176,7 +176,7 @@ def test_mode_switch_retires_managed_pathlists(tmp_path, fake_aligner):
     custom.write_text('user data')
     result = cli('MSAP_batch.py', '-i', source, '-o', out, '-st', 'nucl', '--notrim', '-t', 1, cwd=tmp_path, env=env)
     assert result.returncode == 0, result.stderr
-    assert {p.name for p in custom.parent.iterdir()} == {'custom.pathlist', 'all.nucl.aln.pathlist'}
+    assert {p.name for p in custom.parent.iterdir()} == {'custom.pathlist', 'all.nucl.aln.fasta.pathlist'}
     assert custom.read_text() == 'user data'
 
 
@@ -231,10 +231,10 @@ def test_publication_failure_preserves_reports_and_recovers(tmp_path, monkeypatc
                  source_nt_positions='1-3', original='GCT', replacement='NNN', action='replace')])
     write_report(stage/report, [event(stage/native, 'a', 'internal_stop', 1,
                  source_nt_positions='1-3', original='TGA', replacement='NNN', action='replace')])
-    obsolete = root/'old.aln'
+    obsolete = root/'old.aln.fasta'
     obsolete.write_text('old alignment')
     state = root/f'.msap-batch-state-{key}.json'
-    running = {'status': 'running', 'outputs': {native: {}, report: {}, 'old.aln': {}}}
+    running = {'status': 'running', 'outputs': {native: {}, report: {}, 'old.aln.fasta': {}}}
     batch._atomic_json(state, running)
     real_replace = batch.os.replace
     real_recover = batch._recover_publication

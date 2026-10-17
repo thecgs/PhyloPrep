@@ -40,7 +40,11 @@ for (const name of sourceFiles) {
   const source = join(sourceDirectory, name);
   const contents = await readFile(source);
   await copyFile(source, join(engineDirectory, name));
-  files.push({ name, sha256: createHash("sha256").update(contents).digest("hex") });
+  const sha256 = createHash("sha256").update(contents).digest("hex");
+  const url = `by-sha256/${sha256}/${name}`;
+  await mkdir(dirname(join(engineDirectory, url)), { recursive: true });
+  await writeFile(join(engineDirectory, url), contents);
+  files.push({ name, sha256, url });
 }
 
 const metadataProcess = spawnSync(process.env.PYTHON || "python3", [join(siteDirectory, "script_metadata.py"), ...sourceFiles.map(name => join(engineDirectory, name))], {
@@ -60,12 +64,17 @@ for (const match of alignmentWorkerSource.matchAll(/tool:\s*"(mafft|muscle)",\s*
     biowasmRevision: alignerBuild.biowasmRevision };
 }
 
+const runnerContents = await readFile(join(siteDirectory, "browser_runner.py"));
+const runnerHash = createHash("sha256").update(runnerContents).digest("hex");
+const runner = { name: "browser_runner.py", sha256: runnerHash, url: `by-sha256/${runnerHash}/browser_runner.py` };
+await mkdir(dirname(join(engineDirectory, runner.url)), { recursive: true });
+await writeFile(join(engineDirectory, runner.url), runnerContents);
 const bundleSha256 = createHash("sha256")
-  .update(files.map(({ name, sha256 }) => `${name}:${sha256}`).join("\n"))
+  .update([...files, runner].map(({ name, sha256 }) => `${name}:${sha256}`).join("\n"))
   .digest("hex");
 await writeFile(
   join(engineDirectory, "manifest.json"),
-  `${JSON.stringify({ files, bundleSha256, aligners }, null, 2)}\n`,
+  `${JSON.stringify({ files, runner, bundleSha256, aligners }, null, 2)}\n`,
 );
 
 console.log(`Bundled ${files.length} original Python sources (${bundleSha256.slice(0, 12)}).`);

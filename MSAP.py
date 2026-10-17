@@ -272,7 +272,7 @@ def run_pseudogene(args, infile, prefix, tools):
     os.remove(input_report)
     if args.notrim:
         return
-    out_nt, out_aa = prefix + '.macse.codon.trimmed.aln', prefix + '.macse.prot.trimmed.aln'
+    out_nt, out_aa = prefix + '.macse.codon.trimmed.aln.fasta', prefix + '.macse.prot.trimmed.aln.fasta'
     if args.trim_software == 'trimal':
         trim_codon_with_trimal(tools['trimal'], args.trimal_args, aa, nt, out_aa, out_nt)
         return
@@ -416,9 +416,9 @@ Notes:
     ## run align
     if align_software == "mafft":
         if seqtype == "codon" or seqtype == "prot":
-            align_outfile = os.path.realpath(f"{prefix}.mafft.prot.aln")
+            align_outfile = os.path.realpath(f"{prefix}.mafft.prot.aln.fasta")
         elif seqtype == "nucl":
-            align_outfile = os.path.realpath(f"{prefix}.mafft.nucl.aln")
+            align_outfile = os.path.realpath(f"{prefix}.mafft.nucl.aln.fasta")
         with atomic_output(align_outfile, inputs=[align_infile]) as out:
             subprocess.run(
                 [software_path["mafft"], "--amino" if seqtype in {"prot", "codon"} else "--nuc",
@@ -430,9 +430,9 @@ Notes:
     
     elif align_software == "muscle":
         if seqtype == "codon" or seqtype == "prot":
-            align_outfile = os.path.realpath(f"{prefix}.muscle.prot.aln")
+            align_outfile = os.path.realpath(f"{prefix}.muscle.prot.aln.fasta")
         elif seqtype == "nucl":
-            align_outfile = os.path.realpath(f"{prefix}.muscle.nucl.aln")
+            align_outfile = os.path.realpath(f"{prefix}.muscle.nucl.aln.fasta")
         subprocess.run(
             [software_path["muscle"], "-threads", str(thread), "-align", align_infile, "-output", align_outfile],
             check=True,
@@ -441,22 +441,22 @@ Notes:
     
     elif align_software == "prank":
         subprocess.run(
-            [software_path["prank"], f"-d={align_infile}", f"-o={prefix}.prank.aln", "-f=fasta",
+            [software_path["prank"], f"-d={align_infile}", f"-o={prefix}.prank", "-f=fasta",
              "-DNA" if seqtype == "nucl" else "-protein"],
             check=True,
         )
         if seqtype == "codon" or seqtype == "prot":
-            os.rename(f"{prefix}.prank.aln.best.fas", f"{prefix}.prank.prot.aln")
-            align_outfile = os.path.realpath(f"{prefix}.prank.prot.aln")
+            os.rename(f"{prefix}.prank.best.fas", f"{prefix}.prank.prot.aln.fasta")
+            align_outfile = os.path.realpath(f"{prefix}.prank.prot.aln.fasta")
         elif seqtype == "nucl":
-            os.rename(f"{prefix}.prank.aln.best.fas", f"{prefix}.prank.nucl.aln")
-            align_outfile = os.path.realpath(f"{prefix}.prank.nucl.aln")
+            os.rename(f"{prefix}.prank.best.fas", f"{prefix}.prank.nucl.aln.fasta")
+            align_outfile = os.path.realpath(f"{prefix}.prank.nucl.aln.fasta")
 
         
     elif align_software == "clustalw2":
         suffix = "nucl" if seqtype == "nucl" else "prot"
         clustal_type = "DNA" if seqtype == "nucl" else "PROTEIN"
-        align_outfile = os.path.realpath(f"{prefix}.clustalw2.{suffix}.aln")
+        align_outfile = os.path.realpath(f"{prefix}.clustalw2.{suffix}.aln.fasta")
         # ClustalW creates guide trees beside its input. Keep all such files private.
         with tempfile.TemporaryDirectory(prefix=".msap-clustalw-", dir=".") as temporary:
             local_input = os.path.abspath(os.path.join(temporary, "input.fasta"))
@@ -487,25 +487,25 @@ Notes:
                 sys.executable,
                 os.path.join(os.path.dirname(os.path.abspath(__file__)), "AA2Codon.py"),
                 "-c", infile,
-                "-p", f"{prefix}.{align_software}.prot.aln",
-                "-o", f"{prefix}.{align_software}.codon.aln",
+                "-p", f"{prefix}.{align_software}.prot.aln.fasta",
+                "-o", f"{prefix}.{align_software}.codon.aln.fasta",
             ],
             check=True,
         )
         if not notrim and trim_software == "trimal":
             trim_codon_with_trimal(
                 software_path["trimal"], trimal_args,
-                f"{prefix}.{align_software}.prot.aln",
-                f"{prefix}.{align_software}.codon.aln",
-                f"{prefix}.{align_software}.prot.trimmed.aln",
-                f"{prefix}.{align_software}.codon.trimmed.aln",
+                f"{prefix}.{align_software}.prot.aln.fasta",
+                f"{prefix}.{align_software}.codon.aln.fasta",
+                f"{prefix}.{align_software}.prot.trimmed.aln.fasta",
+                f"{prefix}.{align_software}.codon.trimmed.aln.fasta",
             )
         elif not notrim:
             trim_codon_protein_pair(
-                f"{prefix}.{align_software}.prot.aln",
-                f"{prefix}.{align_software}.codon.aln",
-                f"{prefix}.{align_software}.prot.trimmed.aln",
-                f"{prefix}.{align_software}.codon.trimmed.aln",
+                f"{prefix}.{align_software}.prot.aln.fasta",
+                f"{prefix}.{align_software}.codon.aln.fasta",
+                f"{prefix}.{align_software}.prot.trimmed.aln.fasta",
+                f"{prefix}.{align_software}.codon.trimmed.aln.fasta",
                 args.G, args.N, args.X,
             )
     else:
@@ -513,8 +513,8 @@ Notes:
         if notrim == False:
             trim_alignment(
                 trim_software, software_path.get("trimal"), trimal_args,
-                f"{prefix}.{align_software}.{seqtype}.aln",
-                f"{prefix}.{align_software}.{seqtype}.trimmed.aln",
+                f"{prefix}.{align_software}.{seqtype}.aln.fasta",
+                f"{prefix}.{align_software}.{seqtype}.trimmed.aln.fasta",
                 seqtype, args.G, args.N, args.X,
             )
 

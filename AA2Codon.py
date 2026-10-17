@@ -1,7 +1,6 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-import os, sys
 import textwrap
 import argparse
 from Bio import SeqIO, Seq

@@ -21,18 +21,18 @@ def test_mapping_changed_after_read_cannot_be_checkpointed(tmp_path):
     args = SimpleNamespace(mapping=mapping, taxon_mapping=parsed,
                            mapping_signature=signature, no_resume=False)
     mapping.write_text('a\tNEW_A\nb\tNEW_B\n')
-    source = tmp_path/'gene.mafft.prot.aln'
+    source = tmp_path/'gene.mafft.prot.aln.fasta'
     source.write_text('>a\nMA\n>b\nMA\n')
     with pytest.raises(ValueError, match='Mapping changed after'):
         phyloprep.rename_alignment_matrices(args, [source], tmp_path/'out', 'prot', 'raw')
-    assert not list((tmp_path/'out').rglob('*.aln'))
+    assert not list((tmp_path/'out').rglob('*.aln.fasta'))
     assert not list((tmp_path/'out').rglob('*.json'))
 
 
 @pytest.mark.parametrize('suffix', ['NT.fasta', 'AA.fasta', 'NT.fa', 'AA.fa'])
 def test_macse_like_source_filename_preserves_stop_provenance(tmp_path, suffix):
     source = tmp_path/f'gene.macse_original.{suffix}'
-    alignment = tmp_path/f'{source.stem}.mafft.codon.aln'
+    alignment = tmp_path/f'{source.stem}.mafft.codon.aln.fasta'
     alignment.write_text('>a\nATGNNNATG\n>b\nATGAAAATG\n')
     report = tmp_path/'changes.tsv'
     write_report(report, [event(source, 'a', 'internal_stop', 1,
@@ -43,7 +43,7 @@ def test_macse_like_source_filename_preserves_stop_provenance(tmp_path, suffix):
 
 def test_explicit_macse_intermediate_provenance_still_matches(tmp_path):
     source = tmp_path/'gene.macse_original.NT.fasta'
-    alignment = tmp_path/'gene.macse.codon.aln'
+    alignment = tmp_path/'gene.macse.codon.aln.fasta'
     alignment.write_text('>a\nATGNNNATG\n>b\nATGAAAATG\n')
     report = tmp_path/'changes.tsv'
     write_report(report, [event(source, 'a', 'internal_stop', 1,
@@ -65,7 +65,7 @@ def test_standalone_qc_rejects_nan_before_output(tmp_path, flag):
 def test_partition_collision_not_misdiagnosed_as_mapping_error(tmp_path, capfd):
     files = []
     for name in ('gene-a', 'gene_a'):
-        path = tmp_path/f'{name}.mafft.prot.aln'
+        path = tmp_path/f'{name}.mafft.prot.aln.fasta'
         path.write_text('>a\nMA\n>b\nMA\n')
         files.append(path)
     listing = tmp_path/'inputs.pathlist'
@@ -118,9 +118,9 @@ def test_identical_independent_and_paired_sets_reuse_matrix_products(tmp_path, m
     lists = alignments/'path-lists'
     lists.mkdir(parents=True)
     for kind, sequence in [('codon', 'GCT'), ('prot', 'A')]:
-        path = alignments/f'gene.mafft.{kind}.aln'
+        path = alignments/f'gene.mafft.{kind}.aln.fasta'
         path.write_text(f'>a\n{sequence}\n>b\n{sequence}\n')
-        phyloprep.write_paths(lists/f'all.{kind}.aln.pathlist', [path])
+        phyloprep.write_paths(lists/f'all.{kind}.aln.fasta.pathlist', [path])
     args = phyloprep.build_parser().parse_args(['-i', 'unused.fa', '--notrim', '-t', '1'])
     normalize_workflow(args)
     args.taxon_mapping = None

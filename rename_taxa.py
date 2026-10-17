@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """Rename FASTA sequence IDs using a mapping table and safe-name rules."""
 from __future__ import annotations
-import argparse, csv, re, sys
-from pathlib import Path
+import argparse, csv, sys
 from Bio import SeqIO
 from msap_io import atomic_output, check_output_path, file_signature
 

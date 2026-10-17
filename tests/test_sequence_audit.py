@@ -72,7 +72,7 @@ def test_batch_trims_terminal_partial_codons_and_keeps_report(tmp_path, fake_ali
     assert result.returncode == 0, result.stderr
     report = rows(tmp_path/'out/reports/sequence_changes.tsv')
     assert sum(r['event'] == 'terminal_partial_codon' for r in report) == 2
-    assert (tmp_path/'out/broken.mafft.codon.aln').exists()
+    assert (tmp_path/'out/broken.mafft.codon.aln.fasta').exists()
 
 
 def test_pipeline_records_only_prepared_file_and_taxa_in_failure_report(tmp_path, fake_aligner):
@@ -106,7 +106,7 @@ def test_pipeline_maps_special_ids_and_skips_terminal_stop_only_locus(tmp_path, 
     assert {r['taxa_id'] for r in report} == {'original:a', 'original,b'}
     assert {r['mapped_taxa_id'] for r in report} == {'Species_A', 'Species_B'}
     assert all(r['input_file'] == str(skipped) for r in report)
-    assert not (output/'alignments/skipped.mafft.codon.aln').exists()
+    assert not (output/'alignments/skipped.mafft.codon.aln.fasta').exists()
     assert {r.id for r in SeqIO.parse(output/'matrices/codon/raw/supermatrix.fasta', 'fasta')} == {'Species_A', 'Species_B'}
 
 
@@ -261,8 +261,8 @@ def test_alignment_qc_restores_masked_internal_stop_provenance(tmp_path):
         source, 'a', 'internal_stop', 1,
         source_nt_positions='4-6', original='TGA', replacement='NNN', action='replace'
     )])
-    codon = tmp_path / 'gene.mafft.codon.aln'
-    protein = tmp_path / 'gene.mafft.prot.aln'
+    codon = tmp_path / 'gene.mafft.codon.aln.fasta'
+    protein = tmp_path / 'gene.mafft.prot.aln.fasta'
     codon.write_text('>a\nATGNNNGCT\n>b\nATGGCTGCT\n')
     protein.write_text('>a\nMXA\n>b\nMAA\n')
 
@@ -297,7 +297,7 @@ def test_alignment_qc_reports_removed_terminal_stop_without_failing(tmp_path):
         source, 'a', 'terminal_stop', 1,
         source_nt_positions='7-9', original='TAA', replacement='-', action='delete'
     )])
-    alignment = tmp_path / 'gene.mafft.codon.aln'
+    alignment = tmp_path / 'gene.mafft.codon.aln.fasta'
     alignment.write_text('>a\nATGGCT\n>b\nATGGCT\n')
     prefix = tmp_path / 'terminal.qc'
     result = cli(
@@ -337,7 +337,7 @@ def test_alignment_qc_rejects_ambiguous_audit_source_keys(tmp_path):
     source_b = right / "gene.fa"
     source_a.write_text(">a\nATGTGA\n>b\nATGGCT\n")
     source_b.write_text(">a\nATGTGA\n>b\nATGGCT\n")
-    alignment = tmp_path / "gene.mafft.codon.aln"
+    alignment = tmp_path / "gene.mafft.codon.aln.fasta"
     alignment.write_text(">a\nATGNNN\n>b\nATGGCT\n")
     report = tmp_path / "sequence_changes.tsv"
     write_report(report, [
@@ -358,8 +358,8 @@ def test_alignment_qc_rejects_ambiguous_audit_source_keys(tmp_path):
 def test_alignment_qc_allows_raw_and_trimmed_same_audit_locus(tmp_path):
     source = tmp_path / "gene.fa"
     source.write_text(">a\nATGTGA\n>b\nATGGCT\n")
-    raw = tmp_path / "gene.mafft.codon.aln"
-    trimmed = tmp_path / "gene.mafft.codon.trimmed.aln"
+    raw = tmp_path / "gene.mafft.codon.aln.fasta"
+    trimmed = tmp_path / "gene.mafft.codon.trimmed.aln.fasta"
     for path in (raw, trimmed):
         path.write_text(">a\nATGNNN\n>b\nATGGCT\n")
     report = tmp_path / "sequence_changes.tsv"
@@ -394,7 +394,7 @@ def test_partial_mapping_audit_fallback_uses_normalized_id(tmp_path, fake_aligne
 
 
 def test_alignment_qc_detects_observed_protein_stops(tmp_path):
-    alignment = tmp_path / "protein.aln"
+    alignment = tmp_path / "protein.aln.fasta"
     alignment.write_text(">a\nMA*G\n>b\nMAAG\n")
     prefix = tmp_path / "protein.qc"
     result = cli("alignment_qc.py", "-i", alignment, "-st", "prot", "-p", prefix, cwd=tmp_path)
@@ -424,7 +424,7 @@ def test_phyloprep_uses_validated_batch_pathlist_not_stale_alignment(tmp_path, f
         "--notrim", "-t", "1", cwd=tmp_path, env=env
     )
     assert first.returncode == 0, first.stdout + first.stderr
-    stale = output / "alignments/gene.mafft.codon.aln"
+    stale = output / "alignments/gene.mafft.codon.aln.fasta"
     assert stale.exists()
 
     # The same source later becomes a terminal-stop-only locus. MSAP_batch marks
@@ -436,7 +436,7 @@ def test_phyloprep_uses_validated_batch_pathlist_not_stale_alignment(tmp_path, f
     )
     assert second.returncode == 2
     assert "No validated completed alignments are available for codon/raw" in second.stderr
-    pathlist = output / "alignments/path-lists/all.codon.aln.pathlist"
+    pathlist = output / "alignments/path-lists/all.codon.aln.fasta.pathlist"
     assert pathlist.exists()
     assert not pathlist.read_text().strip()
     assert stale.exists()  # retained as prior public output, but no longer consumed
@@ -453,7 +453,7 @@ def test_audit_locus_names_preserve_embedded_aligner_marker(tmp_path, aligner):
                           for source in (first, second)])
     audit = load_sequence_changes([report])
     assert set(audit) == {'gene', f'gene.{aligner}.extra'}
-    for variant in ('aln', 'trimmed.aln'):
+    for variant in ('aln.fasta', 'trimmed.aln.fasta'):
         name = f'gene.{aligner}.extra.{aligner}.codon.{variant}'
         assert _audit_locus_key(name) == f'gene.{aligner}.extra'
     assert _audit_locus_key(f'gene.{aligner}.extra.macse_original.NT.fasta') == f'gene.{aligner}.extra'
@@ -461,10 +461,56 @@ def test_audit_locus_names_preserve_embedded_aligner_marker(tmp_path, aligner):
 
 def test_source_filename_can_look_like_an_alignment_suffix(tmp_path):
     from alignment_qc import load_sequence_changes, _audit_for_alignment
-    source = tmp_path / 'gene.mafft.codon.aln'
+    source = tmp_path / 'gene.mafft.codon.aln.fasta'
     report = tmp_path / 'changes.tsv'
     write_report(report, [event(source, 'a', 'internal_stop', 1,
                                source_nt_positions='4-6', original='TAA')])
     audit = load_sequence_changes([report])
-    assert set(audit) == {'gene.mafft.codon'}
-    assert _audit_for_alignment('gene.mafft.codon.mafft.codon.aln', audit)['a']['internal']
+    assert set(audit) == {source.stem}
+    assert _audit_for_alignment(f'{source.stem}.mafft.codon.aln.fasta', audit)['a']['internal']
+
+
+def test_merge_reports_streams_rows_and_preserves_mixed_schema(tmp_path, monkeypatch):
+    import csv
+    import sequence_audit as audit
+    first, second, merged = (tmp_path / name for name in ('nt.tsv', 'aa.tsv', 'merged.tsv'))
+    audit.write_report(first, [dict(event='internal_stop', taxa_id='a') for _ in range(2000)])
+    audit.write_report(second, [dict(event='internal_stop', taxa_id='b', source_aa_positions='7')], protein=True)
+    reader, writer = csv.DictReader, csv.DictWriter
+    counts = {'read': 0, 'written': 0}
+
+    def streaming_reader(*args, **kwargs):
+        for row in reader(*args, **kwargs):
+            assert counts['read'] == counts['written'], 'Rows must be written before reading the next row'
+            counts['read'] += 1
+            yield row
+
+    class CountingWriter(writer):
+        def writerow(self, row):
+            if row.get('event') == 'internal_stop':
+                counts['written'] += 1
+            return super().writerow(row)
+
+    monkeypatch.setattr(audit.csv, 'DictReader', streaming_reader)
+    monkeypatch.setattr(audit.csv, 'DictWriter', CountingWriter)
+    audit.merge_reports([first, second], merged)
+    with merged.open() as handle:
+        rows = list(reader(handle, delimiter='\t'))
+    assert len(rows) == 2001
+    assert rows[0]['source_aa_positions'] == 'NA'
+    assert rows[-1]['source_aa_positions'] == '7'
+    assert [rows[0]['taxa_id'], rows[-1]['taxa_id']] == ['a', 'b']
+
+
+def test_merge_reports_failure_preserves_previous_output(tmp_path, monkeypatch):
+    import sequence_audit as audit
+    source, output = tmp_path / 'source.tsv', tmp_path / 'merged.tsv'
+    audit.write_report(source, [dict(event='internal_stop')])
+    output.write_text('previous complete report\n')
+    def broken_reader(*args, **kwargs):
+        yield dict(event='internal_stop')
+        raise OSError('read interrupted')
+    monkeypatch.setattr(audit.csv, 'DictReader', broken_reader)
+    with pytest.raises(OSError, match='read interrupted'):
+        audit.merge_reports([source], output)
+    assert output.read_text() == 'previous complete report\n'

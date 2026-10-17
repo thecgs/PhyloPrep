@@ -11,7 +11,6 @@ import subprocess
 import sys
 
 from Bio import SeqIO
-from Bio.Data import CodonTable
 from msap_io import atomic_output, read_fasta_alignment, is_stop_codon, normalize_dna
 
 FIELDS = ['input_file', 'taxa_id', 'event', 'source_nt_positions',
@@ -240,7 +239,7 @@ def normalize_workflow(args):
 def macse_align(args, infile, prefix, java):
     original_nt = prefix + '.macse_original.NT.fasta'
     original_aa = prefix + '.macse_original.AA.fasta'
-    nt, aa = prefix + '.macse.codon.aln', prefix + '.macse.prot.aln'
+    nt, aa = prefix + '.macse.codon.aln.fasta', prefix + '.macse.prot.aln.fasta'
     base = [java, '-Xmx' + args.macse_memory, '-jar', args.macse_jar]
     subprocess.run([*base, '-prog', 'alignSequences', '-seq', infile,
                     '-gc_def', str(args.genetic_code), '-out_NT', original_nt, '-out_AA', original_aa], check=True)
@@ -313,18 +312,20 @@ def macse_align(args, infile, prefix, java):
 
 
 def merge_reports(paths, output):
-    rows = []
+    # Inspect only headers first, preserving mixed nucleotide/protein schemas.
+    paths = [Path(path) for path in paths if Path(path).is_file()]
     protein = False
     for path in paths:
-        if not Path(path).is_file():
-            continue
-        with open(path, newline='') as handle:
-            reader = csv.DictReader(handle, delimiter='\t')
-            has_aa = 'source_aa_positions' in (reader.fieldnames or [])
-            protein |= has_aa
-            for row in reader:
-                rows.append({field: row.get(field, 'NA') for field in FIELDS + (['source_aa_positions'] if has_aa else [])})
-    write_report(output, rows, protein=protein)
+        with path.open(newline='') as handle:
+            protein |= 'source_aa_positions' in (next(csv.reader(handle, delimiter='\t'), []))
+    fields = FIELDS + (['source_aa_positions'] if protein else [])
+    with atomic_output(output, inputs=paths) as handle:
+        writer = csv.DictWriter(handle, fieldnames=fields, delimiter='\t', restval='NA')
+        writer.writeheader()
+        for path in paths:
+            with path.open(newline='') as source:
+                for row in csv.DictReader(source, delimiter='\t'):
+                    writer.writerow({field: row.get(field, 'NA') for field in fields})
 
 
 def relocate_change_report(report, source_dir, destination_dir):

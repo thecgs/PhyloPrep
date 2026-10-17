@@ -192,8 +192,8 @@ python MSAP.py -i proteins.fa -st prot --protein-stop-symbol .
 python MSAP.py -i pseudo.fa -st pseudogene --macse-jar macse_v2.07.jar
 ```
 
-Outputs use `GENE.ALIGNER.{nucl|prot|codon}[.trimmed].aln`; audit reports are retained. In codon mode, default trimming uses one shared site mask for the paired protein and back-translated codon alignments. For each amino-acid/codon site, gap, codon-N, and protein-X fractions are evaluated together; if any selected threshold rejects the site, the amino-acid column and its complete codon triplet are removed together. trimAl codon mode likewise transfers retained protein columns to complete codon triplets.
-Trimmed FASTA alignments always end in `.trimmed.aln`, for both trimming programs and all sequence types (including MACSE outputs). Batch path lists use `all.TYPE.trimmed.aln.pathlist`. Raw alignments retain `.aln`.
+Outputs use `GENE.ALIGNER.{nucl|prot|codon}[.trimmed].aln.fasta`; audit reports are retained. In codon mode, default trimming uses one shared site mask for the paired protein and back-translated codon alignments. For each amino-acid/codon site, gap, codon-N, and protein-X fractions are evaluated together; if any selected threshold rejects the site, the amino-acid column and its complete codon triplet are removed together. trimAl codon mode likewise transfers retained protein columns to complete codon triplets.
+Trimmed FASTA alignments always end in `.trimmed.aln.fasta`, for both trimming programs and all sequence types (including MACSE outputs). Batch path lists use `all.TYPE.trimmed.aln.fasta.pathlist`. Raw alignments retain `.aln.fasta`.
 
 ### `MSAP_batch.py` — concurrent, resumable alignment
 
@@ -258,7 +258,7 @@ python extract_4-fold_degenerated_sites.py -i supermatrix.fasta -o fourfold.fast
 Maps each non-gap protein position to its matching CDS codon. IDs must match exactly. `-g` validates translations.
 
 ```bash
-python AA2Codon.py -c CDS.fa -p protein.aln.fa -o codon.aln.fa -g 1
+python AA2Codon.py -c CDS.fa -p protein.aln.fasta -o codon.aln.fasta -g 1
 ```
 
 ### `trimAlnSeq.py` — threshold trimming
@@ -266,7 +266,7 @@ python AA2Codon.py -c CDS.fa -p protein.aln.fa -o codon.aln.fa -g 1
 Trims nucleotide/protein sites or whole codon triplets using gap and N/X ratios. `-ra` removes invariant sites. `-i -` reads stdin; no `-o` writes stdout. Zero retained sites is an error.
 
 ```bash
-python trimAlnSeq.py -i gene.aln.fa -o gene.trimmed.aln -st codon -G 0.2 -N 0.2
+python trimAlnSeq.py -i gene.aln.fasta -o gene.trimmed.aln.fasta -st codon -G 0.2 -N 0.2
 ```
 
 ### `filter_sequences.py` — taxon filtering
@@ -509,3 +509,10 @@ The browser's self-hosted MAFFT and MUSCLE builds permit WebAssembly memory grow
 The extractor warns when `single-copy` uses a minimum below the number of selected taxa: taxa with multiple copies are omitted, and downstream concatenation needs `--missing-taxa pad-gaps` to retain incomplete loci; the default `skip-gene` excludes them. Enabling `all-copies --longest-copy` emits a warning about selecting different paralogs across species and potentially long chimeric/fusion sequences. The browser shows parameter-dependent notices before execution and retains CLI warnings in the successful result message and run manifest. Neither warning changes parameters automatically.
 
 Supermatrix concatenation scans identifiers and lengths first, then loads one locus at a time and appends fragments to temporary taxon files. FASTA and optional PHYLIP outputs are written in bounded chunks without retaining all locus sequences and joined matrices together. Temporary files are removed on success or failure, and input signatures detect changes between passes. This trades additional I/O for lower Python memory use. In Pyodide, temporary files still occupy the browser's memory-backed filesystem; this does not remove the browser's total memory limit.
+
+
+With an authorized output directory, the browser saves completed locus alignments during processing and QC/report branches between pipeline stages, using a four-file write queue with cached directory handles. Final matrices are saved after publication; analysis continues to use its unchanged internal workspace paths. Identical successful saves are not repeated, and the “Save remaining to folder” action retries pending/failed files. Without directory authorization, output remains in the workspace for manual download. See [browser saving details](site/README.md#incremental-saving-to-an-authorized-folder).
+
+Browser exports use relative references for output pathlists and QC pass/fail/retained lists, so the complete saved output folder can be moved and reused by the CLI. Original input sequences are not bundled: input-only lists reference basenames and require those original FASTAs beside the list. Independent browser tools also use chunked output transfer, and unchanged checkpoint files are reused during final result transfer.
+
+The browser verifies the SHA256 of bundled Python sources and its browser adapter before execution, using content-addressed source assets. Run parameters and the equivalent CLI command are captured at startup. Existing output fingerprints are reused when building the run manifest to reduce memory duplication for large matrices.

@@ -6,10 +6,14 @@ let engineManifest;
 const outputAcknowledgements = new Map();
 let outputSequence = 0;
 
-async function streamOutputFiles(runtime, runId, files) {
+async function streamOutputFiles(runtime, runId, files, transferId, waitForSave = false, transferred = new Map()) {
   for (let index = 0; index < files.length; index++) {
     const file = files[index];
     if (!file.path) continue;
+    if (file.sha256 && transferred.get(file.name) === file.sha256) {
+      self.postMessage({ type: "output-file-reuse", runId, index, name: file.name, transferId });
+      continue;
+    }
     const stream = runtime.FS.open(file.path, "r");
     try {
       let position = 0;
@@ -26,11 +30,23 @@ async function streamOutputFiles(runtime, runId, files) {
           }, 30000);
           outputAcknowledgements.set(sequence, { runId, resolve: () => { clearTimeout(timer); resolve(); } });
           self.postMessage({ type: "output-chunk", runId, sequence, index, name: file.name,
-            fileCount: files.length, bytes: chunk }, [bytes.buffer]);
+            fileCount: files.length, transferId, bytes: chunk }, [bytes.buffer]);
         });
         position += read;
       }
-      self.postMessage({ type: "output-file-end", runId, index, name: file.name });
+      const end = { type: "output-file-end", runId, index, name: file.name, transferId, size: file.size, sha256: file.sha256 };
+      if (waitForSave) {
+        const sequence = ++outputSequence;
+        await new Promise((resolve, reject) => {
+          const timer = setTimeout(() => {
+            outputAcknowledgements.delete(sequence);
+            reject(new Error(`Local output queue acknowledgement timed out: ${file.name}`));
+          }, 300000);
+          outputAcknowledgements.set(sequence, { runId, resolve: () => { clearTimeout(timer); resolve(); } });
+          self.postMessage({ ...end, sequence });
+        });
+      } else self.postMessage(end);
+      if (file.sha256) transferred.set(file.name, file.sha256);
     } finally {
       runtime.FS.close(stream);
     }
@@ -59,10 +75,22 @@ function isFasta(file) {
   return file.content.trimStart().startsWith(">");
 }
 
-async function fetchText(path) {
-  const response = await fetch(path);
-  if (!response.ok) throw new Error(`Could not load ${path}.`);
-  return response.text();
+async function hashSourceBytes(bytes) {
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function verifiedEngineSource(file) {
+  if (!file || !/^[0-9a-f]{64}$/.test(file.sha256) || !file.url) {
+    throw new Error("The engine source metadata is incomplete. Reload the page to load a matching build.");
+  }
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const response = await fetch(`engine/${file.url}`, attempt ? { cache: "no-cache" } : undefined);
+    if (!response.ok) throw new Error(`Could not load verified source: ${file.name}. Reload the page and retry.`);
+    const bytes = await response.arrayBuffer();
+    if (await hashSourceBytes(bytes) === file.sha256) return new TextDecoder().decode(bytes);
+  }
+  throw new Error(`Source checksum mismatch: ${file.name}. Reload the page to refresh the engine; analysis was not started.`);
 }
 
 async function installOriginalEngine(runtime) {
@@ -70,15 +98,22 @@ async function installOriginalEngine(runtime) {
   if (!manifestResponse.ok) {
     throw new Error("The original-script bundle is missing. Run node site/build-engine.mjs before local preview.");
   }
-  engineManifest = await manifestResponse.json();
-  if (!Array.isArray(engineManifest.files) || !engineManifest.files.length) {
-    throw new Error("The original-script bundle manifest is invalid.");
+  const manifest = await manifestResponse.json();
+  if (!Array.isArray(manifest.files) || !manifest.files.length || !manifest.runner) {
+    throw new Error("The original-script bundle manifest is incomplete. Reload the page to load a matching build.");
   }
+  const records = [...manifest.files, manifest.runner];
+  const bundleBytes = new TextEncoder().encode(records.map(({name, sha256}) => `${name}:${sha256}`).join("\n"));
+  if (await hashSourceBytes(bundleBytes) !== manifest.bundleSha256) {
+    throw new Error("The engine bundle checksum is invalid. Reload the page and retry.");
+  }
+  // Verify every source, including the browser adapter, before installing/executing any.
+  const sources = await Promise.all(records.map(verifiedEngineSource));
   runtime.FS.mkdirTree(ENGINE_ROOT);
-  const files = await Promise.all(engineManifest.files.map(async ({ name }) => [name, await fetchText(`engine/${name}`)]));
-  files.forEach(([name, source]) => runtime.FS.writeFile(`${ENGINE_ROOT}/${name}`, source));
-  runtime.FS.writeFile("/browser_runner.py", await fetchText("browser_runner.py"));
+  manifest.files.forEach((file, index) => runtime.FS.writeFile(`${ENGINE_ROOT}/${file.name}`, sources[index]));
+  runtime.FS.writeFile("/browser_runner.py", sources.at(-1));
   await runtime.runPythonAsync("exec(compile(open('/browser_runner.py', encoding='utf-8').read(), '/browser_runner.py', 'exec'), globals())");
+  engineManifest = manifest;
 }
 
 async function ensureRuntime(runId) {
@@ -290,6 +325,7 @@ self.addEventListener("message", async (event) => {
   const { runId } = request;
   let runtime;
   let stage;
+  const transferred = new Map();
   try {
     runtime = await ensureRuntime(runId);
     stage = stageBrowserInputs(runtime, request);
@@ -309,9 +345,10 @@ self.addEventListener("message", async (event) => {
       const alignmentPath = `${stage.optionsRoot}/biowasm-alignment.aln.fasta`;
       runtime.FS.writeFile(alignmentPath, request.alignmentContent || "");
       const args = msapArguments(request, stage);
-      const raw = await runtime.runPythonAsync(`run_msap_complete(${JSON.stringify(args)}, ${JSON.stringify(stage.outputRoot)}, ${JSON.stringify(alignmentPath)})`);
+      const raw = await runtime.runPythonAsync(`run_msap_complete(${JSON.stringify(args)}, ${JSON.stringify(stage.outputRoot)}, ${JSON.stringify(alignmentPath)}, manifest_only=True)`);
       const result = JSON.parse(raw);
       if (!result.ok) throw new Error(result.error || "The original MSAP.py workflow could not complete.");
+      await streamOutputFiles(runtime, runId, result.files || [], undefined, request.incrementalSave, transferred);
       self.postMessage({
         type: "result",
         runId,
@@ -331,16 +368,32 @@ self.addEventListener("message", async (event) => {
         self.postMessage({ type: "progress", runId, progress: JSON.parse(eventJson) });
       });
       let raw;
+      let stepsStarted = false;
       try {
-        raw = await runtime.runPythonAsync(`run_phyloprep_finalize(${pythonJson(manifest)}, ${pythonJson(request.options)}, ${JSON.stringify(stage.outputRoot)}, progress_callback=_phyloprep_progress_callback, manifest_only=True)`);
+        if (request.incrementalSave) {
+          await runtime.runPythonAsync(`_phyloprep_steps = _phyloprep_finalize_steps(${pythonJson(manifest)}, ${pythonJson(request.options)}, ${JSON.stringify(stage.outputRoot)}, progress_callback=_phyloprep_progress_callback, manifest_only=True, incremental=True)`);
+          stepsStarted = true;
+          let checkpoint = 0;
+          while (true) {
+            raw = await runtime.runPythonAsync("advance_phyloprep_finalize(_phyloprep_steps)");
+            const step = JSON.parse(raw);
+            if (!step.pending) break;
+            await streamOutputFiles(runtime, runId, step.files || [], `checkpoint-${checkpoint++}`, true, transferred);
+          }
+        } else {
+          raw = await runtime.runPythonAsync(`run_phyloprep_finalize(${pythonJson(manifest)}, ${pythonJson(request.options)}, ${JSON.stringify(stage.outputRoot)}, progress_callback=_phyloprep_progress_callback, manifest_only=True)`);
+        }
       } finally {
+        if (stepsStarted) {
+          await runtime.runPythonAsync("_phyloprep_steps.close(); del _phyloprep_steps");
+        }
         runtime.globals.delete("_phyloprep_progress_callback");
       }
       const result = JSON.parse(raw);
       if (!result.ok && !result.recoverable) {
         throw new Error(result.user_error || result.error || "The browser PhyloPrep pipeline could not complete.");
       }
-      await streamOutputFiles(runtime, runId, result.files || []);
+      await streamOutputFiles(runtime, runId, result.files || [], undefined, request.incrementalSave, transferred);
       self.postMessage({
         type: "result",
         runId,
@@ -357,9 +410,10 @@ self.addEventListener("message", async (event) => {
     if (request.type === "orthofinder-extract") {
       self.postMessage({ type: "stage", runId, stage: "process", label: "Extracting OrthoFinder orthogroups" });
       const args = orthofinderArguments(runtime, request, stage);
-      const raw = await runtime.runPythonAsync(`run_original_module("extract_orthofinder_orthogroups.py", ${JSON.stringify(args)}, ${JSON.stringify(stage.outputRoot)})`);
+      const raw = await runtime.runPythonAsync(`run_original_module("extract_orthofinder_orthogroups.py", ${JSON.stringify(args)}, ${JSON.stringify(stage.outputRoot)}, manifest_only=True)`);
       const result = JSON.parse(raw);
       if (!result.ok) throw new Error(result.error || "OrthoFinder orthogroup extraction failed.");
+      await streamOutputFiles(runtime, runId, result.files || [], undefined, request.incrementalSave, transferred);
       self.postMessage({
         type: "result",
         runId,
@@ -375,9 +429,10 @@ self.addEventListener("message", async (event) => {
 
     self.postMessage({ type: "stage", runId, stage: "process", label: "Running original script locally" });
     const args = originalArguments(request, stage);
-    const raw = await runtime.runPythonAsync(`run_original_module(${JSON.stringify(request.script)}, ${JSON.stringify(args)}, ${JSON.stringify(stage.outputRoot)})`);
+    const raw = await runtime.runPythonAsync(`run_original_module(${JSON.stringify(request.script)}, ${JSON.stringify(args)}, ${JSON.stringify(stage.outputRoot)}, manifest_only=True)`);
     const result = JSON.parse(raw);
     if (!result.ok) throw new Error(result.error || "The original script could not complete.");
+    await streamOutputFiles(runtime, runId, result.files || [], undefined, request.incrementalSave, transferred);
     self.postMessage({
       type: "result",
       runId,

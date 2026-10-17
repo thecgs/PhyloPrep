@@ -85,10 +85,15 @@ def _audit_locus_key(path: str, source_input=False) -> str:
         if name.endswith(suffix):
             return name[:-len(suffix)]
     match = re.fullmatch(
-        r"(.+)\.(?:mafft|muscle|prank|clustalw2|macse)\.(?:nucl|codon|prot)(?:\.trimmed)?\.aln",
+        r"(.+)\.(?:mafft|muscle|prank|clustalw2|macse)\.(?:nucl|codon|prot)(?:\.trimmed)?\.aln\.fasta",
         name,
     )
-    return match.group(1) if match else Path(name).stem
+    if match:
+        return match.group(1)
+    for suffix in (".trimmed.aln.fasta", ".aln.fasta"):
+        if name.endswith(suffix):
+            return name[:-len(suffix)]
+    return Path(name).stem
 
 
 def load_sequence_changes(paths):

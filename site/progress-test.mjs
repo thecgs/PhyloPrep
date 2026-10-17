@@ -7,7 +7,7 @@ const messages = [];
 const timers = new Set();
 let clock = 0;
 const elements = {
-  run: { disabled: true }, cancelRun: {}, runtimeStatus: {}, runStageLabel: {},
+  command:{textContent:"test command"},run: { disabled: true }, cancelRun: {}, runtimeStatus: {}, runStageLabel: {},
   runStages: { querySelectorAll: () => [] }, outputName: { value: '' }, useNextStep: {},
   log: { set textContent(value) { messages.push(value); }, get textContent() { return messages.at(-1); } },
 };
@@ -32,17 +32,15 @@ Object.assign(context, {
   preflightGeneration: 0, resolvedFolderFiles: new Map(), generatedFiles: [],
   runInWorker: async () => ({files:[{name:'a.fa',content:'A'},{name:'b.fa',content:'B'}], summary:'Completed'}),
   buildRunManifest: async () => '{}',
-  saveGeneratedFile: async () => {
-    assert.match(elements.log.textContent, new RegExp(`Saving output: ${saved}/3 files`));
-    saved++;
-    return 'saved';
-  },
+  setConfigurationLocked:()=>{}, localSaveBusy:false, outputDirectoryHandle: undefined, outputSaveSession: undefined, producedFiles: new Map(),
+  publishProducedFiles: async files => { saved += files.length; },
+  savedDestination: () => 'browser workspace',
   renderGeneratedFiles: () => {}, transferTarget: () => undefined,
 });
 vm.runInContext(source('async function runBrowserModule(', 'function refreshCatalogSearch('), context);
 await vm.runInContext('runBrowserModule()', context);
 assert.equal(saved, 3);
-assert.ok(messages.some(m => /Saving output: 3\/3 files/.test(m)));
+assert.ok(messages.includes('Waiting for local file saves to finish'));
 assert.equal(elements.log.textContent, 'Completed');
 assert.equal(timers.size, 0, 'Input heartbeat must stop before execution/completion');
 context.runInWorker = async () => { throw new Error('worker failure'); };

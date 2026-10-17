@@ -45,8 +45,12 @@ modifying those core scripts.
 
 `MSAP_batch.py` browser mode processes loci sequentially with the existing
 MSAP/Pyodide + Biowasm MAFFT/MUSCLE workflow, then creates batch-style path lists and
-a merged sequence-change report. Those validated path lists are also the browser finalizer's only source of downstream alignment membership, matching the CLI contract. `phyloprep.py` browser mode reuses those
-alignments and invokes the repository's provenance-aware paired codon/protein QC,
+a merged sequence-change report. In the full `phyloprep.py` browser workflow, the
+batch adapter validates the input set once and forwards alignments plus individual
+audit reports; it skips standalone summaries and unused preprocessing intermediates.
+The Python finalizer generates the path lists and merged report once. Its path
+lists remain the only source of downstream alignment membership, matching the CLI
+contract. It invokes the repository's provenance-aware paired codon/protein QC,
 taxon-renaming, supermatrix, codon-position, four-fold and FASTA/PHYLIP/NEXUS
 modules inside Pyodide.
 
@@ -158,3 +162,32 @@ In `all-copies` mode, **Maximum copies per taxon** (`--max-copies-per-taxon`) de
 Concatenation now uses two passes, temporary taxon spools and chunked output rather than retaining every locus plus complete joined matrices in Python. Spools are released taxon by taxon during final output. Browser MEMFS still consumes memory for temporary and final files. Captured stdout/stderr each retain only a tail of up to 65,536 characters (and at most 1,024 fragments), with an explicit truncation marker. Browser entry points return a pre-serialized short diagnostic on MemoryError, avoiding traceback/log collection and another JSON allocation while memory is exhausted. These changes reduce duplication; they do not guarantee that an arbitrarily large dataset fits in Pyodide.
 
 Run progress is mirrored in the main workspace log as well as the stage label. Input preparation reports resolved path counts, read file counts and elapsed time before worker execution; output saving reports completed file counts and the current file. Pathlist folder roots are indexed once instead of rescanned for each entry.
+
+
+### Incremental saving to an authorized folder
+
+When an output folder is selected, completed locus alignments are queued for local saving during the alignment loop. In the full pipeline, their exported paths are `alignments/<filename>`; internal batch paths and MEMFS files remain unchanged. Completed QC/report branches are exported between raw/trimmed processing steps. Final matrices are exported only after normal staging, validation and publication. No internal files needed by later steps are deleted.
+
+The per-run save queue caches shared directory promises and permits at most four concurrent file writes. A file counts as saved only after its stream closes successfully. Repeated identical outputs are skipped; changed content at the same path is written after any preceding write finishes. A save failure pauses new writes while active writes settle. Analysis results remain in the workspace; **Save remaining to folder** retries failed/pending files without rewriting confirmed successes. Changing the destination starts a separate save session for that folder. Cancelled/failed analyses retain already produced files for inspection/retry; these are intermediate outputs, not a completed run.
+
+Local-save counts are displayed separately from analysis progress. Completion waits for all pending saves; incomplete saving produces a warning rather than a success claim. Without an authorized folder, results remain in the browser workspace for preview and manual download; no automatic downloads occur. This overlaps analysis and saving but retains data needed for downstream processing/preview, and does not by itself remove the browser's memory limit.
+
+### Alignment filenames
+
+CLI and browser alignment outputs use the explicit FASTA suffix: `GENE.ALIGNER.TYPE.aln.fasta` for untrimmed alignments and `GENE.ALIGNER.TYPE.trimmed.aln.fasta` for trimmed alignments. Batch pathlists are named `all.TYPE.aln.fasta.pathlist` and `all.TYPE.trimmed.aln.fasta.pathlist`. The file contents remain FASTA; QC, provenance matching, paired trimming and concatenation use the same naming convention.
+
+### Portable exports and bounded tool results
+
+All Python tool results, including OG extraction and per-locus MSAP completion, return file metadata and use acknowledged 1 MiB output chunks instead of serializing all contents into one JSON response. Full-pipeline checkpoints fingerprint files with SHA256; unchanged files are reused in the final results instead of being transmitted and decoded again. Changed reports are retransmitted.
+
+Exported output pathlists and QC pass/fail/retained lists use paths relative to their own directory. Export copies do not alter engine paths used for QC or concatenation. Lists referring to original input FASTAs use basenames because the originals are not bundled; place those original files alongside the list before CLI reuse. Batch alignment lists use `../<alignment filename>`. Download the complete output folder to preserve these relative paths.
+
+Starting another run clears the previous result list and preview immediately. Duplicate input-stem checking uses a set, and the CLI indexes existing output filenames once before checking prefix ownership.
+
+Manual bulk saving holds a fixed writer and file snapshot until completion. It disables Run, folder selection and other export controls, restoring them on success or failure. Worker crashes, undecodable messages and incomplete results discard the affected worker; retries initialize a fresh instance, and late errors from a discarded instance cannot interrupt a new run. Large browser TSV merges append rows without argument expansion. Python sequence-change report merging reads headers first and streams records into an atomic output, preserving mixed nucleotide/protein columns and the previous completed report if reading fails.
+
+### Verified sources and fixed run provenance
+
+The build emits immutable `engine/by-sha256/<hash>/<name>` source assets, including `browser_runner.py`. Before installing or executing Python code, the worker verifies the manifest bundle digest and every downloaded source SHA256. A mismatched cached source is revalidated once against the network; a persistent mismatch stops execution with a reload/retry diagnostic. The service worker revalidates the engine manifest against the network, with a cached fallback when offline; cached source contents must still pass verification. `no-store` requests bypass the cache.
+
+Each run captures parameters, output naming and its equivalent CLI command before reading inputs. Input, parameter and tool-selection controls remain locked until analysis/saving ends; previous disabled states are retained. Output sizes and SHA256 hashes computed by Python survive worker transfer, batching and final result assembly and are reused in `phyloprep-run.json`. Files without fingerprints are encoded and hashed once, with the computed metadata reused afterward.
