@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import pytest
 from pathlib import Path
 
 import phyloprep
@@ -220,3 +221,105 @@ def test_explicit_custom_pathlist_extension_is_portable(tmp_path):
     item = next(file for file in result['files'] if file['name'] == 'files.txt')
     assert Path(item['path']).read_text() == 'gene.fasta\n'
     assert (root / 'files.txt').read_text() == str(root / 'gene.fasta') + '\n'
+
+
+@pytest.mark.parametrize("notrim", [False, True])
+def test_incremental_finalize_resumes_in_different_contexts(tmp_path, monkeypatch, notrim):
+    from contextvars import Context
+    import sys
+    import msap_progress
+    browser = browser_module()
+    source = tmp_path / 'source.fa'
+    source.write_text('>a\nMA\n>b\nMA\n')
+    original_run = phyloprep.run
+    original_streams = (sys.stdout, sys.stderr)
+    events = []
+
+    def variant(args, root, stage, name):
+        assert msap_progress._CURRENT.get() is args._progress
+        assert phyloprep.run is not original_run
+        report = root / 'qc' / name / 'alignment.details.tsv'
+        report.parent.mkdir(parents=True)
+        report.write_text('locus\tpass\ngene\tyes\n')
+        matrix = stage / 'prot' / name / 'supermatrix.fasta'
+        matrix.parent.mkdir(parents=True)
+        matrix.write_text('>a\nMA\n>b\nMA\n')
+
+    monkeypatch.setattr(phyloprep, 'prepare_variant', variant)
+    steps = browser._phyloprep_finalize_steps(
+        [dict(role='source', path=str(source), name=source.name)],
+        dict(seqtype='prot', notrim=notrim), str(tmp_path / 'out'), str(ROOT),
+        progress_callback=lambda text: events.append(json.loads(text)), manifest_only=True, incremental=True)
+    try:
+        for pending in ((True, False) if notrim else (True, True, False)):
+            context = Context()
+            marker = object()
+            context.run(msap_progress._CURRENT.set, marker)
+            result = json.loads(context.run(browser.advance_phyloprep_finalize, steps))
+            assert context.run(msap_progress._CURRENT.get) is marker
+            assert (sys.stdout, sys.stderr) == original_streams
+            assert phyloprep.run is original_run
+            assert bool(result.get('pending')) is pending
+        assert result['ok'], result
+        matrices = [file for file in result['files'] if file['name'].startswith('matrices/')]
+        assert matrices and all(Path(file['path']).is_file() for file in matrices)
+        assert events[-1]['completed'] == events[-1]['total'] == (2 if notrim else 3)
+    finally:
+        Context().run(steps.close)
+
+
+def test_incremental_finalize_closes_in_another_context(tmp_path, monkeypatch):
+    from contextvars import Context
+    import sys
+    import msap_progress
+    browser = browser_module()
+    source = tmp_path / 'source.fa'
+    source.write_text('>a\nMA\n>b\nMA\n')
+    original_run = phyloprep.run
+    original_streams = (sys.stdout, sys.stderr)
+    monkeypatch.setattr(phyloprep, 'prepare_variant', lambda *args: None)
+    steps = browser._phyloprep_finalize_steps(
+        [dict(role='source', path=str(source), name=source.name)],
+        dict(seqtype='prot'), str(tmp_path / 'out'), str(ROOT), manifest_only=True, incremental=True)
+    first, closing = Context(), Context()
+    marker = object()
+    first.run(msap_progress._CURRENT.set, marker)
+    first.run(next, steps)
+    assert first.run(msap_progress._CURRENT.get) is marker
+    assert phyloprep.run is original_run
+    assert (sys.stdout, sys.stderr) == original_streams
+    closing.run(steps.close)
+    assert not list((tmp_path / 'out').glob('.matrices-*'))
+    assert not (tmp_path / 'out/matrices').exists()
+    assert phyloprep.run is original_run
+    assert (sys.stdout, sys.stderr) == original_streams
+
+
+def test_incremental_finalize_failure_restores_calling_context(tmp_path, monkeypatch):
+    from contextvars import Context
+    import sys
+    import msap_progress
+    browser = browser_module()
+    source = tmp_path / 'source.fa'
+    source.write_text('>a\nMA\n>b\nMA\n')
+    original_run = phyloprep.run
+    original_streams = (sys.stdout, sys.stderr)
+
+    def fail(args, *others):
+        assert msap_progress._CURRENT.get() is args._progress
+        raise ValueError('simulated QC failure')
+
+    monkeypatch.setattr(phyloprep, 'prepare_variant', fail)
+    steps = browser._phyloprep_finalize_steps(
+        [dict(role='source', path=str(source), name=source.name)],
+        dict(seqtype='prot'), str(tmp_path / 'out'), str(ROOT), manifest_only=True, incremental=True)
+    context = Context()
+    marker = object()
+    context.run(msap_progress._CURRENT.set, marker)
+    result = json.loads(context.run(browser.advance_phyloprep_finalize, steps))
+    assert not result['ok']
+    assert 'simulated QC failure' in result['error']
+    assert context.run(msap_progress._CURRENT.get) is marker
+    assert phyloprep.run is original_run
+    assert (sys.stdout, sys.stderr) == original_streams
+    assert not list((tmp_path / 'out').glob('.matrices-*'))

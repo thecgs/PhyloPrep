@@ -154,8 +154,9 @@ button:focus-visible, input:focus-visible, select:focus-visible, [tabindex]:focu
   border-radius: 6px;
   background: #fff;
 }
-.parameter-card .checkbox-row { justify-content: flex-start; gap: 9px; font-weight: 620; }
-.parameter-card input[type="checkbox"] { width: 18px; height: 18px; accent-color: var(--accent); }
+.parameter-card .checkbox-row { align-items: flex-start; justify-content: flex-start; gap: 9px; font-weight: 620; }
+.checkbox-caption { display: flex; flex: 1; flex-wrap: wrap; align-items: baseline; gap: 6px 12px; min-width: 0; }
+.parameter-card input[type="checkbox"] { flex-shrink: 0; width: 18px; height: 18px; accent-color: var(--accent); }
 .parameter-card select[multiple] { min-height: 142px; }
 .no-parameters { margin: 0; color: var(--muted); }
 

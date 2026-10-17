@@ -122,7 +122,7 @@ const modules = [
       { flag: "-t", label: "Threads per locus", description: "Browser fixed to one thread for GitHub Pages/WebAssembly compatibility.", type: "select", value: "1", options: [["1", "1 (browser fixed)"]], token: "thread" },
       { flag: "-j", label: "Concurrent loci", description: "Browser edition processes loci sequentially to keep memory predictable.", type: "select", value: "1", options: [["1", "1 (browser sequential)"]], token: "jobs" },
       { flag: "-ts", label: "Trimming software", description: "Browser fixed to PhyloPrep's bundled trimAlnSeq.py.", type: "select", value: "trimAlnSeq", options: [["trimAlnSeq", "trimAlnSeq.py (browser fixed)"]], token: "trim_software" },
-      { flag: "-n", label: "Skip trimming", description: "Process raw alignments only.", type: "checkbox", value: false, token: "notrim" },
+      { flag: "-n, --notrim", label: "Skip trimming", description: "Process raw alignments only.", type: "checkbox", value: false, token: "notrim" },
       proteinStopParameter(),
       { flag: "-G", label: "Maximum gap proportion", description: "Maximum gap ratio per site during trimming. Range: 0–1.", type: "number", value: "0.2", step: "0.01", token: "gap_ratio" },
       { flag: "-N", label: "Maximum N proportion", description: "Maximum N ratio per site during nucleotide/codon trimming. Range: 0–1.", type: "number", value: "0.2", step: "0.01", token: "n_ratio" },
@@ -152,7 +152,7 @@ const modules = [
       { flag: "-t", label: "Threads per locus", description: "Browser fixed to one thread.", type: "select", value: "1", options: [["1", "1 (browser fixed)"]], token: "thread" },
       { flag: "-j", label: "Concurrent loci", description: "Browser edition processes loci sequentially.", type: "select", value: "1", options: [["1", "1 (browser sequential)"]], token: "jobs" },
       { flag: "-ts", label: "Trimming software", description: "Browser fixed to PhyloPrep's bundled trimAlnSeq.py.", type: "select", value: "trimAlnSeq", options: [["trimAlnSeq", "trimAlnSeq.py (browser fixed)"]], token: "trim_software" },
-      { flag: "-n", label: "Skip trimming", description: "Keep raw alignments only.", type: "checkbox", value: false, token: "notrim" },
+      { flag: "-n, --notrim", label: "Skip trimming", description: "Keep raw alignments only.", type: "checkbox", value: false, token: "notrim" },
       proteinStopParameter(),
       { flag: "-G", label: "Maximum gap proportion", description: "Maximum gap ratio per site during trimming. Range: 0–1.", type: "number", value: "0.2", step: "0.01", token: "gap_ratio" },
       { flag: "-N", label: "Maximum N proportion", description: "Maximum N ratio per site during nucleotide/codon trimming. Range: 0–1.", type: "number", value: "0.2", step: "0.01", token: "n_ratio" },
@@ -249,7 +249,7 @@ const modules = [
     outputs: ["Codon alignment FASTA (-o, --out; stdout when omitted)"],
     outputLabel: "Output file name", outputHelp: "Codon alignment FASTA written by -o.", defaultOutput: "codon.aln.fasta",
     parameters: [
-      { flag: "-g (optional)", label: "Validate translation", description: "CLI default: disabled. Enable to validate protein/CDS translations with the selected genetic code.", type: "checkbox", value: false, token: "validate_translation" },
+      { flag: "-g", label: "Validate translation", description: "CLI default: disabled. Enable to validate protein/CDS translations with the selected genetic code.", type: "checkbox", value: false, token: "validate_translation" },
       geneticCodeParameter(),
     ],
     command: "python AA2Codon.py -c {cds} -p {protaln} -o {output}{validation_genetic_code_option}",
@@ -553,7 +553,12 @@ function renderParameterControl(parameter) {
     control.dataset.parameter = parameterToken(parameter);
     const text = document.createElement("span");
     text.textContent = parameter.label;
-    label.append(control, text);
+    const flag = document.createElement("code");
+    flag.textContent = parameter.flag;
+    const caption = document.createElement("span");
+    caption.className = "checkbox-caption";
+    caption.append(text, flag);
+    label.append(control, caption);
     card.append(label);
   } else {
     const label = document.createElement("label");

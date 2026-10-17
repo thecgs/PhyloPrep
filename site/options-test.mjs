@@ -109,3 +109,23 @@ assert.equal(policyWarnings('single-copy', 80, null, false).length, 0);
 assert.match(policyWarnings('all-copies', 100, 100, true).join(' '), /different paralogs/);
 assert.equal(policyWarnings('all-copies', 100, 100, false).length, 0);
 assert.ok(app.includes('...(result.warnings || [])'), 'Successful extraction must display policy warnings');
+
+// All checkbox labels display their real CLI option, including the five requested controls.
+const fakeElement = tag => ({tag,children:[],dataset:{},append(...children){this.children.push(...children);}});
+const rendered = vm.createContext({document:{createElement:fakeElement}});
+vm.runInContext(app.slice(app.indexOf('function parameterToken('),app.indexOf('function renderParameters(')),rendered);
+const checkboxes=modules.flatMap(module=>module.parameters.filter(parameter=>parameter.type==='checkbox'));
+for(const parameter of checkboxes){
+  const card=rendered.renderParameterControl(parameter);
+  const descendants=[];
+  const visit=node=>{descendants.push(node);for(const child of node.children || [])visit(child);};
+  visit(card);
+  assert.equal(descendants.find(node=>node.tag==='code')?.textContent,parameter.flag);
+  assert.equal(descendants.find(node=>node.tag==='input')?.checked,Boolean(parameter.value));
+}
+for(const label of ['Keep copy with greatest non-ambiguous length','Write unprefixed gene IDs','Allow internal stop','Skip trimming','Validate translation']){
+  assert.ok(checkboxes.some(parameter=>parameter.label===label),`Missing checkbox: ${label}`);
+}
+assert.equal(checkboxes.find(parameter=>parameter.label==='Validate translation').flag,'-g');
+assert.ok(checkboxes.filter(parameter=>parameter.label==='Skip trimming').every(parameter=>parameter.flag==='-n, --notrim'));
+console.log('Checkbox labels show CLI flags and preserve their checked defaults.');
