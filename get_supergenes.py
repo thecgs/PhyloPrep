@@ -122,7 +122,7 @@ def get_supergenes(infiles, prefix, missing_taxa="skip-gene", input_lists=(), wr
     """Create a supermatrix while handling taxa missing from individual genes."""
     infiles = list(infiles)
     destinations = [prefix + suffix for suffix in
-                    (".report.tsv", "_partition_finder.cfg", "_part_iqtree.txt", ".fasta")]
+                    (".report.tsv", "_partition_finder.cfg.txt", "_part_iqtree.txt", ".fasta")]
     if write_phylip:
         destinations.append(prefix + ".phy")
     for i, destination in enumerate(destinations):
@@ -212,7 +212,7 @@ def _write_supermatrix_products(prefix, report_rows, selected_alignments, taxa_o
             "Duplicate partition names after filename normalization: " + details
         )
 
-    partition_path = prefix + "_partition_finder.cfg"
+    partition_path = prefix + "_partition_finder.cfg.txt"
     iqtree_path = prefix + '_part_iqtree.txt'
     #part_raxml = open('part_raxml.txt', 'w')
 

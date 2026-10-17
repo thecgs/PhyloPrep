@@ -50,7 +50,7 @@ def test_skip_gene_omits_a_gene_missing_any_taxon(tmp_path):
     assert (prefix.parent / f"{prefix.name}.phy").read_text() == (
         "3 3\nsp1 AAA\nsp2 AAA\nsp3 AAA\n"
     )
-    partition_config = (prefix.parent / f"{prefix.name}_partition_finder.cfg").read_text()
+    partition_config = (prefix.parent / f"{prefix.name}_partition_finder.cfg.txt").read_text()
     assert f"alignment = {prefix.name}.phy;" in partition_config
 
 
@@ -137,7 +137,7 @@ def test_pipeline_can_defer_phylip_output(tmp_path):
     assert result.returncode == 0, result.stderr
     assert (tmp_path/'supermatrix.fasta').exists()
     assert not (tmp_path/'supermatrix.phy').exists()
-    assert 'alignment = supermatrix.phy;' in (tmp_path/'supermatrix_partition_finder.cfg').read_text()
+    assert 'alignment = supermatrix.phy;' in (tmp_path/'supermatrix_partition_finder.cfg.txt').read_text()
 
 
 def test_concatenation_peak_does_not_scale_with_total_matrix(tmp_path):

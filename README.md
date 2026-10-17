@@ -151,7 +151,7 @@ results/
     pseudogene/paired/<codon|prot>/<raw|trimmed>/
 ```
 
-Every final matrix has `.fasta`, `.phy`, and `.nex` products. Concatenation also creates gene-inclusion reports and partition files for PartitionFinder and IQ-TREE. The complete workflow defers PHYLIP export until the format-conversion stage (`get_supergenes.py --no-phylip`), avoiding duplicate supermatrix conversion. Standalone concatenation still writes PHYLIP by default. Publication is staged, so failed processing does not publish partial matrices.
+Every final matrix has `.fasta`, `.phy`, and `.nex` products. Concatenation also creates gene-inclusion reports and partition files for PartitionFinder (`*_partition_finder.cfg.txt`) and IQ-TREE. CLI and browser outputs use the same `.cfg.txt` suffix to support browser folder saving. Before running PartitionFinder, rename its configuration file to `partition_finder.cfg` in the analysis directory; the configuration contents are unchanged. The complete workflow defers PHYLIP export until the format-conversion stage (`get_supergenes.py --no-phylip`), avoiding duplicate supermatrix conversion. Standalone concatenation still writes PHYLIP by default. Publication is staged, so failed processing does not publish partial matrices.
 
 Sequence-change reports include `input_kind` to distinguish source sequences from native MACSE alignments even when a source filename resembles an intermediate product. Browser and CLI matrix groups are staged and published only after every requested raw/trimmed representation succeeds.
 
