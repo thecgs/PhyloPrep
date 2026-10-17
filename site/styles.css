@@ -176,12 +176,12 @@ button:focus-visible, input:focus-visible, select:focus-visible, [tabindex]:focu
 .mode-badge.local { color: var(--warning); background: #fff2d7; }
 .mode-badge.original { color: #0a5f9e; background: #e7f4ff; }
 .implementation-note { margin: 11px 0 0; color: var(--muted); font-size: 13px; line-height: 1.5; }
-/* Reserve space for both Run/Running… and Cancel so the title stays put. */
-.execution-heading { display: grid; grid-template-columns: 13.5rem minmax(0, 1fr); }
+/* Stack Cancel below Run and reserve both rows so the title stays put. */
+.execution-heading { display: grid; grid-template-columns: 7.5rem minmax(0, 1fr); }
 .execution-heading > div { min-width: 0; }
 .execution-heading h2 { overflow-wrap: anywhere; }
 .execution-heading .mode-badge { grid-column: 2; justify-self: start; }
-.run-actions { display: grid; grid-template-columns: 7.5rem 5.5rem; gap: 8px; align-items: center; }
+.run-actions { display: grid; grid-row: 1 / span 2; grid-template-columns: 7.5rem; grid-template-rows: repeat(2, 45px); gap: 8px; align-items: stretch; }
 .run-progress { margin-top: 20px; padding: 16px; border: 1px solid var(--line); border-radius: 8px; background: #f8fbff; }
 .run-progress .result-heading h3 { font-size: 15px; }
 .run-stages { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; padding: 0; margin: 13px 0 0; list-style: none; }
