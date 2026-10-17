@@ -28,6 +28,7 @@ jobs:
         run: |
           node --check site/app.js
           node --check site/pyodide-worker.js
+          node --check site/browser-disk-fs.js
           node --check site/alignment-worker.js
       - name: Validate Python syntax
         run: python -m py_compile phyloprep.py MSAP.py MSAP_batch.py alignment_qc.py sequence_audit.py site/browser_runner.py

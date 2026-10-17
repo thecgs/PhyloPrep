@@ -25,29 +25,64 @@ const server = http.createServer((req,res) => {
   const page=await context.newPage();
   page.on('console',message=>{if(message.type()==='error')console.error(message.text());});
   await page.goto(`http://127.0.0.1:${server.address().port}/index.html`);
+  await page.evaluate(async()=>{
+    const helper=new URL('browser-disk-fs.js',location.href).href;
+    const script=`importScripts(${JSON.stringify(helper)});
+      let cache;
+      const runtime={FS:{filesystems:{MEMFS:{}},mkdirTree(){},mount(){},unmount(){},rmdir(){}},ERRNO_CODES:{}};
+      onmessage=async event=>{try {
+        if(event.data==='open') cache=await PhyloPrepDiskFS.open(runtime,'/work/test');
+        else await cache.close();
+        postMessage({ok:true});
+      }catch(error){postMessage({error:String(error)});}};`;
+    const url=URL.createObjectURL(new Blob([script],{type:'application/javascript'}));
+    const workers=[new Worker(url),new Worker(url),new Worker(url)];
+    const ask=(worker,command)=>new Promise((resolve,reject)=>{
+      const timer=setTimeout(()=>reject(Error('Cache lifecycle test timed out')),10000);
+      worker.onmessage=event=>{clearTimeout(timer);event.data.error?reject(Error(event.data.error)):resolve();};
+      worker.onerror=event=>{clearTimeout(timer);reject(Error(event.message));};worker.postMessage(command);
+    });
+    const directory=await (await navigator.storage.getDirectory()).getDirectoryHandle('phyloprep-working-cache',{create:true});
+    const count=async()=>{let total=0;for await(const [name] of directory.entries())if(name.startsWith('workspace-'))total++;return total;};
+    try{
+      await ask(workers[0],'open');await ask(workers[1],'open');
+      if(await count()!==2)throw Error('An active worker cache was deleted');
+      workers[0].terminate();await new Promise(resolve=>setTimeout(resolve,100));
+      await ask(workers[2],'open');
+      if(await count()!==2)throw Error('An abandoned cache was not reclaimed');
+      await ask(workers[1],'close');await ask(workers[2],'close');
+      if(await count()!==0)throw Error('Finished caches were not removed');
+    }finally{workers.forEach(worker=>worker.terminate());URL.revokeObjectURL(url);}
+  });
+  console.log('Real OPFS active-worker isolation, cancelled-cache recovery and completed-cache cleanup passed.');
   const result=await page.evaluate(async()=>{
     const folder=await (await navigator.storage.getDirectory()).getDirectoryHandle('outputs',{create:true});
     outputDirectoryHandle=folder; outputSaveSession=createOutputSaveSession(folder);producedFiles=new Map();
     const dna='>gene_a\nATGGCT\n>gene_b\nATGGCT\n', protein='>gene_a\nMA\n>gene_b\nMA\n';
-    const batch=[];
+    const batch=[], sources=[];
+    const loci=6;
+    for(let locus=0;locus<loci;locus++) {
+    sources.push({name:`gene${locus}.fa`,role:'source',content:dna});
     for(const variant of ['', '.trimmed']) for(const type of ['codon','prot']){
-      const name=`gene.mafft.${type}${variant}.aln.fasta`;
+      const name=`gene${locus}.mafft.${type}${variant}.aln.fasta`;
       const file=PhyloPrepSave.record({name:`alignments/${name}`,content:type==='codon'?dna:protein});
       await fileFingerprint(file);await publishProducedFiles([file]);await outputSaveSession.settle();
       if(file.content!==undefined||!file.storage.disk)throw Error('Saved alignment text was retained');
       batch.push(PhyloPrepSave.record({...file,name,role:'batch-output'}));
     }
+    }
     const result=await runInWorker({type:'phyloprep-finalize',script:'phyloprep.py',files:[
-      {name:'gene.fa',role:'source',content:dna},
+      ...sources,
       {name:'map.tsv',role:'mapping',content:'gene_a\tsp_a\ngene_b\tsp_b\n'},...batch],
       options:{seqtype:'codon',genetic_code:1},outputName:'',usesPathList:false});
     await outputSaveSession.settle();
     if(outputSaveSession.error)throw outputSaveSession.error;
     if(result.files.some(file=>file.content!==undefined||!file.storage.disk))throw Error('Final result text was retained');
+    if(result.workspace_storage?.kind!=='opfs'||result.workspace_storage.cached_file_bytes!==0)throw Error('Locus files were not disk-backed');
     const renamed=result.files.filter(file=>file.name.startsWith('renamed/'));
     const matrix=result.files.find(file=>file.name==='matrices/codon/raw/supermatrix.fasta');
     const paired=result.files.find(file=>file.name==='matrices/paired/codon/raw/supermatrix.fasta');
-    const expected='>sp_a\nATGGCT\n>sp_b\nATGGCT\n';
+    const expected=`>sp_a\n${'ATGGCT'.repeat(loci)}\n>sp_b\n${'ATGGCT'.repeat(loci)}\n`;
     if(await PhyloPrepSave.readText(matrix)!==expected||await PhyloPrepSave.readText(paired)!==expected)throw Error('Matrix changed');
     generatedFiles=result.files;renderGeneratedFiles();selectedGeneratedFileIndex=result.files.indexOf(matrix);
     await previewGeneratedFile(matrix);
@@ -61,9 +96,9 @@ const server = http.createServer((req,res) => {
     await saveOutputCollection(result.files,true);
     if(outputSaveSession.error)throw outputSaveSession.error;
     const reread=await PhyloPrepSave.readText(matrix);
-    return {files:result.files.length,renamed:renamed.length,matrix:reread,allReleased:result.files.every(file=>file.content===undefined)};
+    return {files:result.files.length,renamed:renamed.length,matrix:reread,allReleased:result.files.every(file=>file.content===undefined),storage:result.workspace_storage,loci};
   });
-  assert.equal(result.renamed,4);assert.ok(result.files>10);assert.ok(result.allReleased);
+  assert.equal(result.renamed,4*result.loci);assert.ok(result.files>10);assert.ok(result.allReleased);
   console.log(`Real Pyodide disk-backed raw/trimmed QC and paired/independent matrices passed (${result.files} outputs, ${result.renamed} renamed alignments); preview, download and destination-copy read-back passed.`);
  }finally{clearTimeout(timeout);await browser.close();server.close();}
 })().catch(error=>{console.error(error);server.close();process.exitCode=1;});

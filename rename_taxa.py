@@ -40,23 +40,30 @@ def rename_fasta(infile, outfile, mapping_file=None, map_output=None, allow_dupl
     inputs = [infile] + ([mapping_file] if mapping_file else [])
     check_output_path(outfile, inputs)
     check_output_path(map_output, inputs + [outfile])
-    records = list(SeqIO.parse(infile, "fasta"))
-    if not records:
-        raise ValueError("No sequences found in input FASTA.")
     mapping = read_mapping(mapping_file) if mapping_file else (mapping or {})
-    result, seen, map_rows = [], set(), []
-    for record in records:
-        old = normalized_taxon_id(record.id)
-        new = mapping.get(old, old)
+    seen = set()
+    map_rows = [] if map_output else None
 
-        if not new: raise ValueError(f"{old}: renamed ID is empty")
-        if any(char.isspace() for char in new):
-            raise ValueError(f'{old}: FASTA IDs must not contain whitespace, even with --keep-special: {new!r}')
-        if new in seen and not allow_duplicate_ids:
-            raise ValueError(f"Duplicate ID after renaming: {new}")
-        seen.add(new); record.id = new; record.name = new; record.description = ""
-        result.append(record); map_rows.append((old, new))
-    with atomic_output(outfile, inputs=[infile]) as handle: SeqIO.write(result, handle, "fasta")
+    def renamed_records(source):
+        for record in SeqIO.parse(source, "fasta"):
+            old = normalized_taxon_id(record.id)
+            new = mapping.get(old, old)
+            if not new:
+                raise ValueError(f"{old}: renamed ID is empty")
+            if any(char.isspace() for char in new):
+                raise ValueError(f'{old}: FASTA IDs must not contain whitespace, even with --keep-special: {new!r}')
+            if new in seen and not allow_duplicate_ids:
+                raise ValueError(f"Duplicate ID after renaming: {new}")
+            seen.add(new)
+            record.id = record.name = new
+            record.description = ""
+            if map_rows is not None:
+                map_rows.append((old, new))
+            yield record
+
+    with open(infile) as source, atomic_output(outfile, inputs=[infile]) as handle:
+        if not SeqIO.write(renamed_records(source), handle, "fasta"):
+            raise ValueError("No sequences found in input FASTA.")
     if map_output:
         with atomic_output(map_output) as handle:
             handle.write("original_id\trenamed_id\n")
