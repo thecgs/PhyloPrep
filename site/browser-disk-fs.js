@@ -5,6 +5,12 @@
   function filesystem(FS, access, codes) {
     const memory = FS.filesystems.MEMFS, free = [], zero = new Uint8Array(BLOCK);
     let next = 0, files = 0, bytes = 0, peak = 0, reads = 0, writes = 0, failure;
+    function details(node, position, at, expected, actual) {
+      let path = node?.name || '(unknown file)', size = 'unavailable';
+      try { path = FS.getPath(node); } catch {}
+      try { size = access.getSize(); } catch {}
+      return `file=${JSON.stringify(path)}, file_size=${node?.usedBytes}, file_offset=${position}, disk_offset=${at}, expected_bytes=${expected}, actual_bytes=${actual}, backing_size=${size}`;
+    }
     function io(callback) {
       try { return callback(); }
       catch (error) {
@@ -14,11 +20,14 @@
         throw new FS.ErrnoError(error.name === 'QuotaExceededError' ? codes.ENOSPC : codes.EIO);
       }
     }
-    function writeAll(view, at) {
+    function writeAll(view, at, node, position) {
       let done = 0;
       while (done < view.byteLength) {
         const count = io(() => access.write(view.subarray(done), {at:at + done}));
-        if (!count) { failure = 'Browser temporary disk could not complete a write.'; throw new FS.ErrnoError(codes.ENOSPC); }
+        if (!Number.isInteger(count) || count <= 0 || count > view.byteLength - done) {
+          failure = `Browser temporary disk could not complete a write: ${details(node, position, at + done, view.byteLength - done, count)}.`;
+          throw new FS.ErrnoError(codes.EIO);
+        }
         done += count;
       }
     }
@@ -29,7 +38,7 @@
           if (index * BLOCK >= size) { free.push(block); node.diskBlocks.delete(index); }
         }
         const remainder = size % BLOCK, block = node.diskBlocks.get(Math.floor(size / BLOCK));
-        if (remainder && block !== undefined) writeAll(zero.subarray(remainder), block * BLOCK + remainder);
+        if (remainder && block !== undefined) writeAll(zero.subarray(remainder), block * BLOCK + remainder, node, size);
       }
       bytes += size - node.usedBytes; peak = Math.max(peak, bytes);
       node.usedBytes = size; node.timestamp = Date.now(); node.diskDirty = true;
@@ -82,7 +91,10 @@
                 let got=0;
                 while(got<chunk) {
                   const n=io(()=>access.read(view.subarray(got),{at:block*BLOCK+within+got}));
-                  if (!n) { failure='Browser temporary disk returned incomplete data.'; throw new FS.ErrnoError(codes.EIO); }
+                  if (!Number.isInteger(n) || n <= 0 || n > view.byteLength - got) {
+                    failure=`Browser temporary disk returned incomplete data: ${details(target, position + done + got, block * BLOCK + within + got, view.byteLength - got, n)}.`;
+                    throw new FS.ErrnoError(codes.EIO);
+                  }
                   got+=n;
                 }
               }
@@ -98,11 +110,11 @@
               let block=target.diskBlocks.get(index);
               if (block === undefined) {
                 block=free.length ? free.pop() : next++;
-                try { writeAll(zero,block*BLOCK); }
+                try { writeAll(zero,block*BLOCK,target,position+done); }
                 catch(error) { free.push(block); throw error; }
                 target.diskBlocks.set(index,block);
               }
-              writeAll(buffer.subarray(offset+done,offset+done+chunk),block*BLOCK+within);
+              writeAll(buffer.subarray(offset+done,offset+done+chunk),block*BLOCK+within,target,position+done);
               done+=chunk;
             }
             if (position+length > target.usedBytes) resize(target,position+length);

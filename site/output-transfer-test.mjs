@@ -2,6 +2,7 @@ import { PhyloPrepSave } from './test-output-store.mjs';
 import { readFile } from 'node:fs/promises';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
+import {createHash} from 'node:crypto';
 const text = 'A'.repeat(1024 * 1024 - 1) + 'é' + 'B'.repeat(1024 * 1024) + '\n';
 const data = new TextEncoder().encode(text);
 let handler, open = 0, closed = 0, outstanding = 0, maxOutstanding = 0, saved = false;
@@ -25,6 +26,7 @@ const context = vm.createContext({ PhyloPrepSave, Blob,  setTimeout, clearTimeou
   },
 } });
 vm.runInContext(await readFile('site/pyodide-worker.js', 'utf8'), context);
+vm.runInContext(await readFile('site/browser-hash.js', 'utf8'), context);
 context.runtime = { FS: {
   open() { open++; return {}; },
   read(stream, bytes, offset, length, position) { bytes.set(data.subarray(position, position + length)); return length; },
@@ -44,14 +46,15 @@ assert.equal(open, 4); assert.equal(closed, 4);
 console.log('Acknowledged output-chunk transfer and UTF-8 boundary checks passed.');
 
 context.transferred = new Map();
-context.files.forEach((file, i) => {file.sha256 = `hash-${i}`;});
+context.files.forEach(file => {file.sha256 = createHash('sha256').update(data.subarray(0,file.size)).digest('hex');});
 await vm.runInContext('streamOutputFiles(runtime, 11, files, "checkpoint", true, transferred)', context);
 const readsBeforeReuse = open;
 await vm.runInContext('streamOutputFiles(runtime, 11, files, undefined, true, transferred)', context);
 assert.equal(open, readsBeforeReuse, 'Unchanged checkpoint outputs must not be read/transferred again');
 assert.equal(reused.length, 2);
 assert.deepEqual(reused.map(file => file.index), [0, 1]);
-context.files[0].sha256 = 'changed';
+data[0]=67;
+context.files[0].sha256 = createHash('sha256').update(data).digest('hex');
 await vm.runInContext('streamOutputFiles(runtime, 11, files, undefined, true, transferred)', context);
 assert.equal(open, readsBeforeReuse + 1, 'Changed output must be transferred again');
 console.log('Checkpoint/final output reuse and changed-content retransmission passed.');
@@ -67,15 +70,22 @@ const receiveContext = vm.createContext({ PhyloPrepSave, Blob,
   elements:{cancelRun:{},runtimeStatus:{}}, setRunStage:()=>{},
   publishProducedFiles: async files => {published.push(...files);},
   Worker: class {
-    constructor() {this.handlers={};receiver=this;}
+    constructor() {this.handlers={};this.sent=[];receiver=this;}
     addEventListener(type, callback) {this.handlers[type]=callback;}
-    postMessage() {}
+    postMessage(message) {this.sent.push(message);}
   },
 });
 vm.runInContext(app.slice(app.indexOf('function createPyodideWorker('),app.indexOf('function runInWorker(')),receiveContext);
 vm.runInContext('createPyodideWorker()',receiveContext);
 receiver.handlers.message({data:{type:'output-file-reuse',runId:42,index:0,name:'qc/pass.tsv'}});
 assert.equal(receiveContext.activeWorkerRun.streamedOutputs.get('final:0').content,'gene.fasta\n');
+receiveContext.outputSaveSession={saved:()=>true};
+receiver.handlers.message({data:{type:'output-file-reuse',runId:42,index:0,name:'qc/pass.tsv',sequence:101}});
+assert.equal(receiver.sent.at(-1).sequence,101);
+assert.equal(receiver.sent.at(-1).saved,true);
+receiveContext.outputSaveSession={saved:()=>false};
+receiver.handlers.message({data:{type:'output-file-reuse',runId:42,index:0,name:'qc/pass.tsv',sequence:102}});
+assert.equal(receiver.sent.at(-1).saved,false,'Reuse acknowledgements must report actual durable save status');
 receiveContext.activeWorkerRun.deferPublish=true;
 receiver.handlers.message({data:{type:'output-chunk',runId:42,index:1,name:'gene.prot.aln.fasta',bytes:new TextEncoder().encode('>a\nAA\n')}});
 receiver.handlers.message({data:{type:'output-file-end',runId:42,index:1,name:'gene.prot.aln.fasta',size:6,sha256:'b'.repeat(64)}});

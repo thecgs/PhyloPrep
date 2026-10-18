@@ -1396,6 +1396,10 @@ function createPyodideWorker() {
           return;
         }
         if (!message.transferId) activeWorkerRun.streamedOutputs.set(`final:${message.index}`, previous);
+        if (message.sequence !== undefined) {
+          worker.postMessage({type: 'output-chunk-ack', runId: message.runId, sequence: message.sequence,
+            saved: Boolean(outputSaveSession?.saved(previous))});
+        }
         return;
       }
       if (message.type === "output-chunk" || message.type === "output-file-end") {

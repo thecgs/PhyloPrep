@@ -66,11 +66,13 @@
       let stream;
       try {
         stream = await file.createWritable();
-        await stream.write(await readBlob(item.file));
+        const source = await readBlob(item.file);
+        await stream.write(source);
         await stream.close();
         // Do not discard text unless close AND a readable disk snapshot succeed.
         if (file.getFile) {
           const snapshot = await file.getFile();
+          if (snapshot.size !== source.size) throw new Error(`Saved file size mismatch: expected ${source.size} bytes, found ${snapshot.size}`);
           item.storage.disk = { handle: file, size: snapshot.size, lastModified: snapshot.lastModified };
           delete item.storage.content;
           delete item.storage.blob;
