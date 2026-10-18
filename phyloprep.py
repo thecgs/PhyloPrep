@@ -792,9 +792,11 @@ def build_group_matrices(args, root, context):
             matrices.append(fourfold)
 
     for matrix in matrices:
-        report_phase(args, f'{variant}/{seqtype}: exporting {matrix.name}')
+        label = 'paired' if context.get('paired') else 'independent'
+        report_phase(args, f'{variant}/{seqtype} ({label}): exporting {matrix.with_suffix(".phy").name}')
         run("fasta2phy.py", "-i", matrix, "-o", matrix.with_suffix(".phy"),
             "-st", "protein" if seqtype == "prot" else "DNA")
+        report_phase(args, f'{variant}/{seqtype} ({label}): exporting {matrix.with_suffix(".nex").name}')
         run("fasta2nex.py", "-i", matrix, "-o", matrix.with_suffix(".nex"),
             "-st", "protein" if seqtype == "prot" else "DNA")
 
@@ -849,6 +851,7 @@ def prepare_variant(args, root, stage_root, variant):
                 independent_stage = context["stage"]
                 if (paired and selected.read_text() == context["independent_retained"].read_text()
                         and (independent_stage / "supermatrix.fasta").is_file()):
+                    report_phase(args, f'{variant}/{seqtype}: copying independent matrices to paired output')
                     shutil.copytree(independent_stage, stage)
                     built = True
                     continue

@@ -55,6 +55,59 @@ const server = http.createServer((req,res) => {
     }finally{workers.forEach(worker=>worker.terminate());URL.revokeObjectURL(url);}
   });
   console.log('Real OPFS active-worker isolation, cancelled-cache recovery and completed-cache cleanup passed.');
+  const quotaProbe = await page.evaluate(async()=>{
+    const helper=new URL('browser-disk-fs.js',location.href).href;
+    const script=`importScripts(${JSON.stringify(helper)});
+    onmessage=async()=>{
+      const root=await navigator.storage.getDirectory();
+      const name='quota-probe-'+crypto.randomUUID();
+      const handle=await(await root.getFileHandle(name,{create:true})).createSyncAccessHandle();
+      let result;
+      try {
+        const codes={ENOSPC:51,EIO:29,EINVAL:28};
+        const FS={isDir:mode=>mode===0x4000,isFile:mode=>mode===0x8000,
+          ErrnoError:class extends Error{constructor(errno){super(String(errno));this.errno=errno;}},filesystems:{}};
+        function createNode(parent,name,mode){
+          const node={parent,name,mode,usedBytes:0,contents:mode===0x4000?{}:null,
+            node_ops:{setattr:Object.assign,unlink(parent,name){delete parent.contents[name];}},stream_ops:{}};
+          if(parent)parent.contents[name]=node;return node;
+        }
+        FS.filesystems.MEMFS={createNode,mount:()=>createNode(null,'/',0x4000)};
+        let forceQuota=true,returned;
+        const quota=(await navigator.storage.estimate()).quota;
+        const access={getSize:()=>handle.getSize(),truncate:size=>handle.truncate(size),flush:()=>handle.flush(),
+          read:(view,options)=>handle.read(view,options),
+          write(view,{at}){returned=handle.write(view,{at:forceQuota?quota+65536+at:at});return returned;}};
+        const backend=PhyloPrepDiskFS.filesystem(FS,access,codes),directory=backend.mount({});
+        const node=directory.node_ops.mknod(directory,'fourfold-spool',0x8000);
+        let rejected=false;
+        try{node.stream_ops.write({node},new Uint8Array([7]),0,1,0);}
+        catch(error){rejected=[codes.ENOSPC,codes.EIO].includes(error.errno);}
+        if(!rejected||node.usedBytes||node.diskBlocks.size)throw Error('Quota failure created a phantom data block');
+        const failure=backend.failure;
+        forceQuota=false;
+        const bytes=new Uint8Array(100000).fill(42);
+        node.stream_ops.open({node});node.stream_ops.dup({node});
+        node.stream_ops.write({node},bytes,0,bytes.length,0);
+        directory.node_ops.unlink(directory,'fourfold-spool');node.stream_ops.close({node});
+        const copy=new Uint8Array(bytes.length);
+        node.stream_ops.read({node},copy,0,copy.length,0);
+        if(!copy.every(value=>value===42))throw Error('Open duplicate lost spool data');
+        node.stream_ops.close({node});
+        if(handle.getSize()!==0)throw Error('Closed spool did not return backing-file quota');
+        result={ok:true,failure,quota};
+      }catch(error){result={error:String(error)};}
+      finally{handle.close();await root.removeEntry(name);}
+      postMessage(result);
+    };`;
+    const url=URL.createObjectURL(new Blob([script],{type:'application/javascript'}));
+    const worker=new Worker(url);
+    try{return await new Promise((resolve,reject)=>{
+      worker.onmessage=event=>resolve(event.data);worker.onerror=event=>reject(Error(event.message));worker.postMessage('start');
+    });}finally{worker.terminate();URL.revokeObjectURL(url);}
+  });
+  assert.equal(quotaProbe.ok,true,JSON.stringify(quotaProbe));
+  console.log('Real OPFS quota failure rejected before read-back; duplicate spool lifetime and physical tail-quota reclamation passed.');
   const result=await page.evaluate(async()=>{
     const folder=await (await navigator.storage.getDirectory()).getDirectoryHandle('outputs',{create:true});
     outputDirectoryHandle=folder; outputSaveSession=createOutputSaveSession(folder);producedFiles=new Map();

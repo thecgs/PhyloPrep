@@ -6,14 +6,37 @@ let engineManifest;
 const outputAcknowledgements = new Map();
 let outputSequence = 0;
 
+function acknowledgeOutput(runId, message, timeout, label) {
+  const sequence = ++outputSequence;
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      outputAcknowledgements.delete(sequence);
+      reject(new Error(`${label}: ${message.name}`));
+    }, timeout);
+    outputAcknowledgements.set(sequence, {runId, resolve: ack => {clearTimeout(timer); resolve(ack);}});
+    self.postMessage({...message, runId, sequence});
+  });
+}
+
 async function streamOutputFiles(runtime, runId, files, transferId, waitForSave = false, transferred = new Map()) {
+  if (transferId && files.some(file => file.release)) {
+    self.postMessage({type: 'stage', runId, stage: 'process',
+      label: 'QC and matrix construction for this branch finished; checking saved outputs and clearing temporary copies'});
+  }
   for (let index = 0; index < files.length; index++) {
     const file = files[index];
     if (!file.path) continue;
     if (file.sha256 && transferred.get(file.name) === file.sha256) {
-      self.postMessage({ type: "output-file-reuse", runId, index, name: file.name, transferId });
+      const message = { type: "output-file-reuse", index, name: file.name, transferId,
+        release: Boolean(file.release), fileCount: files.length };
+      if (file.release && waitForSave) {
+        const ack = await acknowledgeOutput(runId, message, 300000, 'Local output reuse acknowledgement timed out');
+        if (ack?.saved && runtime.FS.analyzePath(file.path).exists) runtime.FS.unlink(file.path);
+      } else self.postMessage({...message, runId});
       continue;
     }
+    if (file.sha256 && !globalThis.PhyloPrepHash) importScripts('browser-hash.js');
+    const hash = file.sha256 ? new PhyloPrepHash.SHA256() : null;
     const stream = runtime.FS.open(file.path, "r");
     try {
       let position = 0;
@@ -22,6 +45,7 @@ async function streamOutputFiles(runtime, runId, files, transferId, waitForSave 
         const read = runtime.FS.read(stream, bytes, 0, bytes.length, position);
         if (!read) throw new Error(`Incomplete output transfer: ${file.name}`);
         const chunk = bytes.subarray(0, read);
+        hash?.update(chunk);
         const sequence = ++outputSequence;
         await new Promise((resolve, reject) => {
           const timer = setTimeout(() => {
@@ -34,18 +58,11 @@ async function streamOutputFiles(runtime, runId, files, transferId, waitForSave 
         });
         position += read;
       }
+      if (hash && hash.hex() !== file.sha256) throw new Error(`Output checksum mismatch while reading browser temporary disk: ${file.name}. The incomplete output was not saved.`);
       const end = { type: "output-file-end", runId, index, name: file.name, transferId, size: file.size, sha256: file.sha256 };
       let acknowledgement;
       if (waitForSave) {
-        const sequence = ++outputSequence;
-        acknowledgement = await new Promise((resolve, reject) => {
-          const timer = setTimeout(() => {
-            outputAcknowledgements.delete(sequence);
-            reject(new Error(`Local output queue acknowledgement timed out: ${file.name}`));
-          }, 300000);
-          outputAcknowledgements.set(sequence, { runId, resolve: ack => { clearTimeout(timer); resolve(ack); } });
-          self.postMessage({ ...end, sequence });
-        });
+        acknowledgement = await acknowledgeOutput(runId, end, 300000, 'Local output queue acknowledgement timed out');
       } else self.postMessage(end);
       if (file.sha256) transferred.set(file.name, file.sha256);
       if (file.release && acknowledgement?.saved) runtime.FS.unlink(file.path);
@@ -421,7 +438,7 @@ self.addEventListener("message", async (event) => {
         catch (error) { request.options = { ...request.options, report_dependency_error:
           `Could not load the browser report dependency sqlite3: ${error.message || error}` }; }
       }
-      self.postMessage({ type: "stage", runId, stage: "process", label: "Running PhyloPrep QC and matrix construction" });
+      self.postMessage({ type: "stage", runId, stage: "process", label: "Preparing downstream alignment processing" });
       const manifest = stage.files.map(({ name, path, role, inputKey, fasta, on_disk }) => ({ name, path, role, inputKey, fasta, on_disk }));
       runtime.globals.set("_phyloprep_progress_callback", (eventJson) => {
         self.postMessage({ type: "progress", runId, progress: JSON.parse(eventJson) });

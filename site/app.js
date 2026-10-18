@@ -1404,10 +1404,21 @@ function createPyodideWorker() {
           return;
         }
         if (!message.transferId) activeWorkerRun.streamedOutputs.set(`final:${message.index}`, previous);
+        if (message.transferId && message.release) {
+          clearInterval(activeWorkerRun.progressTimer);
+          setRunStage(2, `Reusing saved output ${message.index + 1}/${message.fileCount}; checking temporary-file release: ${message.name}`);
+        }
+        if (message.sequence !== undefined) {
+          worker.postMessage({type: 'output-chunk-ack', runId: message.runId, sequence: message.sequence,
+            saved: Boolean(outputSaveSession?.saved(previous))});
+        }
         return;
       }
       if (message.type === "output-chunk" || message.type === "output-file-end") {
         clearInterval(activeWorkerRun.progressTimer);
+        const intermediate = Boolean(message.transferId || activeWorkerRun.deferPublish);
+        const outputKind = intermediate ? 'intermediate output (analysis continues)' : 'final output';
+        setRunStage(intermediate ? 2 : 3, `Receiving ${outputKind}: ${message.name}`);
         const outputs = activeWorkerRun.streamedOutputs;
         const transferKey = `${message.transferId || "final"}:${message.index}`;
         let file = outputs.get(transferKey);
@@ -1417,7 +1428,6 @@ function createPyodideWorker() {
         }
         if (message.type === "output-chunk") {
           file.parts.push(message.bytes);
-          setRunStage(3, `Receiving output ${message.index + 1}/${message.fileCount}: ${message.name}`);
           worker.postMessage({ type: "output-chunk-ack", runId: message.runId, sequence: message.sequence });
         } else {
           if(file.parts.reduce((size,part)=>size+part.byteLength,0)!==message.size)throw Error(`Incomplete output transfer: ${message.name}`);
@@ -1448,6 +1458,7 @@ function createPyodideWorker() {
         return;
       }
       if (message.type === "stage") {
+        clearInterval(activeWorkerRun.progressTimer);
         if (message.stage === "runtime") {
           setRunStage(2, message.label);
         } else if (message.stage === "process") {
