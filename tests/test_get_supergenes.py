@@ -58,12 +58,12 @@ def test_pad_gaps_preserves_a_gene_missing_a_taxon(tmp_path):
     prefix = run_supergenes(tmp_path, "pad-gaps")
 
     assert (prefix.parent / f"{prefix.name}.fasta").read_text() == (
-        ">sp1\nAAACCC\n>sp2\nAAACCC\n>sp3\nAAA---\n"
+        ">sp1\nAAACCC\n>sp2\nAAACCC\n>sp3\nAAA???\n"
     )
     report = (prefix.parent / f"{prefix.name}.report.tsv").read_text()
     assert "incomplete.fasta\tpadded\tmissing taxa: sp3" in report
     assert (prefix.parent / f"{prefix.name}.phy").read_text() == (
-        "3 6\nsp1 AAACCC\nsp2 AAACCC\nsp3 AAA---\n"
+        "3 6\nsp1 AAACCC\nsp2 AAACCC\nsp3 AAA???\n"
     )
 
 
@@ -173,7 +173,7 @@ def test_spool_handles_many_taxa_and_padding(tmp_path):
     get_supergenes([str(a), str(b)], prefix, missing_taxa='pad-gaps')
     fasta = Path(prefix + '.fasta').read_text()
     assert '>sp0\nAAACCC\n' in fasta
-    assert '>sp39\nAAA---\n' in fasta
+    assert '>sp39\nAAA???\n' in fasta
     assert Path(prefix + '.phy').read_text().startswith('40 6\nsp0 AAACCC\n')
     assert 'b_fa = 4-6;' in Path(prefix + '_part_iqtree.txt').read_text()
 

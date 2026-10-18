@@ -128,9 +128,10 @@ def nucleotide_changes(infile, taxon, sequence, code='NA', offset=0):
     return changes
 
 
-def normalize_nucleotides(sequence):
-    """Return DNA using only A/C/G/T/N and gaps; U is normalized to T."""
-    return normalize_dna(sequence).translate(str.maketrans({base: 'N' for base in 'RYSWKMBDHV?'}))
+def normalize_nucleotides(sequence, preserve_missing=False):
+    """Normalize DNA; aligned exports can retain the explicit missing marker."""
+    ambiguous = 'RYSWKMBDHV' + ('' if preserve_missing else '?')
+    return normalize_dna(sequence).translate(str.maketrans({base: 'N' for base in ambiguous}))
 
 
 def normalize_export_records(records, infile, seqtype):
@@ -140,10 +141,10 @@ def normalize_export_records(records, infile, seqtype):
     for record in records:
         source = str(record.seq)
         if protein:
-            normalized = ''.join(c.upper() if c.upper() in 'ACDEFGHIKLMNPQRSTVWYX-' else 'X'
+            normalized = ''.join(c.upper() if c.upper() in 'ACDEFGHIKLMNPQRSTVWYX-?' else 'X'
                                  for c in source)
         else:
-            normalized = normalize_nucleotides(source)
+            normalized = normalize_nucleotides(source, preserve_missing=True)
         for index, (original, replacement) in enumerate(zip(source, normalized), 1):
             if original.upper() != replacement:
                 kind = ('protein_unsupported_residue' if protein else

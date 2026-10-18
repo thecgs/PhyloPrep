@@ -25,6 +25,7 @@ From: ubuntu:22.04
     orthogroup_table.py /opt/phyloprep/orthogroup_table.py
     orthomcl_to_orthogroups.py /opt/phyloprep/orthomcl_to_orthogroups.py
     phyloprep.py /opt/phyloprep/phyloprep.py
+    phyloprep_report.py /opt/phyloprep/phyloprep_report.py
     proteinortho_to_orthogroups.py /opt/phyloprep/proteinortho_to_orthogroups.py
     rename_taxa.py /opt/phyloprep/rename_taxa.py
     sequence_audit.py /opt/phyloprep/sequence_audit.py

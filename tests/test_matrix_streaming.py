@@ -57,11 +57,11 @@ def test_large_unwrapped_matrix_is_bounded(tmp_path, monkeypatch, operation):
 @pytest.mark.parametrize('converter', [fasta2phy, fasta2nex])
 def test_export_audit_coordinates_cross_chunk_boundary(tmp_path, converter):
     source, output = tmp_path / 'in.fa', tmp_path / 'out'
-    source.write_text('>a\n' + 'A' * 65534 + 'U?AC\n')
+    source.write_text('>a\n' + 'A' * 65534 + 'U?RAC\n')
     converter(source, output)
     with Path(str(output) + '.sequence_changes.tsv').open() as handle:
         rows = list(csv.DictReader(handle, delimiter='\t'))
-    assert [row['source_nt_positions'] for row in rows] == ['65535-65535', '65536-65536']
+    assert [row['source_nt_positions'] for row in rows] == ['65535-65535', '65537-65537']
 
 
 @pytest.mark.parametrize('content', ['>a\nGCT\n>a\nGCT\n', '>a\nGCT\n>b\nGC\n', '>a\n\n'])
