@@ -20,7 +20,7 @@ import sqlite3
 import sys
 import tempfile
 
-__version__ = "1.0.1"
+__version__ = "1.0.2"
 UNAVAILABLE = "Unavailable"
 BLOCK = 8190
 ALIGNMENT_SUFFIX = re.compile(
@@ -344,8 +344,11 @@ def audit_summary(root, db):
                 "FROM events GROUP BY taxon ORDER BY count(*) DESC, taxon")]
     kinds = [dict(event=e, action=a, count=n) for e, a, n in db.execute(
         "SELECT event, action, count(*) FROM events GROUP BY event, action ORDER BY count(*) DESC, event, action")]
+    by_taxon_event = [dict(taxon=t, event=e, count=n) for t, e, n in db.execute(
+        "SELECT taxon, event, count(*) FROM events GROUP BY taxon, event ORDER BY taxon, event")]
     return dict(source="reports/sequence_changes.tsv", duplicates_ignored=duplicates,
-                events=sum(t["events"] for t in taxa), taxa=taxa, types=kinds)
+                events=sum(t["events"] for t in taxa), taxa=taxa, types=kinds,
+                by_taxon_event=by_taxon_event)
 
 
 def processing_overview(root, manifest):
@@ -495,6 +498,8 @@ def esc(value):
 def display(value):
     if value is None:
         return UNAVAILABLE
+    if isinstance(value, bool):
+        return 'Yes' if value else 'No'
     if isinstance(value, int):
         return f"{value:,}"
     return str(value)
@@ -504,58 +509,184 @@ def pct(value):
     return UNAVAILABLE if value is None else f"{100 * value:.2f}%"
 
 
-def table(headers, data):
-    return '<div class="table-scroll"><table><thead><tr>' + ''.join(
-        f'<th scope="col">{esc(h)}</th>' for h in headers) + '</tr></thead><tbody>' + ''.join(
-        '<tr>' + ''.join(f'<td>{esc(display(v))}</td>' for v in row) + '</tr>' for row in data
-    ) + '</tbody></table></div>'
+def table(headers, data, title="Table", row_keys=None):
+    body = []
+    for index, row in enumerate(data):
+        key = f' data-matrix-key="{esc(row_keys[index])}"' if row_keys is not None else ''
+        body.append(f'<tr{key}>' + ''.join(
+            f'<td data-label="{esc(header)}">{esc(display(value))}</td>'
+            for header, value in zip(headers, row)) + '</tr>')
+    if not body:
+        return '<p class="empty">No records available for this table.</p>'
+    return f'<div class="table-scroll data-table" data-title="{esc(title)}"><table><thead><tr>' + ''.join(
+        f'<th scope="col">{esc(h)}</th>' for h in headers) + '</tr></thead><tbody>' + ''.join(body) + '</tbody></table></div>'
 
 
-def bar_chart(title, values, denominator=None, limit=12):
+REASON_LABELS = {
+    'duplicate_ids': 'Duplicate sequence identifiers', 'length_mismatch': 'Unequal sequence lengths',
+    'invalid_characters': 'Invalid sequence symbols', 'empty_sequence': 'Empty sequence',
+    'all_gap_columns': 'Columns containing only gaps', 'frame_error': 'Invalid reading frame or codon gaps',
+    'terminal_stop': 'Unexpected terminal stop', 'internal_stop': 'Internal stop detected',
+    'short_alignment': 'Alignment below minimum length', 'gap_ratio': 'Excessive alignment gaps',
+    'N_ratio': 'Excessive nucleotide ambiguity', 'X_ratio': 'Excessive protein ambiguity',
+    'parsimony_informative_sites': 'Insufficient parsimony-informative sites',
+    'below_independent_PIS_threshold': 'Below independent PIS threshold',
+    'codon_qc_failed': 'Codon QC failed', 'protein_qc_failed': 'Protein QC failed',
+    'pis_policy_failed': 'Paired PIS rule not met', 'failure_reason_not_recorded': 'Failure reason not recorded',
+}
+
+
+def reason_label(code):
+    return REASON_LABELS.get(code, code.replace('_', ' ').capitalize())
+
+
+def combination_label(value):
+    return ' + '.join(reason_label(code) for code in value.split(' + '))
+
+
+def group_label(group):
+    parts = group.split('/')
+    labels = ['Pseudogene'] if 'pseudogene' in parts else []
+    labels.append('Paired QC' if 'paired' in parts else 'Independent QC')
+    labels.extend({'nucl': 'Nucleotide', 'prot': 'Protein', 'codon': 'Codon'}[part]
+                  for part in parts if part in {'nucl', 'prot', 'codon'})
+    labels.extend(part.title() for part in parts if part in {'raw', 'trimmed'})
+    return ' · '.join(labels)
+
+
+def matrix_label(matrix):
+    return group_label(matrix['group']) + (' · ' + derived_name(matrix['kind']) if matrix['kind'] != 'full' else '')
+
+
+def event_label(code):
+    names = {'terminal_stop': 'Terminal stop processing', 'protein_terminal_stop': 'Protein terminal stop processing',
+             'terminal_partial_codon': 'Incomplete terminal codon removal', 'internal_stop': 'Internal stop masking',
+             'protein_internal_stop': 'Protein internal stop masking', 'nucleotide_ambiguity': 'Nucleotide ambiguity normalization',
+             'protein_unsupported_residue': 'Non-standard amino-acid normalization', 'uracil_to_thymine': 'Uracil-to-thymine conversion',
+             'validation_error': 'Sequence validation event', 'invalid_frame': 'Invalid reading frame'}
+    return names.get(code, code.replace('_', ' ').capitalize())
+
+
+def event_category(code):
+    if code in {'terminal_stop', 'protein_terminal_stop', 'terminal_partial_codon'}:
+        return 'Terminal cleanup'
+    if code in {'internal_stop', 'protein_internal_stop'}:
+        return 'Internal stops'
+    if code in {'nucleotide_ambiguity', 'protein_unsupported_residue', 'uracil_to_thymine'}:
+        return 'Symbol normalization'
+    if 'frame' in code:
+        return 'Frame-related events'
+    if 'renam' in code or 'identifier' in code:
+        return 'Identifier changes'
+    return 'Other recorded events'
+
+
+def readable_time(value):
+    try:
+        parsed = datetime.fromisoformat(value.replace('Z', '+00:00'))
+        return parsed.strftime('%d %b %Y, %H:%M') + (' UTC' if parsed.utcoffset() is not None and parsed.utcoffset().total_seconds() == 0 else parsed.strftime(' %z'))
+    except (ValueError, AttributeError):
+        return value
+
+
+def setting_value(key, value, parameters):
+    mode = parameters.get('seqtype')
+    if key in {'min_nucl_pis', 'min_protein_pis'} and value is None:
+        if (key == 'min_nucl_pis' and mode == 'prot') or (key == 'min_protein_pis' and mode == 'nucl'):
+            return 'Not applicable'
+        return '0 (default)'
+    if key == 'min_length' and value is not None:
+        return f'{value} nt' if mode == 'nucl' else f'{value} aa' if mode == 'prot' else f'{value} codons / aa'
+    if isinstance(value, (list, dict)):
+        return json.dumps(value)
+    return 'Not explicitly set' if value is None else value
+
+
+def bar_chart(title, values, denominator=None, limit=12, labeler=None):
     ordered = sorted(values.items(), key=lambda item: (-item[1], item[0]))
     if not ordered:
         return '<p class="empty">No recorded observations.</p>'
     omitted = max(0, len(ordered) - limit)
     ordered = ordered[:limit]
     width, height = 900, 48 + 48 * len(ordered)
-    maximum = max(1, max(v for _, v in ordered))
-    parts = [f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {height}" font-family="sans-serif" role="img" aria-label="{esc(title)}">',
+    maximum = max(1, denominator if denominator is not None else max(v for _, v in ordered))
+    parts = [f'<svg class="desktop-chart" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {height}" font-family="sans-serif" role="img" aria-label="{esc(title)}">',
              f'<title>{esc(title)}</title>']
     for i, (label, value) in enumerate(ordered):
         y = 24 + i * 48
-        short = label if len(label) <= 48 else label[:45] + "…"
+        readable = labeler(label) if labeler else label
+        short = readable if len(readable) <= 48 else readable[:45] + "…"
         suffix = f" ({value / denominator:.1%})" if denominator else ""
         parts.extend([f'<text x="0" y="{y + 14}" font-size="12" fill="#334155">{esc(short)}</text>',
-                      f'<rect x="365" y="{y}" width="{max(2, value / maximum * 400):.1f}" height="24" rx="4" fill="#197c80"><title>{esc(label)}: {value:,}{esc(suffix)}</title></rect>',
+                      f'<rect x="365" y="{y}" width="{value / maximum * 400:.1f}" height="24" rx="4" fill="#197c80"><title>{esc(readable)} ({esc(label)}): {value:,}{esc(suffix)}</title></rect>',
                       f'<text x="775" y="{y + 17}" font-size="12" fill="#0f172a">{value:,}{esc(suffix)}</text>'])
     parts.append('</svg>')
+    parts.append('<div class="mobile-bars">')
+    for label, value in ordered:
+        readable = labeler(label) if labeler else label
+        suffix = f' ({value / denominator:.1%})' if denominator else ''
+        parts.append(f'<div class="bar-item"><div class="bar-caption"><span>{esc(readable)}</span><strong>{value:,}{esc(suffix)}</strong></div>'
+                     f'<div class="bar-track"><span style="width:{value / maximum * 100:.3f}%"></span></div></div>')
+    parts.append('</div>')
     if omitted:
         parts.append(f'<p class="muted">Top {limit} categories shown; {omitted} additional categories are included in the tables or summary JSON.</p>')
     return ''.join(parts)
 
 
+def stacked_chart(title, series, legend, limit=12):
+    shown = series[:limit]
+    if not shown:
+        return '<p class="empty">No recorded observations.</p>'
+    fragments = ['<div class="legend">' + ''.join(f'<span><i style="background:{color}"></i>{esc(label)}</span>' for label, color in legend) + '</div>']
+    svg = [f'<svg class="export-chart" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 {80 + len(shown) * 62}" font-family="sans-serif" role="img"><title>{esc(title)}</title>']
+    legend_x = 0
+    for label, color in legend:
+        svg.append(f'<rect x="{legend_x}" y="4" width="12" height="12" fill="{color}"/><text x="{legend_x + 18}" y="15" font-size="12">{esc(label)}</text>')
+        legend_x += 40 + 7 * len(label)
+    for index, (label, values) in enumerate(shown):
+        total = sum(values)
+        labels = ', '.join(f'{legend[i][0]}: {count:,}' for i, count in enumerate(values))
+        fragments.append(f'<div class="stack-row"><div class="bar-caption"><strong>{esc(label)}</strong><span>{esc(labels)}</span></div><div class="stack-track" role="img" aria-label="{esc(label + "; " + labels)}">')
+        x, y = 0, 60 + index * 62
+        svg.append(f'<text x="0" y="{y - 10}" font-size="13">{esc(label)} — {esc(labels)}</text>')
+        for i, count in enumerate(values):
+            width = count / total * 100 if total else 0
+            if count:
+                fragments.append(f'<span style="width:{width:.3f}%;background:{legend[i][1]}"><span class="sr-only">{esc(legend[i][0])}: {count:,}</span></span>')
+                svg.append(f'<rect x="{x:.2f}" y="{y}" width="{width * 9:.2f}" height="20" fill="{legend[i][1]}"><title>{esc(legend[i][0])}: {count:,}</title></rect>')
+            x += width * 9
+        fragments.append('</div></div>')
+    svg.append('</svg>')
+    fragments.extend(svg)
+    if len(series) > len(shown):
+        fragments.append(f'<p class="muted">Showing {len(shown)} of {len(series):,} rows. Complete values remain in the table and summary JSON.</p>')
+    return ''.join(fragments)
+
+
 def coverage_chart(matrices):
-    full = [m for m in matrices if m.get("padding") is not None]
-    if not full:
+    full = [m for m in matrices if m['kind'] == 'full' and m.get('status') == 'evaluated']
+    if not any(m.get('padding') is not None for m in full):
         return '<p class="empty">Unavailable: matching gene partitions and artificial missing-block tables are required.</p>'
-    lookup = {m["group"]: {r["taxon"]: r for r in m["padding"]["coverage"]} for m in full}
-    taxa = sorted({t for group in lookup.values() for t in group})
+    lookup = {m['group']: {r['taxon']: r for r in m['padding']['coverage']} if m.get('padding') is not None else {} for m in full}
+    taxa = sorted({t for m in full for t in m['taxa']})
     shown = taxa[:50]
-    width, height = 300 + len(full) * 140, 100 + 28 * len(shown)
-    svg = [f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {height}" font-family="sans-serif" role="img" aria-label="Taxon locus occupancy"><title>Taxon locus occupancy</title>']
+    width, height = 230 + len(full) * 150, 110 + 30 * len(shown)
+    svg = [f'<svg xmlns="http://www.w3.org/2000/svg" style="width:{width}px;max-width:none" viewBox="0 0 {width} {height}" font-family="sans-serif" role="img" aria-label="Taxon locus occupancy"><title>Taxon locus occupancy</title>']
     for i, matrix in enumerate(full):
-        svg.append(f'<text x="{310 + i * 140}" y="18" font-size="11" fill="#334155">{esc(matrix["group"][:23])}<title>{esc(matrix["group"])}</title></text>')
+        lines = group_label(matrix['group']).split(' · ')
+        for line, label in enumerate(lines):
+            svg.append(f'<text x="{240 + i * 150}" y="{16 + 15 * line}" font-size="11" fill="#334155">{esc(label)}</text>')
     for j, taxon in enumerate(shown):
-        y = 45 + 28 * j
-        svg.append(f'<text x="0" y="{y + 16}" font-size="12" fill="#334155">{esc(taxon[:43])}</text>')
+        y = 82 + 30 * j
+        svg.append(f'<text x="0" y="{y + 16}" font-size="12" fill="#334155">{esc(taxon[:30])}<title>{esc(taxon)}</title></text>')
         for i, matrix in enumerate(full):
             row = lookup[matrix["group"]].get(taxon)
             ratio = row["observed_loci"] / row["total_loci"] if row and row["total_loci"] else None
             color = f'hsl(182 60% {94 - 60 * ratio:.1f}%)' if ratio is not None else '#e2e8f0'
-            text = f'{ratio:.0%}' if ratio is not None else 'N/A'
-            description = f'{taxon}; {matrix["group"]}; {row["observed_loci"]}/{row["total_loci"]} loci' if row else f'{taxon}: not present in this matrix'
-            svg.append(f'<rect x="{300 + i * 140}" y="{y}" width="130" height="23" rx="3" fill="{color}"><title>{esc(description)}</title></rect>')
-            svg.append(f'<text x="{348 + i * 140}" y="{y + 16}" font-size="11" fill="{"white" if ratio is not None and ratio > .7 else "#0f172a"}">{text}</text>')
+            text = f'{ratio:.0%}' if ratio is not None else 'N/R' if taxon in matrix['taxa'] else 'Absent'
+            description = f'{taxon}; {matrix["group"]}; {row["observed_loci"]}/{row["total_loci"]} loci' if row else f'{taxon}: occupancy not recorded' if taxon in matrix['taxa'] else f'{taxon}: not present in this matrix'
+            svg.append(f'<rect x="{230 + i * 150}" y="{y}" width="140" height="24" rx="3" fill="{color}"><title>{esc(description)}</title></rect>')
+            svg.append(f'<text x="{280 + i * 150}" y="{y + 16}" font-size="11" fill="{"white" if ratio is not None and ratio > .7 else "#0f172a"}">{text}</text>')
     svg.append('</svg>')
     if len(taxa) > len(shown):
         svg.append(f'<p class="muted">First {len(shown)} of {len(taxa):,} taxa shown. All values are available in the summary JSON.</p>')
@@ -653,112 +784,168 @@ def matrix_details(matrix, matrices):
 
 
 STYLE = """
-:root{color-scheme:light;font-family:system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#172b3a;background:#f3f6f8}
-*{box-sizing:border-box}body{margin:0}main{max-width:1420px;margin:auto;padding:40px 36px}header{border-top:5px solid #197c80;padding:26px 0 18px}
-h1{font-size:38px;letter-spacing:-1px;margin:5px 0}h2{font-size:24px;margin:0 0 15px}h3{font-size:17px;margin:22px 0 8px}
-p{line-height:1.65}a{color:#12676b}nav{display:flex;flex-wrap:wrap;gap:18px;margin:18px 0}.eyebrow{color:#197c80;font-weight:700;letter-spacing:2px;font-size:12px}
-.muted,.empty{color:#566a79;font-size:14px}.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:14px;margin:24px 0}.card,section{background:white;border:1px solid #dde5ea;border-radius:10px;padding:24px;margin-bottom:22px}
-.cards .card{margin:0;padding:20px}.metric{font-size:29px;font-weight:700;margin-top:8px}.label{font-size:13px;color:#566a79}.note{border-left:4px solid #197c80;background:#eef8f7;padding:12px 18px;font-size:14px}.warning{border-left-color:#bd7125;background:#fff7ed}
-.table-scroll{overflow:auto;max-height:530px}table{border-collapse:collapse;width:100%;font-size:13px;font-variant-numeric:tabular-nums}th,td{text-align:left;border-bottom:1px solid #e6edf0;padding:11px 13px;vertical-align:top}th{position:sticky;top:0;background:#f1f6f7;white-space:nowrap}td:first-child{max-width:350px;overflow-wrap:anywhere}
-.chart{overflow:auto;margin:16px 0}.chart svg{display:block;min-width:720px;max-width:100%;height:auto}button{border:1px solid #bbced0;background:#fff;color:#12676b;border-radius:6px;padding:8px 12px;cursor:pointer;font:inherit;font-size:12px;margin:8px 8px 8px 0}button:hover{background:#eef8f7}
-details{margin:12px 0}summary{cursor:pointer;font-weight:600}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f3f6f8;padding:16px;border-radius:6px;font-size:12px}.section-number{color:#197c80;font-size:12px;letter-spacing:1px}footer{font-size:12px;color:#566a79;padding:10px 0 25px}
-.matrix-meta{display:block;color:#566a79;font-size:12px;margin-top:7px;line-height:1.6}.matrix-catalog{max-height:none;margin:18px 0}.matrix-catalog th[scope=row]{position:static;white-space:normal;background:white}.matrix-detail{scroll-margin-top:18px;padding:12px;border:1px solid #dde5ea;border-radius:7px}.matrix-detail:target{border-color:#197c80;background:#f5fbfa}.matrix-detail code{overflow-wrap:anywhere;font-size:12px}.matrix-link{font-weight:600}.matrix-link:focus-visible,summary:focus-visible{outline:2px solid #197c80;outline-offset:4px}
-@media(max-width:700px){main{padding:15px}h1{font-size:29px}section{padding:18px}.metric{font-size:24px}}
-@media(max-width:700px){.matrix-catalog{overflow:visible}.matrix-catalog table,.matrix-catalog tbody{display:block}.matrix-catalog thead{display:none}.matrix-catalog tbody tr{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));border:1px solid #dde5ea;border-radius:7px;margin-bottom:14px;padding:4px}.matrix-catalog .catalog-mode,.matrix-catalog .catalog-selection,.matrix-catalog th[scope=row]{grid-column:1/-1;border:0;padding-bottom:4px}.matrix-catalog .catalog-selection{font-weight:600;color:#566a79}.matrix-catalog th[scope=row]{padding-top:2px;padding-bottom:8px}.matrix-catalog td[data-label]{border:0;padding:10px}.matrix-catalog td[data-label]::before{content:attr(data-label);display:block;font-size:12px;color:#566a79;font-weight:600;margin-bottom:8px}.matrix-catalog .matrix-meta{overflow-wrap:anywhere}}
-@media print{body{background:white}main{padding:0;max-width:none}nav,button{display:none}section{break-inside:avoid;border:0;padding:12px 0}.table-scroll{max-height:none;overflow:visible}th{position:static}.chart svg{min-width:0}}
+:root{color-scheme:light;font-family:system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#172b3a;background:#f3f6f8;font-size:15px}
+*{box-sizing:border-box}body{margin:0}main{max-width:1340px;margin:auto;padding:36px 30px}header{border-top:5px solid #197c80;padding:25px 0 18px}h1{font-size:36px;letter-spacing:-.8px;margin:8px 0 10px}h2{font-size:24px;margin:0 0 14px}h3{font-size:18px;margin:24px 0 10px}p{line-height:1.7;max-width:100ch}.lede{font-size:18px;color:#445c69;margin:8px 0 14px}a{color:#12676b}nav{display:flex;flex-wrap:wrap;gap:10px 20px;margin:23px 0 16px;font-size:14px}.eyebrow{color:#197c80;font-weight:700;letter-spacing:1.8px;font-size:12px}.muted,.empty{color:#526875;font-size:13px}.empty{padding:10px 0}.cards{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:15px;margin:20px 0}.card,section{background:white;border:1px solid #dce5e9;border-radius:11px;padding:26px;margin-bottom:23px}.cards .card{margin:0;padding:19px 23px}.metric{font-size:31px;font-weight:700;margin-top:5px}.label{font-size:13px;color:#526875}.note{border-left:4px solid #197c80;background:#eef8f7;padding:13px 18px;font-size:14px;line-height:1.7;margin:18px 0}.warning{border-left-color:#b76620;background:#fff7ed}.note ul{margin:5px 0;padding-left:20px}.section-number{color:#197c80;font-size:11px;letter-spacing:1.4px;margin-bottom:7px}details{margin:13px 0}summary{cursor:pointer;font-weight:600;line-height:1.6}details[open]>summary{margin-bottom:14px}details.explanation{font-size:14px}.qc-panel{padding:18px;background:#fafcfc;border:1px solid #dce5e9;border-radius:8px}.chart-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:28px}.chart-grid h3{margin-top:6px}.chart-grid .desktop-chart{display:none}.chart-grid .mobile-bars{display:block}
+.table-scroll{overflow:auto;max-height:550px;margin:12px 0 20px}table{border-collapse:collapse;width:100%;font-size:13px;line-height:1.5;font-variant-numeric:tabular-nums}th,td{text-align:left;border-bottom:1px solid #e5ecef;padding:11px 12px;vertical-align:top}th{position:sticky;top:0;background:#f1f6f7;white-space:nowrap}tbody tr:nth-child(even){background:#fbfcfd}td:first-child{max-width:330px;min-width:160px;overflow-wrap:anywhere}tr[hidden]{display:none!important}.table-tools,.filter-bar{display:flex;flex-wrap:wrap;gap:12px;align-items:end;margin:15px 0 8px}.control{display:flex;flex-direction:column;gap:6px;font-size:12px;font-weight:600;color:#445c69}.control input,.control select{font:inherit;font-size:13px;font-weight:400;color:#172b3a;background:white;border:1px solid #b7cbd0;border-radius:6px;padding:8px 10px;min-height:36px;max-width:100%}.table-tools .control:first-child{flex:1;min-width:150px}.table-tools .row-count{font-size:12px;color:#526875;padding-bottom:10px}.filter-bar{background:#f4f8f9;padding:15px;border-radius:8px}.filter-bar .control{flex:1;min-width:130px}.table-tools button{margin:0 0 1px}.header-sort{font:inherit;font-weight:600;text-align:left;border:0;background:transparent;padding:0;margin:0;color:#172b3a;cursor:pointer}.header-sort:hover{background:transparent;text-decoration:underline}th[aria-sort=ascending] .header-sort::after{content:' ↑'}th[aria-sort=descending] .header-sort::after{content:' ↓'}
+.chart{overflow:auto;margin:16px 0}.chart svg{display:block;width:100%;max-width:100%;height:auto}.chart .export-chart{display:none}.mobile-bars{display:none}.bar-item{margin:15px 0 20px}.bar-caption{display:flex;justify-content:space-between;gap:14px;align-items:baseline;font-size:13px;line-height:1.6;margin-bottom:7px}.bar-caption strong:last-child{white-space:nowrap}.bar-caption>span:first-child{overflow-wrap:anywhere}.bar-track{height:13px;background:#e9f0f2;border-radius:4px;overflow:hidden}.bar-track>span{display:block;height:100%;background:#197c80;border-radius:4px}.stack-row{margin:18px 0 22px}.stack-row .bar-caption{flex-wrap:wrap;gap:3px 15px}.stack-row .bar-caption>span{color:#526875;font-size:12px}.stack-track{height:22px;background:#e9f0f2;border-radius:5px;display:flex;overflow:hidden}.stack-track>span{display:block;height:100%}.legend{display:flex;flex-wrap:wrap;gap:10px 20px;font-size:12px;color:#445c69;line-height:1.6;margin:12px 0}.legend>span{display:flex;align-items:center;gap:7px}.legend i{display:inline-block;width:13px;height:13px;border:1px solid #c6d3d8;border-radius:3px}.heatmap{max-height:620px}.chart.heatmap svg{max-width:none}.trim-card{border:1px solid #dce5e9;border-radius:8px;padding:17px 20px;margin:15px 0}.trim-card p{margin:7px 0 12px;font-size:13px}.trim-bar{display:grid;grid-template-columns:58px minmax(0,1fr) 120px;align-items:center;gap:10px;font-size:12px;margin:10px 0}.trim-bar strong{text-align:right}.trim-bar .bar-track{height:16px}
+button{border:1px solid #b7cbd0;background:white;color:#12676b;border-radius:6px;padding:8px 12px;cursor:pointer;font:inherit;font-size:12px;margin:8px 8px 8px 0}button:hover{background:#eef8f7}button:focus-visible,a:focus-visible,summary:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid #197c80;outline-offset:3px}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f3f6f8;padding:16px;border-radius:6px;font-size:12px}.matrix-meta{display:block;color:#526875;font-size:12px;margin-top:7px;line-height:1.6}.matrix-catalog{max-height:none;margin:18px 0}.matrix-catalog th[scope=row]{position:static;white-space:normal;background:white}.matrix-detail{scroll-margin-top:18px;padding:14px;border:1px solid #dce5e9;border-radius:7px}.matrix-detail:target{border-color:#197c80;background:#f5fbfa}.matrix-detail code{overflow-wrap:anywhere;font-size:12px}.matrix-link{font-weight:600}footer{font-size:12px;color:#526875;padding:10px 0 25px;line-height:1.7}.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+@media(max-width:850px){.chart-grid{grid-template-columns:1fr;gap:15px}}
+@media(max-width:700px){main{padding:14px}h1{font-size:29px}h2{font-size:22px}section{padding:19px}.cards .card{padding:16px}.metric{font-size:25px;overflow-wrap:anywhere}.chart .desktop-chart{display:none}.mobile-bars{display:block}.control{width:100%}.table-tools .control:first-child{width:100%}.table-tools .row-count{padding-bottom:0}.table-scroll.data-table{overflow:visible;max-height:none}.data-table table,.data-table tbody{display:block}.data-table thead{display:none}.data-table tbody tr{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));border:1px solid #dce5e9;border-radius:7px;margin:12px 0;padding:7px;background:white}.data-table td{border:0;min-width:0;padding:9px;font-size:13px;overflow-wrap:anywhere}.data-table td:first-child{grid-column:1/-1;max-width:none;font-weight:600;background:#f4f8f9;border-radius:4px}.data-table td::before{content:attr(data-label);display:block;font-size:11px;color:#526875;font-weight:500;margin-bottom:5px}.matrix-catalog{overflow:visible}.matrix-catalog table,.matrix-catalog tbody{display:block}.matrix-catalog thead{display:none}.matrix-catalog tbody tr{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));border:1px solid #dce5e9;border-radius:7px;margin-bottom:14px;padding:4px;background:white}.matrix-catalog .catalog-mode,.matrix-catalog .catalog-selection,.matrix-catalog th[scope=row]{grid-column:1/-1;border:0;padding-bottom:4px}.matrix-catalog .catalog-selection{font-weight:600;color:#526875}.matrix-catalog th[scope=row]{padding-top:2px;padding-bottom:8px}.matrix-catalog td[data-label]{border:0;padding:10px;min-width:0}.matrix-catalog td[data-label]::before{content:attr(data-label);display:block;font-size:12px;color:#526875;font-weight:600;margin-bottom:8px}.matrix-catalog .matrix-meta{overflow-wrap:anywhere}.trim-card{padding:14px}.trim-bar{grid-template-columns:50px minmax(0,1fr) 95px;font-size:11px;gap:7px}}
+@media print{body{background:white;print-color-adjust:exact;-webkit-print-color-adjust:exact}main{padding:0;max-width:none}nav,button:not(.header-sort),.table-tools,.filter-bar,#qc-branch{display:none!important}section{border:0;padding:16px 0;margin-bottom:18px}h2,h3,summary{break-after:avoid}.table-scroll{max-height:none;overflow:visible}th{position:static;white-space:normal}table{font-size:11px}th,td{padding:6px}td:first-child{min-width:0;max-width:none}.qc-panel[hidden]{display:block!important}.heatmap{max-height:none;overflow:visible}.heatmap svg{max-width:100%!important;width:100%!important}.trim-card,.stack-row{break-inside:avoid}.chart .export-chart{display:none}}
+"""
+
+REPORT_SCRIPT = r"""
+function saveBlob(blob,name){const a=document.createElement('a');const u=URL.createObjectURL(blob);a.href=u;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(u),60000);}
+const report=JSON.parse(document.getElementById('report-data').textContent);
+function csvCell(value){let text=String(value??'');if(/^[=+@]/.test(text)||(/^\-/.test(text)&&!/^\-\d[\d,.]*(%| nt| aa)?$/.test(text)))text="'"+text;return '"'+text.replaceAll('"','""')+'"';}
+function downloadCsv(rows,name){saveBlob(new Blob(['\uFEFF'+rows.map(row=>row.map(csvCell).join(',')).join('\r\n')],{type:'text/csv;charset=utf-8'}),name);}
+document.getElementById('download-summary').addEventListener('click',()=>saveBlob(new Blob([document.getElementById('report-data').textContent],{type:'application/json'}),'phyloprep-report-summary.json'));
+document.querySelectorAll('time[datetime]').forEach(el=>{const date=new Date(el.dateTime);if(!Number.isNaN(date.getTime()))el.textContent=new Intl.DateTimeFormat('en-GB',{year:'numeric',month:'short',day:'2-digit',hour:'2-digit',minute:'2-digit',timeZoneName:'short'}).format(date);});
+function openDetails(id){const target=document.getElementById(id);if(!target||target.tagName!=='DETAILS')return;let parent=target;while(parent){parent.open=true;parent=parent.parentElement?.closest('details');}target.hidden=false;if(target.classList.contains('qc-panel')){document.getElementById('qc-branch').value=id;showQc();}target.querySelector('summary').focus({preventScroll:true});target.scrollIntoView({block:'start'});}
+document.querySelectorAll('a.matrix-link').forEach(a=>a.addEventListener('click',()=>openDetails(a.hash.slice(1))));window.addEventListener('hashchange',()=>openDetails(location.hash.slice(1)));
+const qcSelect=document.getElementById('qc-branch');function showQc(){if(!qcSelect)return;document.querySelectorAll('.qc-panel').forEach(panel=>{panel.hidden=panel.id!==qcSelect.value;if(!panel.hidden)panel.open=true;});}qcSelect?.addEventListener('change',showQc);showQc();if(location.hash)openDetails(location.hash.slice(1));
+const matrices=new Map(report.matrices.map(m=>[m.matrix,m]));const filters=document.getElementById('matrix-filters');const tableStates=[];
+function matrixMatches(key){if(!key)return true;const m=matrices.get(key);if(!m)return false;const values=Object.fromEntries(Array.from(filters.querySelectorAll('select'),el=>[el.dataset.field,el.value]));const parts=m.group.split('/');return(values.kind==='all'||(values.kind==='full'?m.kind==='full':m.kind!=='full'))&&(values.selection==='all'||values.selection===(parts.includes('paired')?'paired':'independent'))&&(values.representation==='all'||parts.includes(values.representation))&&(values.variant==='all'||parts.at(-1)===values.variant);}
+function applyRows(state){const query=state.search.value.trim().toLowerCase();let visible=0;for(const row of state.rows){row.hidden=!matrixMatches(row.dataset.matrixKey)||!row.textContent.toLowerCase().includes(query);if(!row.hidden)visible++;}state.count.textContent=visible+' of '+state.rows.length+' rows';}
+function sortValue(value){const text=value.trim();if(/^-?\d[\d,]*(\.\d+)?(%| nt| aa)?$/.test(text))return Number.parseFloat(text.replaceAll(',',''));return text.toLowerCase();}
+function sortRows(state,index,direction){const ascending=direction==='asc';const positions=new Map(state.rows.map((row,i)=>[row,i]));const ordered=[...state.rows].sort((a,b)=>{if(index<0)return positions.get(a)-positions.get(b);const av=sortValue(a.cells[index].textContent),bv=sortValue(b.cells[index].textContent);const unknown=v=>typeof v==='string'&&/^(unavailable|not applicable|not recorded)/.test(v);if(unknown(av)!==unknown(bv))return unknown(av)?1:-1;const comparison=typeof av==='number'&&typeof bv==='number'?av-bv:String(av).localeCompare(String(bv),undefined,{numeric:true});return comparison*(ascending?1:-1);});ordered.forEach(row=>state.body.appendChild(row));state.headers.forEach((h,i)=>h.setAttribute('aria-sort',i===index?(ascending?'ascending':'descending'):'none'));state.sort.value=index<0?'original':index+':'+direction;}
+document.querySelectorAll('.data-table').forEach((container,index)=>{const table=container.querySelector('table'),body=table.tBodies[0],rows=Array.from(body.rows),headers=Array.from(table.tHead.rows[0].cells),title=container.dataset.title;const tools=document.createElement('div');tools.className='table-tools';const searchLabel=document.createElement('label');searchLabel.className='control';searchLabel.textContent='Search table';const search=document.createElement('input');search.type='search';search.placeholder='Search rows…';search.setAttribute('aria-label','Search '+title);searchLabel.appendChild(search);const sortLabel=document.createElement('label');sortLabel.className='control';sortLabel.textContent='Sort rows';const sort=document.createElement('select');sort.setAttribute('aria-label','Sort '+title);sort.add(new Option('Original order','original'));headers.forEach((header,i)=>{for(const direction of ['asc','desc'])sort.add(new Option(header.textContent+' '+(direction==='asc'?'↑':'↓'),i+':'+direction));});sortLabel.appendChild(sort);const button=document.createElement('button');button.textContent='Download visible CSV';const count=document.createElement('span');count.className='row-count';count.setAttribute('role','status');tools.append(searchLabel,sortLabel,button,count);container.before(tools);const state={container,body,rows,headers,search,sort,count};tableStates.push(state);search.addEventListener('input',()=>applyRows(state));sort.addEventListener('change',()=>{if(sort.value==='original')sortRows(state,-1,'asc');else{const [column,direction]=sort.value.split(':');sortRows(state,Number(column),direction);}});headers.forEach((header,i)=>{const label=header.textContent;const control=document.createElement('button');control.className='header-sort';control.textContent=label;control.addEventListener('click',()=>sortRows(state,i,header.getAttribute('aria-sort')==='ascending'?'desc':'asc'));header.textContent='';header.appendChild(control);});button.addEventListener('click',()=>{const visible=Array.from(body.rows).filter(row=>!row.hidden);const withPaths=visible.some(row=>row.dataset.matrixKey);const exportRows=[headers.map(h=>h.textContent).concat(withPaths?['FASTA path']:[]),...visible.map(row=>Array.from(row.cells,c=>c.textContent).concat(withPaths?['matrices/'+(row.dataset.matrixKey||'')]:[]))];downloadCsv(exportRows,'phyloprep-'+(title||String(index)).toLowerCase().replace(/[^a-z0-9]+/g,'-').slice(0,90)+'.csv');});applyRows(state);});
+const scope=document.createElement('p');scope.id='matrix-scope';scope.className='muted';scope.setAttribute('role','status');filters.after(scope);function refreshMatrixFilters(){tableStates.forEach(applyRows);scope.textContent='Showing: '+Array.from(filters.querySelectorAll('select'),el=>el.selectedOptions[0].textContent).join(' · ')+'.';}filters.addEventListener('change',refreshMatrixFilters);refreshMatrixFilters();
+document.querySelectorAll('.chart svg').forEach((svg,i)=>{const b=document.createElement('button');b.textContent='Save chart as SVG';b.addEventListener('click',()=>{const copy=svg.cloneNode(true);copy.removeAttribute('class');copy.removeAttribute('style');saveBlob(new Blob([new XMLSerializer().serializeToString(copy)],{type:'image/svg+xml'}),'phyloprep-chart-'+(i+1)+'.svg');});svg.parentElement.appendChild(b);});
+document.getElementById('download-coverage').addEventListener('click',()=>{const rows=[['Matrix','Taxon','Observed loci','Included loci','Occupancy (%)','Status']];for(const m of report.matrices.filter(m=>m.kind==='full'&&m.status==='evaluated')){const coverage=new Map((m.padding?.coverage||[]).map(row=>[row.taxon,row]));for(const taxon of m.taxa){const row=coverage.get(taxon);rows.push([m.group,taxon,row?.observed_loci??'',row?.total_loci??'',row&&row.total_loci?(100*row.observed_loci/row.total_loci).toFixed(2):'',row?'Recorded':'Not recorded']);}}downloadCsv(rows,'phyloprep-taxon-occupancy.csv');});
+let printState=[];window.addEventListener('beforeprint',()=>{printState=Array.from(document.querySelectorAll('details'),element=>({element,open:element.open,hidden:element.hidden}));printState.forEach(({element})=>{element.open=true;element.hidden=false;});});window.addEventListener('afterprint',()=>{printState.forEach(({element,open,hidden})=>{element.open=open;element.hidden=hidden;});printState=[];});
 """
 
 
 def render_html(report):
-    overview = report["overview"]
-    matrices = report["matrices"]
-    full = [m for m in matrices if m["kind"] == "full"]
-    evaluated = [m for m in matrices if m.get("status") == "evaluated"]
+    overview = report['overview']
+    matrices = report['matrices']
+    full = [m for m in matrices if m['kind'] == 'full']
+    evaluated = [m for m in matrices if m.get('status') == 'evaluated']
+    generated = report['generated_at']
     fragments = ['<!doctype html><html lang="en"><head><meta charset="utf-8">',
                  '<meta name="viewport" content="width=device-width,initial-scale=1">',
-                 '<title>PhyloPrep analysis report</title><style>' + STYLE + '</style></head><body><main>',
-                 '<header><div class="eyebrow">PHYLOPREP · ANALYSIS REPORT</div><h1>From loci to analysis-ready matrices</h1>',
-                 f'<p class="muted">Run: {esc(report["run_name"])} · Generated {esc(report["generated_at"])} · Report v{__version__}</p>',
-                 '<nav><a href="#overview">Overview</a><a href="#qc">Quality control</a><a href="#matrices">Matrices</a><a href="#events">Sequence changes</a><a href="#coverage">Taxon coverage</a><a href="#methods">Methods &amp; provenance</a></nav>',
-                 '<button id="download-summary">Download summary JSON</button><button onclick="window.print()">Print / save PDF</button></header>',
-                 '<div class="cards">']
-    for label, value in (("Input loci", overview["input_loci"]), ("Aligned loci", overview["aligned_loci"])):
+                 '<title>PhyloPrep Analysis Report</title><style>' + STYLE + '</style></head><body><main>',
+                 '<header><div class="eyebrow">PHYLOPREP · RESULTS &amp; PROVENANCE</div><h1>PhyloPrep Analysis Report</h1>',
+                 '<p class="lede">Review locus retention, matrix composition and sequence changes.</p>',
+                 f'<p class="muted">Run: <strong>{esc(report["run_name"])}</strong><br>Generated <time datetime="{esc(generated)}">{esc(readable_time(generated))}</time> · Report v{__version__}</p>',
+                 '<nav aria-label="Report sections"><a href="#matrix-catalog">Matrix catalog</a><a href="#overview">Processing</a><a href="#qc">QC</a><a href="#matrices">Statistics &amp; trimming</a><a href="#events">Sequence changes</a><a href="#coverage">Coverage</a><a href="#methods">Definitions &amp; provenance</a></nav>',
+                 '<button id="download-summary">Download summary JSON</button><button onclick="window.print()">Print / save PDF</button></header>']
+    if report['warnings']:
+        fragments.append('<aside class="note warning"><strong>Data notes</strong><ul>' + ''.join(f'<li>{esc(w)}</li>' for w in report['warnings'][:3]) + '</ul>'
+                         + ('<a href="#availability">View all data notes</a>' if len(report['warnings']) > 3 else '') + '</aside>')
+    fragments.append('<div class="cards">')
+    for label, value in (('Input loci', overview['input_loci']), ('Aligned loci', overview['aligned_loci'])):
         fragments.append(f'<div class="card"><div class="label">{label}</div><div class="metric">{esc(display(value))}</div></div>')
-    fragments.append('</div><section id="matrix-catalog"><h2>Which matrices were produced?</h2>')
-    fragments.append('<p>Find each matrix by selection, sequence type and trimming status. Select an entry to open its locus count, taxon count, length and file path. Codon-position and fourfold datasets are listed under their parent codon matrix.</p>')
+    fragments.append('</div><section id="matrix-catalog"><h2>Which matrices were produced?</h2><p>Select a matrix to open its locus count, taxon count, length and file path. Codon-position and fourfold datasets are listed with their parent codon matrix.</p>')
     fragments.append(matrix_catalog(matrices))
-    fragments.append('<p class="muted">Codon matrices contain all codon positions of the retained loci; this does not mean every input locus passed QC. Independent QC selects codon and protein loci separately. Paired QC uses the same retained locus set for both representations. Different selection routes may produce identical contents. FASTA, PHYLIP and NEXUS are formats of the same dataset.</p></section>')
-    fragments.append('<section id="overview"><div class="section-number">01 / PROCESSING</div><h2>Locus processing and retention</h2>')
-    fragments.append('<p>Each QC branch and each matrix has its own locus set. Counts across raw/trimmed, codon/protein, and independent/paired outputs must not be added to estimate unique input loci.</p>')
-    fragments.append(table(["Measure", "Value"], [("Input loci", overview["input_loci"]), ("Successfully aligned loci", overview["aligned_loci"]),
-                                                  ("Recorded alignment failures", overview["failed_alignments"]), ("Reused aligned loci", overview["reused_loci"]),
-                                                  ("Alignment count source", overview["alignment_count_source"])]))
-    fragments.append('<p class="muted">Input minus aligned is not interpreted as failures: skipped, incomplete, unrecorded, and failed tasks cannot always be distinguished.</p>')
-    fragments.append('<div class="chart">' + bar_chart("Actual concatenation inclusion by matrix", {m["group"]: m["loci"] for m in full if m.get("loci") is not None}) + '</div>')
-    fragments.append('</section><section id="qc"><div class="section-number">02 / QUALITY CONTROL</div><h2>QC outcomes and overlapping exclusion reasons</h2>')
-    fragments.append('<p class="note">A locus can violate several QC conditions. Unique failed loci are counted once per branch, while reason hits overlap. Their sum may exceed the failed-locus total, and reason percentages may sum to more than 100%. No arbitrary primary reason is assigned.</p><p class="muted">Paired reason labels summarize codon/protein QC outcomes and paired PIS decisions. Individual QC conditions are shown in the corresponding representation branches.</p>')
-    fragments.append(table(["Branch", "Selection", "Passed", "Unique failed", "Not evaluated"],
-                           [(q["branch"], q["selection"], q["passed"], q["failed"], q["not_evaluated"]) for q in report["qc"]]))
-    if not report["qc"]:
+    fragments.append('<details class="explanation"><summary>How to read this catalog</summary><p><strong>Independent QC</strong> selects codon and protein loci separately. <strong>Paired QC</strong> retains the same locus set for both. The resulting matrices can be identical when their retained sets match.</p><p><strong>Codon (all positions)</strong> includes all three positions of the retained codons; it does not mean all input loci passed QC. FASTA, PHYLIP and NEXUS are formats of the same dataset.</p></details></section>')
+    fragments.append('<section id="overview"><div class="section-number">01 / PROCESSING</div><h2>From input loci to retained datasets</h2><p>QC and concatenation make separate decisions for each branch. Counts across representations or branches must not be added to estimate unique input loci.</p>')
+    overview_rows = [('Input loci', overview['input_loci']), ('Successfully aligned loci', overview['aligned_loci'])]
+    unavailable = []
+    for key, label in (('failed_alignments', 'Recorded alignment failures'), ('reused_loci', 'Reused aligned loci')):
+        if overview[key] is None:
+            unavailable.append((label, 'Not recorded in the available run records'))
+        else:
+            overview_rows.append((label, overview[key]))
+    fragments.append(table(['Processing measure', 'Loci'], overview_rows, 'Locus processing'))
+    fragments.append('<p class="muted">QC pass counts and actual concatenation inclusion are shown separately below. Input minus aligned is not assumed to equal failed alignments.</p></section>')
+    fragments.append('<section id="qc"><div class="section-number">02 / QUALITY CONTROL</div><h2>Which loci passed QC?</h2>')
+    legend = [('Passed', '#197c80'), ('Failed', '#b76620'), ('Not evaluated', '#b5c2cc')]
+    qcs = report['qc']
+    def qc_label(q):
+        label = group_label(q['branch'])
+        return label.replace('Independent QC', 'Recorded QC') if q['selection'] == 'Recorded QC' else label
+    fragments.append('<div class="chart">' + stacked_chart('QC outcomes by branch', [(qc_label(q), [q['passed'], q['failed'], q['not_evaluated']]) for q in qcs], legend, limit=30) + '</div>')
+    fragments.append('<details><summary>Exact QC counts</summary>' + table(['QC branch', 'Passed', 'Unique failed loci', 'Not evaluated'], [(qc_label(q), q['passed'], q['failed'], q['not_evaluated']) for q in qcs], 'QC outcomes') + '</details>')
+    fragments.append('<p class="note"><strong>One failed locus can have several reasons.</strong> Reason hits overlap, so their sum can exceed the number of failed loci and their percentages can exceed 100%. Complete failure combinations count each failed locus once. No primary reason is assigned.</p>')
+    if qcs:
+        fragments.append('<label class="control">Inspect a QC branch<select id="qc-branch">' + ''.join(f'<option value="qc-panel-{i}">{esc(qc_label(q))}</option>' for i, q in enumerate(qcs)) + '</select></label>')
+    else:
         fragments.append('<p class="empty">QC records are unavailable.</p>')
-    for q in report["qc"]:
-        fragments.append(f'<details><summary>{esc(q["branch"])} — {q["failed"]:,} unique failed loci</summary>')
-        fragments.append('<h3>Overlapping reason hits</h3><p class="muted">Denominator: unique failed loci in this branch.</p><div class="chart">' + bar_chart("Overlapping QC reason hits", q["reason_hits"], q["failed"]) + '</div>')
-        fragments.append(table(["Reason", "Loci with reason", "% of unique failed loci"], [(k, v, pct(v / q["failed"]) if q["failed"] else "Not applicable") for k, v in sorted(q["reason_hits"].items())]))
-        combinations = Counter(q["failure_combinations"])
-        top = dict(combinations.most_common(10))
-        rest = sum(combinations.values()) - sum(top.values())
-        if rest:
-            top["Other complete reason combinations"] = rest
-        fragments.append('<h3>Mutually exclusive failure combinations</h3><p class="muted">Each failed locus belongs to exactly one complete combination. Counts sum to the unique failed-locus total.</p><div class="chart">' + bar_chart("Complete QC failure combinations", top, q["failed"]) + '</div>')
-        fragments.append(table(["Complete combination", "Unique loci"], sorted(combinations.items())))
+    for index, q in enumerate(qcs):
+        fragments.append(f'<details class="qc-panel" id="qc-panel-{index}"' + (' open' if index == 0 else '') + f'><summary>{esc(qc_label(q))} — {q["failed"]:,} unique failed loci</summary>')
+        if not q['failed']:
+            fragments.append('<p class="note">No failures were recorded in this branch.</p>')
+        else:
+            combinations = Counter(q['failure_combinations'])
+            top = dict(combinations.most_common(10))
+            rest = sum(combinations.values()) - sum(top.values())
+            if rest:
+                top['Other complete reason combinations'] = rest
+            fragments.append('<div class="chart-grid"><div><h3>Overlapping reason hits</h3><p class="muted">A locus may appear in several bars. Percentages use unique failed loci as the denominator.</p><div class="chart">' + bar_chart('Overlapping QC reason hits', q['reason_hits'], q['failed'], labeler=reason_label) + '</div></div>')
+            fragments.append('<div><h3>Complete failure combinations</h3><p class="muted">Each locus appears once. Counts sum to the unique failed-locus total.</p><div class="chart">' + bar_chart('Complete QC failure combinations', top, q['failed'], labeler=combination_label) + '</div></div></div>')
+            fragments.append('<details><summary>Exact reasons, combinations and original codes</summary>')
+            fragments.append(table(['Reason', 'Original code', 'Loci with reason', '% of failed loci'], [(reason_label(k), k, v, pct(v / q['failed'])) for k, v in sorted(q['reason_hits'].items())], qc_label(q) + ' reason hits'))
+            fragments.append(table(['Complete combination', 'Original codes', 'Unique loci'], [(combination_label(k), k, v) for k, v in sorted(combinations.items())], qc_label(q) + ' failure combinations'))
+            fragments.append('</details>')
         fragments.append('</details>')
-    fragments.append('</section><section id="matrices"><div class="section-number">03 / FINAL DATASETS</div><h2>Statistics of the actual final matrices</h2>')
-    fragments.append('<p>Statistics are recomputed from each final FASTA matrix. QC pass counts do not imply inclusion: concatenation can subsequently skip loci with missing taxa. Codon-position lengths are nucleotide columns; full codon matrices also report complete codons.</p>')
-    fragments.append(table(["Matrix", "Taxa", "Source loci", "Length", "Unit", "Complete codons", "Variable", "PIS", "Constant", "Unresolved-only", "Gap −", "Missing ?", "Ambiguous", "GC"],
-                           [(m["matrix"], len(m["taxa"]), m.get("loci"), m["length"], m["unit"], m["complete_codons"], m["variable"], m["pis"], m["constant"], m["unresolved_only"], pct(m["gap_ratio"]), pct(m["missing_ratio"]), pct(m["ambiguous_ratio"]), "Not applicable" if m["seqtype"] == "prot" else pct(m["gc_ratio"])) for m in evaluated]))
-    fragments.append('<h3>Matrix details and associated datasets</h3>')
+    fragments.append('<p class="muted">Paired QC reasons summarize codon/protein QC outcomes and paired PIS decisions. Inspect the representation branches for individual conditions. Recorded QC tables may precede independent PIS filtering in older outputs.</p></section>')
+    fragments.append('<section id="matrices"><div class="section-number">03 / MATRIX STATISTICS</div><h2>What is in each final matrix?</h2><p>Values are recomputed from the final FASTA files. The filters below apply to all three tables. Start with primary matrices, then select derived datasets when needed.</p>')
+    fragments.append('<div class="filter-bar" id="matrix-filters"><label class="control">Datasets<select data-field="kind"><option value="full">Primary matrices</option><option value="derived">Derived datasets</option><option value="all">All datasets</option></select></label><label class="control">Selection<select data-field="selection"><option value="all">All selections</option><option value="independent">Independent QC</option><option value="paired">Paired QC</option></select></label><label class="control">Representation<select data-field="representation"><option value="all">All representations</option><option value="codon">Codon</option><option value="prot">Protein</option><option value="nucl">Nucleotide</option></select></label><label class="control">Variant<select data-field="variant"><option value="all">Raw and trimmed</option><option value="raw">Raw</option><option value="trimmed">Trimmed</option></select></label></div>')
+    keys = [m['matrix'] for m in evaluated]
+    fragments.append('<h3>Matrix composition</h3>' + table(['Matrix', 'Source loci', 'Taxa', 'Length', 'Complete codons'], [(matrix_label(m), m.get('loci'), len(m['taxa']), f'{m["length"]:,} {m["unit"]}', m['complete_codons'] if m['seqtype'] == 'codon' else 'Not applicable') for m in evaluated], 'Matrix composition', keys))
+    fragments.append('<h3>Variation and phylogenetic information</h3><p class="muted">PIS = parsimony-informative sites. Only resolved character states contribute to these site counts.</p>' + table(['Matrix', 'Variable sites', 'PIS', 'PIS (%)', 'Singleton sites', 'Constant sites', 'No resolved states'], [(matrix_label(m), m['variable'], m['pis'], pct(m['pis'] / m['length']), m['singleton'], m['constant'], m['unresolved_only']) for m in evaluated], 'Matrix variation', keys))
+    fragments.append('<h3>Gaps, missing data and ambiguity</h3><p class="muted"><strong>−</strong> = alignment gap; <strong>?</strong> = missing character; <strong>N/X</strong> = unresolved nucleotide/protein character. Only missing-block records identify artificial padding. GC uses resolved A/C/G/T; it does not apply to proteins. These are final character-cell percentages; codon QC ambiguity checks use codon-level units.</p>' + table(['Matrix', 'Gap (%)', 'Missing ? (%)', 'Ambiguous (%)', 'GC (%)'], [(matrix_label(m), pct(m['gap_ratio']), pct(m['missing_ratio']), pct(m['ambiguous_ratio']), 'Not applicable' if m['gc_ratio'] is None else pct(m['gc_ratio'])) for m in evaluated], 'Matrix missingness and composition', keys))
+    fragments.append('<details><summary>Matrix files, inclusion details and derived datasets</summary>')
     for m in full:
         fragments.append(matrix_details(m, matrices))
-    fragments.append('<p class="muted">Fourfold-degenerate source-locus counts are unavailable unless a contribution map is recorded; the parent matrix locus count is not substituted. Literal ? counts include any existing missing markers; only .missing.tsv identifies artificial padding.</p><h3>Raw versus trimmed: matched locus sets</h3>')
-    fragments.append(table(["Representation / selection", "Common included loci", "Raw-only loci", "Trimmed-only loci", "Raw common-set columns", "Trimmed common-set columns", "Unit"],
-                           [(c["raw"].rsplit("/", 1)[0], c["common_loci"], c.get("raw_only"), c.get("trimmed_only"), c["raw_common_columns"], c["trimmed_common_columns"], c.get("unit")) for c in report["trimming_comparisons"]]))
-    fragments.append('<p class="muted">Trimming comparisons use the intersection of actually included gene partitions within each representation and selection. This controls locus composition for length comparisons; it does not enforce identical taxon sets. Paired refers to codon/protein pairing within a variant, not raw/trimmed pairing.</p></section>')
-    fragments.append('<section id="events"><div class="section-number">04 / SEQUENCE PROVENANCE</div><h2>Sequence-change events by taxon</h2>')
-    audit = report.get("audit")
+    fragments.append('</details><h3>What changed after trimming?</h3><p>Length comparisons use only loci included in both raw and trimmed matrices of the same representation and selection. The retained locus sets of the final matrices can still differ.</p>')
+    comparisons = report['trimming_comparisons']
+    for c in comparisons:
+        raw, trimmed = c['raw_common_columns'], c['trimmed_common_columns']
+        fragments.append(f'<div class="trim-card"><strong>{esc(group_label(c["raw"].rsplit("/", 1)[0]))}</strong>')
+        if raw is None or trimmed is None:
+            fragments.append('<p class="empty">Unavailable: matching gene partition records are needed.</p>')
+        elif not c['common_loci']:
+            fragments.append('<p class="empty">No shared retained loci; a matched length comparison is not applicable.</p>')
+        else:
+            fragments.append(f'<p>{c["common_loci"]:,} shared loci · {c.get("raw_only", 0):,} raw-only · {c.get("trimmed_only", 0):,} trimmed-only</p>')
+            maximum = max(raw, trimmed, 1)
+            for label, length, color in [('Raw', raw, '#91b9bb'), ('Trimmed', trimmed, '#197c80')]:
+                fragments.append(f'<div class="trim-bar"><span>{label}</span><div class="bar-track"><span style="width:{100 * length / maximum:.3f}%;background:{color}"></span></div><strong>{length:,} {esc(c.get("unit", "columns"))}</strong></div>')
+            text = 'No columns removed from the shared locus set.' if raw == trimmed else f'{pct((raw - trimmed) / raw)} fewer columns in the shared locus set.' if raw else 'No raw columns were available for a percentage comparison.'
+            fragments.append(f'<p class="muted">{esc(text)}</p>')
+        fragments.append('</div>')
+    if not comparisons:
+        fragments.append('<p class="empty">No matching raw/trimmed matrix pairs were available.</p>')
+    fragments.append('<details><summary>Exact matched-locus comparison values</summary>' + table(['Representation / selection', 'Shared loci', 'Raw-only loci', 'Trimmed-only loci', 'Raw shared-set columns', 'Trimmed shared-set columns', 'Unit'], [(group_label(c['raw'].rsplit('/', 1)[0]), c['common_loci'], c.get('raw_only'), c.get('trimmed_only'), c['raw_common_columns'], c['trimmed_common_columns'], c.get('unit')) for c in comparisons], 'Matched trimming comparison') + '</details><p class="muted">Bars are scaled within each comparison; nucleotide and amino-acid lengths have different units. Matched loci do not necessarily imply identical taxon sets. Paired refers to codon/protein pairing within a variant, not raw/trimmed pairing.</p></section>')
+    fragments.append('<section id="events"><div class="section-number">04 / SEQUENCE CHANGES</div><h2>Which sequence changes were recorded?</h2>')
+    audit = report.get('audit')
     if audit is None:
-        fragments.append('<p class="empty">Unavailable: the canonical reports/sequence_changes.tsv was not found. Per-locus copies are not combined because they could double-count events.</p>')
+        fragments.append('<p class="empty">Unavailable: reports/sequence_changes.tsv was not found. Per-locus copies are not added together because that could double-count events.</p>')
     else:
-        fragments.append(f'<p>{audit["events"]:,} distinct recorded events. Exact duplicate audit rows ignored: {audit["duplicates_ignored"]:,}. Taxa use mapped identifiers when recorded, otherwise original sequence identifiers.</p>')
-        fragments.append('<div class="chart">' + bar_chart("Sequence-change events by taxon", {t["taxon"]: t["events"] for t in audit["taxa"]}) + '</div>')
-        fragments.append(table(["Taxon / identifier", "Events", "Affected sequences", "NT character-event spans", "AA character-event spans", "Events without coordinates"],
-                               [(t["taxon"], t["events"], t["affected_sequences"] if t["taxon"] != "Unassigned" else None, t["nt_characters"], t["aa_characters"], t["events_without_coordinates"]) for t in audit["taxa"]]))
-        fragments.append('<h3>Event types and actions</h3>' + table(["Event", "Action", "Count"], [(t["event"], t["action"], t["count"]) for t in audit["types"]]))
-        fragments.append('<p class="muted">Source audit rows are counted once, not once per raw/trimmed or codon/protein output. Terminal cleanup and internal-stop events retain separate event types. Character-event spans sum coordinate lengths and can overlap; they are not unique edited positions. NT and AA spans are never added. Identifier changes remain separate event types. Original-sequence denominators and retained/excluded event attribution are not inferred from aligned sequences.</p>')
-    fragments.append('</section><section id="coverage"><div class="section-number">05 / TAXON COVERAGE</div><h2>Observed loci versus artificial missing blocks</h2>')
-    fragments.append('<p>Occupancy is the fraction of included loci for which a taxon was not artificially padded. An observed sequence containing gaps or ambiguous characters remains an observed locus. Gray cells indicate taxa absent from that matrix.</p><div class="chart">' + coverage_chart(matrices) + '</div></section>')
-    fragments.append('<section id="methods"><div class="section-number">06 / INTERPRETATION</div><h2>Definitions, availability and provenance</h2>')
-    fragments.append('<p>Resolved states are A/C/G/T for nucleotide columns and the 20 standard amino acids for protein columns. A variable column has at least two resolved states; a parsimony-informative site (PIS) has at least two states each observed at least twice. Constant columns have exactly one resolved state. Columns with no resolved states are reported separately. Singleton columns have exactly two resolved states with at least one occurring once. Gaps, ? and unresolved symbols do not contribute states.</p>')
-    fragments.append('<p>Gap, missing and ambiguity percentages use all taxon-by-column cells as denominator. Ambiguity includes N for nucleotides, X for proteins, and any other unresolved symbols. GC uses resolved A/C/G/T only. Counts are descriptive and do not establish orthology or biological alignment accuracy.</p>')
-    fragments.append('<p>Unavailable means the needed records were not present or could not be validated; it never means zero. A header-only missing-block table establishes zero artificial blocks. QC tables marked Recorded QC can precede independent PIS selection in older outputs. The report reads published product manifests when present and does not follow original absolute input paths. Provenance checksums are recorded values, not newly verified by this report; per-file input/output hashes remain in the run manifest.</p>')
-    if report["provenance_source"]:
-        fragments.append(f'<details><summary>Recorded run parameters and environment ({esc(report["provenance_source"])})</summary><pre>{esc(json.dumps(report["provenance"], indent=2, ensure_ascii=False))}</pre></details>')
+        fragments.append(f'<p><strong>{audit["events"]:,} distinct recorded events</strong>, counted once from the canonical audit report. Routine normalization and cleanup are included; an event is not itself a QC failure. Exact duplicate rows ignored: {audit["duplicates_ignored"]:,}.</p>')
+        if 'by_taxon_event' in audit:
+            categories = ['Terminal cleanup', 'Symbol normalization', 'Internal stops', 'Frame-related events', 'Identifier changes', 'Other recorded events']
+            palette = ['#91b9bb', '#197c80', '#b76620', '#725899', '#4b77a1', '#9cabb3']
+            counts = {}
+            for entry in audit['by_taxon_event']:
+                values = counts.setdefault(entry['taxon'], [0] * len(categories))
+                values[categories.index(event_category(entry['event']))] += entry['count']
+            active = [i for i in range(len(categories)) if any(values[i] for values in counts.values())]
+            series = [(taxon['taxon'], [counts.get(taxon['taxon'], [0] * len(categories))[i] for i in active]) for taxon in audit['taxa']]
+            fragments.append('<div class="chart">' + stacked_chart('Sequence-change events by taxon and category', series, [(categories[i], palette[i]) for i in active]) + '</div><p class="muted">Bar segments show each taxon\'s event composition; exact counts are printed above the bars.</p>')
+        else:
+            fragments.append('<div class="chart">' + bar_chart('Sequence-change events by taxon', {t['taxon']: t['events'] for t in audit['taxa']}) + '</div>')
+            fragments.append('<p class="muted">Taxon-by-event categories were not recorded in this older summary. The recorded event-type totals are shown separately.</p><details><summary>Recorded event-type totals</summary><div class="chart">' + bar_chart('Recorded event types', {entry['event'] + ' / ' + entry['action']: entry['count'] for entry in audit['types']}, labeler=lambda key: event_label(key.split(' / ')[0]) + ' / ' + key.split(' / ')[1]) + '</div></details>')
+        fragments.append(table(['Taxon / identifier', 'Events', 'Affected sequences', 'NT character-event spans', 'AA character-event spans', 'Events without coordinates'], [(t['taxon'], t['events'], t['affected_sequences'] if t['taxon'] != 'Unassigned' else None, t['nt_characters'], t['aa_characters'], t['events_without_coordinates']) for t in audit['taxa']], 'Sequence changes by taxon'))
+        fragments.append('<details><summary>Event types, actions and original codes</summary>' + table(['Event description', 'Original code', 'Action', 'Events'], [(event_label(t['event']), t['event'], t['action'], t['count']) for t in audit['types']], 'Sequence event types') + '</details><p class="muted">Taxa use mapped IDs when recorded; otherwise original sequence IDs are shown. Character-event spans sum source-coordinate lengths and may overlap. They are not unique edited positions. NT and AA spans are separate units. Event rates relative to original sequence length are not inferred.</p>')
+    fragments.append('</section><section id="coverage"><div class="section-number">05 / COVERAGE</div><h2>How complete is taxon coverage?</h2><p>Occupancy is the fraction of included loci for which a taxon was not artificially padded. An observed sequence containing gaps or ambiguity still counts as an observed locus.</p><div class="legend"><span><i style="background:hsl(182 60% 94%)"></i>0%</span><span><i style="background:hsl(182 60% 64%)"></i>50%</span><span><i style="background:hsl(182 60% 34%)"></i>100%</span><span><i style="background:#e2e8f0"></i>N/R = not recorded; Absent = taxon not in matrix</span></div><div class="chart heatmap">' + coverage_chart(matrices) + '</div><button id="download-coverage">Download occupancy CSV (all taxa)</button></section>')
+    fragments.append('<section id="methods"><div class="section-number">06 / DEFINITIONS &amp; PROVENANCE</div><h2>How to interpret these values</h2>')
+    definitions = [('Locus', 'An input alignment unit, often a gene or gene fragment.'), ('Resolved states', 'A/C/G/T for nucleotides; the 20 standard amino acids for proteins.'), ('Variable site', 'A column containing at least two resolved states.'), ('Parsimony-informative site (PIS)', 'A column with at least two resolved states, each observed at least twice.'), ('Constant / no resolved states', 'Constant means exactly one resolved state. Columns with no resolved states are counted separately.'), ('Singleton site', 'Exactly two resolved states, with at least one observed once.'), ('Gap / missing / ambiguity percentages', 'Fractions of all taxon-by-column cells. Gaps and unresolved symbols do not contribute resolved states.'), ('GC (%)', 'G+C divided by resolved A+C+G+T. Not applicable to proteins or matrices with no resolved bases.'), ('Unavailable', 'A required record is absent or could not be validated. This never means zero.'), ('Fourfold source-locus count', 'Unavailable unless a contributing-locus map was recorded; the parent matrix count is not substituted.')]
+    fragments.append('<details><summary>Metric definitions</summary>' + table(['Metric', 'Definition'], definitions, 'Metric definitions') + '</details>')
+    fragments.append('<details id="availability"><summary>Data availability and interpretation limits</summary><p>Header-only missing-block tables establish zero artificial blocks. Missing tables do not. Original absolute input paths are not followed. Recorded checksums are not reverified by this report.</p>' + table(['Optional record', 'Availability'], unavailable, 'Optional records') + ''.join(f'<p class="note warning">{esc(w)}</p>' for w in report['warnings']) + '<p>These metrics describe processing and filtering decisions. They do not establish orthology, biological alignment accuracy or suitability for every downstream method.</p></details>')
+    if report['provenance_source']:
+        prov = report['provenance']
+        params = prov.get('parameters') or {}
+        friendly = {'genetic_code': 'NCBI genetic-code table', 'seqtype': 'Sequence mode', 'align_software': 'Aligner', 'min_length': 'Minimum alignment length', 'min_nucl_pis': 'Minimum nucleotide PIS', 'min_protein_pis': 'Minimum protein PIS', 'paired_pis_policy': 'Paired PIS rule', 'missing_taxa': 'Missing-taxon policy', 'G': 'Trimming: maximum gap proportion', 'N': 'Trimming: maximum N proportion', 'X': 'Trimming: maximum X proportion', 'notrim': 'Skip trimming', 'allow_internal_stop': 'Allow internal stops'}
+        fragments.append('<details><summary>Recorded run settings</summary>' + table(['Setting', 'Recorded value / effective default'], [(friendly.get(k, k.replace('_', ' ').capitalize()), setting_value(k, v, params)) for k, v in params.items()], 'Run settings') + '<details><summary>Full recorded provenance (JSON)</summary><pre>' + esc(json.dumps(prov, indent=2, ensure_ascii=False)) + '</pre></details></details>')
     else:
-        fragments.append('<p class="empty">Run parameters, versions, checksums and execution timings: not recorded in a portable run manifest. Report generation time is not analysis runtime.</p>')
-    if report["warnings"]:
-        fragments.append('<h3>Data availability warnings</h3><ul class="note warning">' + ''.join(f'<li>{esc(w)}</li>' for w in report["warnings"]) + '</ul>')
-    payload = json.dumps(report, ensure_ascii=True, separators=(",", ":")).replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
-    fragments.extend(['</section><footer>Generated locally with Python standard-library tools. This self-contained report makes no network requests. Embedded SVG charts can be saved individually.</footer>',
-                      f'<script type="application/json" id="report-data">{payload}</script>',
-                      """<script>
-function saveBlob(blob,name){const a=document.createElement('a');const u=URL.createObjectURL(blob);a.href=u;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(u),60000);}
-document.getElementById('download-summary').addEventListener('click',()=>saveBlob(new Blob([document.getElementById('report-data').textContent],{type:'application/json'}),'phyloprep-report-summary.json'));
-function openMatrixDetails(id){const target=document.getElementById(id);if(target&&target.matches('details.matrix-detail')){target.open=true;target.querySelector('summary').focus({preventScroll:true});target.scrollIntoView({block:'start'});}}
-document.querySelectorAll('a.matrix-link').forEach(a=>a.addEventListener('click',()=>openMatrixDetails(a.hash.slice(1))));
-window.addEventListener('hashchange',()=>openMatrixDetails(location.hash.slice(1)));
-if(location.hash)openMatrixDetails(location.hash.slice(1));
-document.querySelectorAll('.chart svg').forEach((svg,i)=>{const b=document.createElement('button');b.textContent='Save chart as SVG';b.addEventListener('click',()=>saveBlob(new Blob([new XMLSerializer().serializeToString(svg)],{type:'image/svg+xml'}),'phyloprep-chart-'+(i+1)+'.svg'));svg.parentElement.appendChild(b);});
-</script></main></body></html>"""])
+        fragments.append('<p class="empty">A portable run manifest was not available. Run parameters, versions, checksums and execution time are not inferred. Report generation time is not analysis runtime.</p>')
+    payload = json.dumps(report, ensure_ascii=True, separators=(',', ':')).replace('<', '\\u003c').replace('>', '\\u003e').replace('&', '\\u0026')
+    fragments.append('</section><footer>Generated locally with Python standard-library tools. This self-contained report makes no network requests. SVG charts and visible table rows can be downloaded.</footer>')
+    fragments.append(f'<script type="application/json" id="report-data">{payload}</script><script>' + REPORT_SCRIPT + '</script></main></body></html>')
     return ''.join(fragments)
 
 

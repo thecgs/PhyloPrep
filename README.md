@@ -175,6 +175,17 @@ presented as unexplained aggregate totals. Absent files are labeled "Not found
 in saved outputs"; unreadable matrices link to their diagnostic details without
 a success indicator. Nucleotide, protein-only and pseudogene outputs use the
 same catalog with the applicable rows.
+The report uses readable English QC/event labels while retaining original codes
+in expandable tables and the summary JSON. QC outcome bars separate passed,
+failed and unevaluated loci; a branch selector shows overlapping reason hits and
+complete failure combinations. Matrix statistics have separate composition,
+variation and missingness tables, with shared dataset/selection/representation/
+variant filters. Tables support local search, numeric/text sorting and export
+of the visible rows as CSV. Raw/trimmed comparisons show shared-locus lengths
+and source-set differences explicitly. Taxon event categories are shown when
+the cross-tab was recorded; older summaries retain their totals without inferred
+category assignments. Coverage includes a legend and CSV export for all taxa.
+Mobile layouts use labeled cards, and printing opens the explanatory details.
 Standalone generation remains available independently of the main workflow.
 
 The report includes locus-processing counts; per-branch QC outcomes, overlapping

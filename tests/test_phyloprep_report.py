@@ -201,7 +201,7 @@ def test_portable_standalone_cli_and_safe_english_html(tmp_path):
     assert '<script>alert(1)</script>' not in output
     assert 'network requests' in output
     assert 'src="http' not in output and 'href="http' not in output
-    assert 'Unique failed' in output and 'Save chart as SVG' in output
+    assert 'One failed locus can have several reasons' in output and 'Save chart as SVG' in output
     payload = re.search(r'id="report-data">(.*?)</script>', output).group(1)
     assert json.loads(payload)['matrices'][0]['taxa'][0] == '</script><script>alert(1)</script>'
     assert not list(root.glob('.phyloprep-report-*'))
@@ -303,8 +303,8 @@ def test_matrix_catalog_has_explicit_routes_and_clickable_details(tmp_path):
     assert len(set(anchors)) == 8
     assert all(f'id="{anchor}"' in output for anchor in anchors)
     assert output.count('<h3>Datasets derived from this codon matrix</h3>') == 4
-    assert output.count('Codon position 1</td>') == 4
-    assert output.count('Fourfold-degenerate sites</td>') == 4
+    assert output.count('data-label="Dataset">Codon position 1</td>') == 4
+    assert output.count('data-label="Dataset">Fourfold-degenerate sites</td>') == 4
     assert 'matrices/paired/codon/raw/supermatrix.fasta' in output
 
 
@@ -343,3 +343,72 @@ def test_catalog_empty_and_hostile_paths_are_safe():
     output = report.matrix_catalog([hostile]) + report.matrix_details(hostile, [hostile])
     assert '<script>' not in output and '<img ' not in output
     assert '&lt;script&gt;' in output
+
+
+def test_readable_report_keeps_raw_qc_counts_and_codes(tmp_path):
+    qc(tmp_path)
+    matrix(tmp_path)
+    data = report.build_report(tmp_path)
+    before = json.dumps(data, sort_keys=True)
+    output = report.render_html(data)
+    assert json.dumps(data, sort_keys=True) == before
+    assert 'Alignment below minimum length' in output
+    assert 'Excessive alignment gaps' in output
+    assert 'gap_ratio' in output and 'short_alignment' in output
+    assert 'Original codes' in output and 'One failed locus can have several reasons' in output
+    assert 'QC outcomes by branch' in output and 'id="qc-branch"' in output
+    assert 'data-title="Matrix composition"' in output
+    assert 'data-title="Matrix variation"' in output
+    assert 'data-title="Matrix missingness and composition"' in output
+    assert 'Download visible CSV' in output
+    assert len(re.findall(r'data-matrix-key="codon/raw/supermatrix.fasta"', output)) == 3
+
+
+def test_event_cross_tab_uses_distinct_canonical_events(tmp_path):
+    fields = ['input_file', 'taxa_id', 'event', 'action', 'source_nt_positions']
+    records = [dict(input_file='g.fa', taxa_id='a', event='terminal_stop', action='delete', source_nt_positions='4-6'),
+               dict(input_file='g.fa', taxa_id='b', event='internal_stop', action='replace', source_nt_positions='1-3')]
+    tsv(tmp_path / 'reports/sequence_changes.tsv', fields, records + records[:1])
+    result = report.build_report(tmp_path)
+    cross_tab = result['audit']['by_taxon_event']
+    assert cross_tab == [dict(taxon='a', event='terminal_stop', count=1), dict(taxon='b', event='internal_stop', count=1)]
+    assert sum(row['count'] for row in cross_tab) == result['audit']['events'] == 2
+    output = report.render_html(result)
+    assert 'Terminal cleanup' in output and 'Internal stops' in output
+    assert 'Sequence-change events by taxon and category' in output
+    del result['audit']['by_taxon_event']
+    legacy = report.render_html(result)
+    assert 'Taxon-by-event categories were not recorded' in legacy
+    assert 'Sequence-change events by taxon and category' not in legacy
+
+
+def test_coverage_shows_unknown_metadata_instead_of_silently_omitting_matrix(tmp_path):
+    matrix(tmp_path)
+    other = matrix(tmp_path, 'codon/trimmed')
+    (other / 'supermatrix.missing.tsv').unlink()
+    result = report.build_report(tmp_path)
+    plot = report.coverage_chart(result['matrices'])
+    assert '>Raw</text>' in plot and '>Trimmed</text>' in plot
+    assert '>N/R</text>' in plot
+    assert 'occupancy not recorded' in plot
+
+
+def test_time_and_unknown_reason_labels_do_not_invent_measurements():
+    assert report.readable_time('2026-10-18T02:42:17.123456+00:00') == '18 Oct 2026, 02:42 UTC'
+    assert report.readable_time('not recorded') == 'not recorded'
+    assert report.reason_label('custom_condition') == 'Custom condition'
+    assert report.combination_label('gap_ratio + short_alignment') == 'Excessive alignment gaps + Alignment below minimum length'
+    assert report.display(False) == 'No' and report.display(True) == 'Yes'
+    assert report.setting_value('min_length', 50, {'seqtype': 'nucl'}) == '50 nt'
+    assert report.setting_value('min_protein_pis', None, {'seqtype': 'nucl'}) == 'Not applicable'
+    assert report.setting_value('min_nucl_pis', None, {'seqtype': 'codon'}) == '0 (default)'
+
+
+def test_zero_audit_events_are_distinct_from_older_missing_cross_tab(tmp_path):
+    tsv(tmp_path / 'reports/sequence_changes.tsv', ['input_file', 'taxa_id', 'event', 'action'], [])
+    result = report.build_report(tmp_path)
+    assert result['audit']['events'] == 0
+    assert result['audit']['by_taxon_event'] == []
+    output = report.render_html(result)
+    assert '0 distinct recorded events' in output
+    assert 'Taxon-by-event categories were not recorded' not in output
