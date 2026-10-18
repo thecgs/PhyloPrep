@@ -193,6 +193,7 @@ const server = http.createServer((req,res) => {
      await runMsapBatchBrowserWorkflow({...request,options:{...request.options,no_resume:true}});await outputSaveSession.settle();
      if(calls!==2)throw Error('--no-resume did not recompute');
      const stream=await saved.createWritable();await stream.write('>g1\nATGGCC\n>g2\nATGGCC\n');await stream.close();
+     await PhyloPrepReuse.create(root,engine,request.options,{fingerprint:fileFingerprint}).clearBatch();
      outputSaveSession=createOutputSaveSession(root);
      await runMsapBatchBrowserWorkflow(request);await outputSaveSession.settle();
      if(calls!==3)throw Error('Changed saved alignment was incorrectly reused');
@@ -223,9 +224,15 @@ const server = http.createServer((req,res) => {
        {name:'mapping.tsv',inputKey:'mapping',fasta:false,blob:new File(['g1\tsp_a\ng2\tsp_b\ng3\tsp_c\n'],'mapping.tsv')}]};
      await runPhyloPrepBrowserWorkflow(request);await outputSaveSession.settle();
      if(aligned!==2)throw Error('End-to-end alignment did not run');
+     const cachedRename=await (await (await (await e2e.getDirectoryHandle('renamed')).getDirectoryHandle('codon')).getDirectoryHandle('raw')).getFileHandle('e2e0.mafft.codon.aln.fasta');
+     const renamedBefore=(await cachedRename.getFile()).lastModified;
+     const restore=PhyloPrepReuse.create;
+     PhyloPrepReuse.create=(...args)=>{const cache=restore(...args);return cache && {...cache,restore(){throw Error('Complete checkpoint must bypass per-locus checks');}};};
      outputSaveSession=createOutputSaveSession(e2e);producedFiles=new Map();
      const rerun=await runPhyloPrepBrowserWorkflow(request);await outputSaveSession.settle();
      if(rerun.report?.status!=='generated'||!rerun.files.some(file=>file.name==='phyloprep-report.html'))throw Error('Cached pipeline did not regenerate report');
+     PhyloPrepReuse.create=restore;
+     if((await cachedRename.getFile()).lastModified!==renamedBefore)throw Error('Completed rename checkpoint rewrote alignments');
      if(aligned!==2 || rerun.reused_loci!==2)throw Error('End-to-end cached pipeline recomputed alignment');
      const matrix=rerun.files.find(file=>file.name==='matrices/codon/raw/supermatrix.fasta');
      if(await PhyloPrepSave.readText(matrix)!=='>sp_a\nATGGCTATGGCT\n>sp_b\nATGGCT??????\n>sp_c\n??????ATGGCT\n')throw Error('Cached pipeline matrix changed');
@@ -240,6 +247,13 @@ const server = http.createServer((req,res) => {
      const html=rerun.files.find(file=>file.name==='phyloprep-report.html');
      const report=JSON.parse((await PhyloPrepSave.readText(html)).match(/id="report-data">(.*?)<\/script>/s)[1]);
      if(report.provenance.parameters.fourfold_missing_policy!=='ignore-missing')throw Error('Fourfold rule missing from report provenance');
+     outputSaveSession=createOutputSaveSession(e2e);producedFiles=new Map();
+     const remapped=await runPhyloPrepBrowserWorkflow({...request,files:[...request.files.filter(file=>file.inputKey!=='mapping'),
+       {name:'mapping.tsv',inputKey:'mapping',fasta:false,blob:new File(['g1\tnew_a\ng2\tnew_b\ng3\tnew_c\n'],'mapping.tsv')}]});
+     await outputSaveSession.settle();
+     if(aligned!==2)throw Error('Mapping change invalidated alignment checkpoint');
+     const remappedMatrix=remapped.files.find(file=>file.name==='matrices/codon/raw/supermatrix.fasta');
+     if(!(await PhyloPrepSave.readText(remappedMatrix)).startsWith('>new_a\n'))throw Error('Mapping change reused stale renamed targets');
      const strictFolder=await e2e.getDirectoryHandle('strict-fourfold',{create:true});
      outputDirectoryHandle=strictFolder;outputSaveSession=createOutputSaveSession(strictFolder);producedFiles=new Map();
      const strict=await runPhyloPrepBrowserWorkflow({...request,options:{...request.options,fourfold_missing_policy:'require-all'}});

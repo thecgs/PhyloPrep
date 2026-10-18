@@ -462,6 +462,7 @@ def _phyloprep_finalize_steps(file_manifest, options, output_root, engine_root="
         sources = [Path(item["path"]) for item in file_manifest if item.get("role") == "source"]
         batch_outputs = [item for item in file_manifest if item.get("role") == "batch-output"]
         mapping_items = [item for item in file_manifest if item.get("role") == "mapping"]
+        cached_renamed = {item.get("rename_path"): item for item in file_manifest if item.get("role") == "renamed-output"}
         if not sources:
             raise ValueError("No source FASTA files were supplied to the PhyloPrep browser finalizer.")
         phyloprep.write_paths(root / 'inputs.pathlist', [source.name for source in sources])
@@ -578,7 +579,17 @@ def _phyloprep_finalize_steps(file_manifest, options, output_root, engine_root="
                     for kind in kinds:
                         paths = phyloprep.alignment_paths(args, root, kind, variant)
                         renamed = []
-                        iterator = phyloprep.iter_renamed_alignments(args, paths, root, kind, variant)
+                        pending = []
+                        for source in paths:
+                            relative = f"renamed/{kind}/{variant}/{source.name}"
+                            target = root / relative
+                            item = cached_renamed.get(relative)
+                            if item is not None and target.is_file():
+                                renamed.append(target)
+                                archived[relative] = dict(name=relative, path=str(target), size=target.stat().st_size, sha256=item["sha256"])
+                            else:
+                                pending.append(source)
+                        iterator = phyloprep.iter_renamed_alignments(args, pending, root, kind, variant)
                         while True:
                             with analysis_step():
                                 try:
@@ -592,7 +603,10 @@ def _phyloprep_finalize_steps(file_manifest, options, output_root, engine_root="
                             archived[item['name']] = dict(item)
                             # Keep the OPFS working copy for QC; saving is now per locus.
                             yield checkpoint
-                        args._prepared_renamed[(kind, variant)] = renamed
+                        by_name = {path.name: path for path in renamed}
+                        args._prepared_renamed[(kind, variant)] = [by_name[path.name] for path in paths]
+                    if options.get("rename_checkpoints"):
+                        yield {"rename_checkpoint": variant, "files": []}
                 # Each runPythonAsync call can have a different Context. Leave
                 # progress/log/engine scopes before yielding files to JavaScript.
                 with analysis_step():

@@ -151,8 +151,9 @@ async function ensureRuntime(runId) {
 
 async function readDiskInput(file) {
   const saved = file.disk;
-  const source = await saved.handle.getFile();
-  if (source.size !== saved.size || source.lastModified !== saved.lastModified) {
+  if (!saved.handle && !globalThis.PhyloPrepSave) importScripts('browser-save.js');
+  const source = await (saved.handle || await PhyloPrepSave.diskHandle(saved)).getFile();
+  if (source.size !== saved.size || (saved.lastModified !== undefined && source.lastModified !== saved.lastModified)) {
     throw new Error(`Saved input changed on disk: ${file.name}. Restore the original file before retrying.`);
   }
   if (!globalThis.PhyloPrepHash) importScripts('browser-hash.js');
@@ -186,9 +187,9 @@ async function stageBrowserInputs(runtime, request) {
   const names = new Set();
   const files = [];
   for (const file of request.files) {
-    const name = uniqueFileName(file.name, names);
+    const name = uniqueFileName(file.role==='renamed-output'?'cached-'+file.name.split('/').at(-1):file.name, names);
     const path = `${inputRoot}/${name}`;
-    const deferred = request.incrementalSave && request.type === "phyloprep-finalize" && file.role === "batch-output" && file.disk && name.endsWith('.aln.fasta');
+    const deferred = request.incrementalSave && request.type === "phyloprep-finalize" && ["batch-output","renamed-output"].includes(file.role) && file.disk && name.endsWith('.aln.fasta');
     if (request.type === 'phyloprep-finalize' && file.role === 'source') {
       // Finalization only needs source names; alignments and audit reports are supplied separately.
       runtime.FS.writeFile(path,'');
@@ -439,7 +440,7 @@ self.addEventListener("message", async (event) => {
           `Could not load the browser report dependency sqlite3: ${error.message || error}` }; }
       }
       self.postMessage({ type: "stage", runId, stage: "process", label: "Preparing downstream alignment processing" });
-      const manifest = stage.files.map(({ name, path, role, inputKey, fasta, on_disk }) => ({ name, path, role, inputKey, fasta, on_disk }));
+      const manifest = stage.files.map(({ name, path, role, inputKey, fasta, on_disk, rename_path, size, sha256 }) => ({ name, path, role, inputKey, fasta, on_disk, rename_path, size, sha256 }));
       runtime.globals.set("_phyloprep_progress_callback", (eventJson) => {
         self.postMessage({ type: "progress", runId, progress: JSON.parse(eventJson) });
       });
@@ -456,12 +457,15 @@ self.addEventListener("message", async (event) => {
             if (!step.pending) break;
             if (step.load_variant) {
               for (const file of stage.files) {
-                if (!file.on_disk || file.name.endsWith('.trimmed.aln.fasta') !== (step.load_variant === 'trimmed')) continue;
-                const target = `${stage.outputRoot}/alignments/${file.name}`;
+                if (!file.on_disk || (file.rename_path || file.name).endsWith('.trimmed.aln.fasta') !== (step.load_variant === 'trimmed')) continue;
+                const target = file.role==='renamed-output'?`${stage.outputRoot}/${file.rename_path}`:`${stage.outputRoot}/alignments/${file.name}`;
+                runtime.FS.mkdirTree(target.slice(0,target.lastIndexOf('/')));
                 await writeBlobInput(runtime,target,await readDiskInput(file));
+                if(file.role==='renamed-output')transferred.set(file.rename_path,file.sha256);
               }
             }
             await streamOutputFiles(runtime, runId, step.files || [], `checkpoint-${checkpoint++}`, true, transferred);
+            if(step.rename_checkpoint)await acknowledgeOutput(runId,{type:'rename-checkpoint',variant:step.rename_checkpoint,name:step.rename_checkpoint},300000,'Rename checkpoint acknowledgement timed out');
           }
         } else {
           raw = await runtime.runPythonAsync(`run_phyloprep_finalize(${pythonJson(manifest)}, ${pythonJson(request.options)}, ${JSON.stringify(stage.outputRoot)}, progress_callback=_phyloprep_progress_callback, manifest_only=True)`);
