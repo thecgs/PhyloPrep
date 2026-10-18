@@ -52,7 +52,7 @@ const nextWriter=save.createWriter(disk.root),before=disk.writes;
 for(const file of restored.files){file.name='alignments/'+file.name;nextWriter.adopt(file);nextWriter.save(file);}
 await nextWriter.settle();assert.equal(disk.writes,before,'Verified reuse must not rewrite alignment files');
 assert.equal(nextWriter.stats().saved,3);
-assert.ok(await reuse.create(disk.root,engine,{...options,min_nucl_pis:50,missing_taxa:'pad-gaps'},{fingerprint}).restore(input),'QC changes do not invalidate alignment');
+assert.ok(await reuse.create(disk.root,engine,{...options,min_nucl_pis:50,missing_taxa:'pad-gaps',fourfold_missing_policy:'require-all'},{fingerprint}).restore(input),'QC changes do not invalidate alignment');
 assert.ok(await reuse.create(disk.root,{...engine,bundleSha256:'new-qc-only-build'},options,{fingerprint}).restore(input),'Unchanged alignment sources survive downstream-only build changes');
 for(const changed of [{genetic_code:2},{gap_ratio:0.5},{notrim:false},{seqtype:'prot'},{align_software:'muscle'}]){
   assert.equal(await reuse.create(disk.root,engine,{...options,...changed},{fingerprint}).restore(input),null);

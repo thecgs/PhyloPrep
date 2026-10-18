@@ -68,8 +68,45 @@ def test_padding_coordinates_and_codon_derivatives(tmp_path, monkeypatch):
             assert sequences(converted, fmt) == sequences(output)
     extracted = tmp_path / 'fourfold.fa'
     fourfold.extract_four_fold_site(source, extracted)
-    # The complete, ungapped GC-family columns pass; absent taxa still exclude a site.
+    # Complete columns pass. Padded columns with only one observed taxon do not.
     assert sequences(extracted) == {'a': 'TC', 'b': 'TC'}
+
+
+@pytest.mark.parametrize('order', [('a', 'b', 'c'), ('c', 'a', 'b')])
+@pytest.mark.parametrize('policy,expected', [
+    ('ignore-missing', {'a': '?TT', 'b': 'TC?', 'c': 'CAC'}),
+    ('require-all', {'a': 'T', 'b': 'C', 'c': 'A'}),
+])
+def test_fourfold_missing_policies_and_observed_prefixes(tmp_path, order, policy, expected):
+    columns = [
+        ('???', 'GCT', 'GCC'), ('GCT', '???', '???'), ('???', '???', '???'),
+        ('GCT', 'NNN', 'GCC'), ('GCT', '---', 'GCC'), ('GCT', 'GC?', 'GCC'),
+        ('GCT', 'GGT', 'GCC'), ('ATG', 'ATG', 'ATG'), ('GCT', 'GCC', 'GCA'),
+        ('GCT', '???', 'GCC'), ('GCT', '??A', 'GCC'),
+    ]
+    records = {name: ''.join(column[index] for column in columns) for index, name in enumerate('abc')}
+    source, output = tmp_path / 'matrix.fa', tmp_path / 'fourfold.fa'
+    source.write_text(''.join(f'>{name}\n{records[name]}\n' for name in order))
+    fourfold.extract_four_fold_site(source, output, fourfold_missing_policy=policy)
+    assert sequences(output) == expected
+
+
+def test_fourfold_missing_policy_obeys_genetic_code(tmp_path):
+    source, output = tmp_path / 'matrix.fa', tmp_path / 'fourfold.fa'
+    source.write_text('>a\nAGT\n>b\nAGC\n>c\n???\n')
+    fourfold.extract_four_fold_site(source, output, genetic_code=5)
+    assert sequences(output) == {'a': 'T', 'b': 'C', 'c': '?'}
+    fourfold.extract_four_fold_site(source, output, genetic_code=1)
+    assert sequences(output) == {'a': '', 'b': '', 'c': ''}
+
+
+def test_invalid_fourfold_policy_does_not_overwrite(tmp_path):
+    source, output = tmp_path / 'matrix.fa', tmp_path / 'fourfold.fa'
+    source.write_text('>a\nGCT\n>b\nGCC\n')
+    output.write_text('previous result')
+    with pytest.raises(ValueError, match='policy'):
+        fourfold.extract_four_fold_site(source, output, fourfold_missing_policy='invalid')
+    assert output.read_text() == 'previous result'
 
 
 def test_empty_missing_table_and_existing_unknowns_are_not_padding(tmp_path):

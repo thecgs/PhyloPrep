@@ -526,6 +526,7 @@ def _phyloprep_finalize_steps(file_manifest, options, output_root, engine_root="
             align_software=str(options.get("align_software", "mafft")),
             notrim=bool(options.get("notrim", False)),
             genetic_code=int(options.get("genetic_code", 1)),
+            fourfold_missing_policy=str(options.get('fourfold_missing_policy', 'ignore-missing')),
             G=number("gap_ratio", 0.2),
             N=number("n_ratio", 0.2),
             X=number("x_ratio", 0.2),

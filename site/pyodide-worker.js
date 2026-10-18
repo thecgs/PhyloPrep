@@ -305,7 +305,7 @@ function originalArguments(request, stage) {
     case "calulate_4dtv_and_correction.py":
       return ["-i", ...listInputs(stage), "-o", output, "-g", option(values.genetic_code, "1")];
     case "extract_4-fold_degenerated_sites.py":
-      return ["-i", inputFile(stage), "-o", output, "-g", option(values.genetic_code, "1")];
+      return ["-i", inputFile(stage), "-o", output, "-g", option(values.genetic_code, "1"), '--fourfold-missing-policy', option(values.fourfold_missing_policy, 'ignore-missing')];
     case "get_supergenes.py":
       return ["-i", ...listInputs(stage), "-p", outputPath(stage, request.outputName, "supergene"), "--missing-taxa", option(values.missing_taxa, "pad-gaps")];
     case "filter_sequences.py":

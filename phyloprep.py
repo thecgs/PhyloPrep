@@ -80,6 +80,8 @@ matrices are published only after all requested conversions succeed.
                           help="Rename all alignment IDs using this two-column mapping table before QC and concatenation.")
     pipeline.add_argument("--missing-taxa", choices=["skip-gene", "pad-gaps"],
                           default="pad-gaps", help="Missing-taxon policy: pad-gaps fills absent sequences with ? (default: pad-gaps).")
+    pipeline.add_argument('--fourfold-missing-policy', choices=['ignore-missing', 'require-all'], default='ignore-missing',
+                          help='Fourfold selection: ignore-missing ignores complete ??? codons, requiring at least two observed taxa; require-all requires every taxon to qualify (default: %(default)s).')
     pipeline.add_argument("--no-report", action="store_true",
                           help="Skip the HTML report normally generated after matrices are published. Report failures do not invalidate completed analysis outputs.")
     qc = parser.add_argument_group("alignment QC options (same defaults as alignment_qc.py)")
@@ -110,6 +112,8 @@ def validate_pipeline_options(args):
         raise ValueError("QC length/site thresholds must be non-negative")
     if args.paired_pis_policy not in {"both", "either", "codon", "protein"}:
         raise ValueError("Invalid paired PIS policy")
+    if getattr(args, 'fourfold_missing_policy', 'ignore-missing') not in {'ignore-missing', 'require-all'}:
+        raise ValueError('Invalid fourfold missing-codon policy')
     if args.seqtype == "prot" and args.min_nucl_pis is not None:
         raise ValueError("--min-nucl-pis is not applicable to prot mode")
     if args.seqtype == "nucl" and args.min_protein_pis is not None:
@@ -438,7 +442,7 @@ def generate_pipeline_report(args, root, run_metadata=None):
         from phyloprep_report import write_report
         if run_metadata is None:
             keys = ('seqtype', 'align_software', 'genetic_code', 'notrim',
-                    'missing_taxa', 'min_length', 'max_n_ratio', 'max_x_ratio',
+                    'missing_taxa', 'fourfold_missing_policy', 'min_length', 'max_n_ratio', 'max_x_ratio',
                     'max_gap_ratio', 'min_nucl_pis', 'min_protein_pis',
                     'paired_pis_policy', 'allow_internal_stop', 'G', 'N', 'X')
             run_metadata = dict(module='phyloprep.py',
@@ -758,7 +762,8 @@ def build_group_matrices(args, root, context):
         fourfold = stage / "fourfold.fasta"
         report_phase(args, f'{variant}/{seqtype}: extracting four-fold sites')
         run("extract_4-fold_degenerated_sites.py", "-i", supermatrix,
-            "-o", fourfold, "-g", args.genetic_code)
+            "-o", fourfold, "-g", args.genetic_code,
+            '--fourfold-missing-policy', getattr(args, 'fourfold_missing_policy', 'ignore-missing'))
         try:
             with AlignmentSpool(fourfold, directory=fourfold.parent):
                 pass
@@ -777,7 +782,9 @@ def build_group_matrices(args, root, context):
                                  "(possibly zero qualifying sites); final matrices were not published") from error
             print(f'[phyloprep] {seqtype}/{variant}: no usable four-fold sites; skipping FASTA/PHY/NEX for this matrix.', flush=True)
             fourfold.unlink()
-            reason = ('No four-fold sites satisfy the all-taxon rule in this padded matrix; '
+            rule = ('all-taxon rule' if getattr(args, 'fourfold_missing_policy', 'ignore-missing') == 'require-all'
+                    else 'observed-taxon rule (at least two qualifying taxa; only complete ??? codons ignored)')
+            reason = (f'No four-fold sites satisfy the {rule} in this padded matrix; '
                       'other matrices were retained.\n' if padded_empty else
                       'No usable four-fold sites; no matrix exported.\n')
             (stage / 'fourfold.skipped.txt').write_text(reason)

@@ -182,9 +182,18 @@ const server = http.createServer((req,res) => {
      }
      const missing=rerun.files.find(file=>file.name==='matrices/codon/raw/supermatrix.missing.tsv');
      if(!(await PhyloPrepSave.readText(missing)).includes('e2e1\tsp_b\t7\t12\t6\t?'))throw Error('Missing block provenance lost');
-     const skipped=rerun.files.find(file=>file.name==='matrices/codon/raw/fourfold.skipped.txt');
-     if(!skipped || !(await PhyloPrepSave.readText(skipped)).includes('all-taxon rule'))throw Error('An empty padded fourfold dataset prevented valid matrix publication');
-     if(rerun.files.some(file=>file.name==='matrices/codon/raw/fourfold.fasta'))throw Error('Empty fourfold FASTA must not be published');
+     const fourfold=rerun.files.find(file=>file.name==='matrices/codon/raw/fourfold.fasta');
+     if(await PhyloPrepSave.readText(fourfold)!=='>sp_a\nTT\n>sp_b\nT?\n>sp_c\n?T\n')throw Error('Default observed-taxon fourfold selection failed');
+     const html=rerun.files.find(file=>file.name==='phyloprep-report.html');
+     const report=JSON.parse((await PhyloPrepSave.readText(html)).match(/id="report-data">(.*?)<\/script>/s)[1]);
+     if(report.provenance.parameters.fourfold_missing_policy!=='ignore-missing')throw Error('Fourfold rule missing from report provenance');
+     const strictFolder=await e2e.getDirectoryHandle('strict-fourfold',{create:true});
+     outputDirectoryHandle=strictFolder;outputSaveSession=createOutputSaveSession(strictFolder);producedFiles=new Map();
+     const strict=await runPhyloPrepBrowserWorkflow({...request,options:{...request.options,fourfold_missing_policy:'require-all'}});
+     await outputSaveSession.settle();
+     const skipped=strict.files.find(file=>file.name==='matrices/codon/raw/fourfold.skipped.txt');
+     if(!skipped || !(await PhyloPrepSave.readText(skipped)).includes('all-taxon rule'))throw Error('Strict fourfold strategy did not skip an empty dataset');
+     if(strict.files.some(file=>file.name==='matrices/codon/raw/fourfold.fasta'))throw Error('Strict selection published empty fourfold FASTA');
    }finally{runBrowserAlignment=align;releaseIdleWorkers({pyodide:true});}
    return {calls,size:matrix.size};
  });

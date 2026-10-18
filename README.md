@@ -116,6 +116,7 @@ flowchart LR
 | `-st` | `codon`, `nucl`, `prot`, or `pseudogene`. |
 | `-t N`, `-j N` | MAFFT/MUSCLE threads and concurrent jobs. |
 | `--missing-taxa` | Default: `pad-gaps`, which fills absent taxon sequences with `?`. Select `skip-gene` to require complete taxon coverage at every retained locus. |
+| `--fourfold-missing-policy` | Default: `ignore-missing` ignores complete `???` codons and requires at least two observed taxa. `require-all` requires every taxon to qualify. |
 | `--min-length`, `--max-*-ratio` | Representation-specific QC thresholds. Independent matrices use each side's own QC and PIS threshold. Additional paired matrices require both sides to pass non-PIS QC, then apply `--paired-pis-policy`. |
 | `--allow-internal-stop` | Retain a protein locus or paired codon/protein locus when an internal stop is observed directly or recorded by preprocessing as masked to `NNN/X`. The masked state is not restored. |
 | `--paired-pis-policy` | `both` (default), `either`, `codon`, or `protein`; controls how paired codon/protein PIS decisions are combined while keeping the final locus set identical in both matrices. |
@@ -334,7 +335,14 @@ python split_codon_seqence_alignment.py -i supermatrix.fasta
 
 ### `extract_4-fold_degenerated_sites.py` — four-fold sites
 
-Retains third positions only if all taxa have valid matching four-fold codons. Ambiguity and gaps exclude a site.
+Extracts third positions using `--fourfold-missing-policy ignore-missing|require-all`, shared with `phyloprep.py` and the browser:
+
+| Policy | Eligibility |
+|---|---|
+| `ignore-missing` (default) | Ignore only complete `???` codons. Require at least two observed taxa; every observed codon must be fourfold-degenerate under `-g` and share the first two bases. Retain `?` for missing taxa in the output. |
+| `require-all` | Require every taxon to have a qualifying codon with matching first two bases; any missing codon excludes the site. This retains the previous all-taxon rule. |
+
+In both policies, `NNN`, gaps (`---` or partial gaps), partial missing codons (such as `GC?`), non-fourfold codons and conflicting observed prefixes exclude the site. The default evaluates degeneracy only in observed taxa; it makes no claim about the unobserved codons of missing taxa. A low observed-taxon count does not establish adequate phylogenetic coverage. Selection remains block-based and uses bounded memory. This option does not change the separate pairwise 4DTV calculator.
 
 ```bash
 python extract_4-fold_degenerated_sites.py -i supermatrix.fasta -o fourfold.fasta -g 1
@@ -614,10 +622,10 @@ Browser inputs are staged lazily from File/Blob references, and large exports re
 
 ### Artificial missing data in concatenated matrices
 
-Artificial padding uses `?`, an existing alignment gap remains `-`, and observed sequence ambiguity remains `N`/`X`. The default policy is `--missing-taxa pad-gaps`, with `?` as its fill character. FASTA, relaxed PHYLIP, NEXUS and the simplified AXT exporter preserve `?`; NEXUS declares `missing=? gap=-`. Codon padding consists of complete `???` triplets, and codon-position derivatives preserve their corresponding `?` characters. Fourfold extraction retains its strict all-taxon eligibility rule: missing/gapped codons do not qualify. Raw-input normalization still maps source `?` to N/X; preservation applies to aligned-data export.
+Artificial padding uses `?`, an existing alignment gap remains `-`, and observed sequence ambiguity remains `N`/`X`. The default policy is `--missing-taxa pad-gaps`, with `?` as its fill character. FASTA, relaxed PHYLIP, NEXUS and the simplified AXT exporter preserve `?`; NEXUS declares `missing=? gap=-`. Codon padding consists of complete `???` triplets, and codon-position derivatives preserve their corresponding `?` characters. Fourfold extraction uses the selected missing-codon policy; `ignore-missing` ignores only complete `???` codons, whereas `require-all` excludes them. Ambiguous and gapped observed codons exclude a site in both policies. Raw-input normalization still maps source `?` to N/X; preservation applies to aligned-data export.
 
 The sparse missing-block table is the authoritative record of artificial padding: a literal `?` already present in an input alignment is preserved but is not recorded as newly padded data. `alignment_qc.py` reports `Missing_ratio` separately from `Gap_ratio` and N/X ratios; it counts literal `?` characters and cannot establish their origin without the missing-block table. Missing states do not contribute resolved states to variable/PIS counts. Existing gap and N/X thresholds retain their literal-symbol definitions; no new missing-data threshold is introduced.
 
 IQ-TREE and standard PAML/MrBayes analyses can interpret `?` as missing data. In PAML, `cleandata=1` removes affected sites (whole codons in codon analysis) whether they contain `-` or `?`; changing the marker does not prevent that loss. Check the accepted symbols of other downstream importers, particularly Ka/Ks tools consuming the simplified AXT format. These markers do not establish biological gene absence or prove that every alignment gap is an indel.
 
-With the default `--missing-taxa pad-gaps`, taxon labels must still identify the same taxa across loci; use `-m` when inputs contain gene IDs. Padding does not establish taxon identity or orthology. Alignment QC runs before concatenation, so its gap/ambiguity thresholds do not limit padding added afterward; inspect the final matrix coverage and missing-block report. If artificial padding is present and no sites satisfy the strict all-taxon fourfold rule, PhyloPrep writes `fourfold.skipped.txt` and retains the full and codon-position matrices. It does not relax fourfold eligibility. Empty fourfold results from a complete normal codon matrix remain an error.
+With the default `--missing-taxa pad-gaps`, taxon labels must still identify the same taxa across loci; use `-m` when inputs contain gene IDs. Padding does not establish taxon identity or orthology. Alignment QC runs before concatenation, so its gap/ambiguity thresholds do not limit padding added afterward; inspect the final matrix coverage and missing-block report. If artificial padding is present and no sites satisfy the selected fourfold rule, PhyloPrep writes `fourfold.skipped.txt` and retains the full and codon-position matrices. The selected rule is recorded in the run settings. Empty fourfold results from a complete normal codon matrix remain an error.

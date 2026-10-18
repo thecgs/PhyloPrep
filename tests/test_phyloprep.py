@@ -83,22 +83,28 @@ def test_unmapped_gene_ids_that_cannot_concatenate_keep_a_report_and_stop(tmp_pa
     assert not (output / "matrices").exists()
 
 
-def test_default_padding_keeps_incomplete_loci_without_fourfold_sites(tmp_path, fake_aligner):
+@pytest.mark.parametrize('policy', [None, 'require-all'])
+def test_default_padding_keeps_incomplete_loci_with_both_fourfold_policies(tmp_path, fake_aligner, policy):
     _, env = fake_aligner
     first, second = tmp_path / 'gene1.fa', tmp_path / 'gene2.fa'
     first.write_text('>a\nGCT\n>b\nGCC\n')
     second.write_text('>b\nGGT\n>c\nGGA\n')
     output = tmp_path / 'results'
     result = invoke(tmp_path, env, '-i', first, second, '-o', output,
-                    '-t', '1', '--notrim', '--no-report')
+                    '-t', '1', '--notrim', '--no-report',
+                    *(['--fourfold-missing-policy', policy] if policy else []))
     assert result.returncode == 0, result.stdout + result.stderr
     for branch in (output / 'matrices', output / 'matrices/paired'):
         codon = branch / 'codon/raw'
         check_formats(codon, 'supermatrix', {'a': 'GCT???', 'b': 'GCCGGT', 'c': '???GGA'})
         check_formats(codon, 'codon3rd.supermatrix', {'a': 'T?', 'b': 'CT', 'c': '?A'})
         check_formats(branch / 'prot/raw', 'supermatrix', {'a': 'A?', 'b': 'AG', 'c': '?G'})
-        assert 'all-taxon rule' in (codon / 'fourfold.skipped.txt').read_text()
-        assert all(not (codon / ('fourfold.' + ext)).exists() for ext in ('fasta', 'phy', 'nex'))
+        if policy == 'require-all':
+            assert 'all-taxon rule' in (codon / 'fourfold.skipped.txt').read_text()
+            assert all(not (codon / ('fourfold.' + ext)).exists() for ext in ('fasta', 'phy', 'nex'))
+        else:
+            check_formats(codon, 'fourfold', {'a': 'T?', 'b': 'CT', 'c': '?A'})
+            assert not (codon / 'fourfold.skipped.txt').exists()
 
 
 def test_mapping_that_collapses_paralogs_is_reported_by_qc(tmp_path, fake_aligner):

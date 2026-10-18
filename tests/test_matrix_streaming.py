@@ -76,7 +76,8 @@ def test_invalid_matrix_keeps_existing_output(tmp_path, content):
 
 
 @pytest.mark.parametrize('code', [1, 2, 5])
-def test_fourfold_matches_column_definition_across_blocks(tmp_path, code):
+@pytest.mark.parametrize('policy', ['ignore-missing', 'require-all'])
+def test_fourfold_matches_column_definition_across_blocks(tmp_path, code, policy):
     rng = random.Random(17)
     fragments = [[], [], []]
     expected = [[], [], []]
@@ -85,15 +86,18 @@ def test_fourfold_matches_column_definition_across_blocks(tmp_path, code):
         prefix = rng.choice(['GC', 'CG', 'AG', 'TC', 'AT'])
         codons = [prefix + rng.choice('ACGT') for _ in fragments]
         if rng.random() < 0.2:
-            codons[1] = rng.choice(['NNN', '---', 'GCT', 'ATG'])
+            codons[1] = rng.choice(['NNN', '---', 'GCT', 'ATG', '???'])
+        if rng.random() < 0.15:
+            codons[0] = '???'
         for row, codon in zip(fragments, codons):
             row.append(codon)
-        if all(codon in eligible and codon[:2] == codons[0][:2] for codon in codons):
+        observed = [codon for codon in codons if codon != '???'] if policy == 'ignore-missing' else codons
+        if len(observed) >= 2 and all(codon in eligible and codon[:2] == observed[0][:2] for codon in observed):
             for row, codon in zip(expected, codons):
                 row.append(codon[2])
     sequences = [''.join(row) for row in fragments]
     source, output = tmp_path / 'in.fa', tmp_path / 'fourfold.fa'
     source.write_text(''.join(f'>t{i}\n{seq}\n' for i, seq in enumerate(sequences)))
-    fourfold.extract_four_fold_site(source, output, code)
+    fourfold.extract_four_fold_site(source, output, code, policy)
     with AlignmentSpool(output) as matrix:
         assert [''.join(matrix.chunks(i)) for i in range(3)] == [''.join(row) for row in expected]
