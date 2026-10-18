@@ -19,11 +19,16 @@ function acknowledgeOutput(runId, message, timeout, label) {
 }
 
 async function streamOutputFiles(runtime, runId, files, transferId, waitForSave = false, transferred = new Map()) {
+  if (transferId && files.some(file => file.release)) {
+    self.postMessage({type: 'stage', runId, stage: 'process',
+      label: 'QC and matrix construction for this branch finished; checking saved outputs and clearing temporary copies'});
+  }
   for (let index = 0; index < files.length; index++) {
     const file = files[index];
     if (!file.path) continue;
     if (file.sha256 && transferred.get(file.name) === file.sha256) {
-      const message = { type: "output-file-reuse", index, name: file.name, transferId };
+      const message = { type: "output-file-reuse", index, name: file.name, transferId,
+        release: Boolean(file.release), fileCount: files.length };
       if (file.release && waitForSave) {
         const ack = await acknowledgeOutput(runId, message, 300000, 'Local output reuse acknowledgement timed out');
         if (ack?.saved && runtime.FS.analyzePath(file.path).exists) runtime.FS.unlink(file.path);
@@ -433,7 +438,7 @@ self.addEventListener("message", async (event) => {
         catch (error) { request.options = { ...request.options, report_dependency_error:
           `Could not load the browser report dependency sqlite3: ${error.message || error}` }; }
       }
-      self.postMessage({ type: "stage", runId, stage: "process", label: "Running PhyloPrep QC and matrix construction" });
+      self.postMessage({ type: "stage", runId, stage: "process", label: "Preparing downstream alignment processing" });
       const manifest = stage.files.map(({ name, path, role, inputKey, fasta, on_disk }) => ({ name, path, role, inputKey, fasta, on_disk }));
       runtime.globals.set("_phyloprep_progress_callback", (eventJson) => {
         self.postMessage({ type: "progress", runId, progress: JSON.parse(eventJson) });
