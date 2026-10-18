@@ -17,26 +17,28 @@ assert.equal(await hash.blob({size:large.size,slice(start,end){maxSlice=Math.max
 assert.ok(maxSlice<=1048576);
 
 function folder(){
-  const files=new Map(),directories=new Set(['']);let time=0,writes=0;
+  const files=new Map(),directories=new Set(['']);let time=0,writes=0,reads=0;
   function directory(prefix){return {
+    async removeEntry(name){if(!files.delete(prefix+name))throw Object.assign(Error('not found'),{name:'NotFoundError'});},
     async getDirectoryHandle(name,{create=false}={}){
-      const key=prefix+name+'/';if(!directories.has(key)&&!create)throw Error('not found');directories.add(key);return directory(key);
+      const key=prefix+name+'/';if(!directories.has(key)&&!create)throw Object.assign(Error('not found'),{name:'NotFoundError'});directories.add(key);return directory(key);
     },
     async getFileHandle(name,{create=false}={}){
       const key=prefix+name;if(!files.has(key)&&!create)throw Error('not found');
-      return {async getFile(){const item=files.get(key);if(!item)throw Error('not found');return new File([item.blob],name,{lastModified:item.time});},
+      return {async getFile(){reads++;const item=files.get(key);if(!item)throw Error('not found');return new File([item.blob],name,{lastModified:item.time});},
         async createWritable(){let blob;return {async write(value){blob=new Blob([value]);},async close(){files.set(key,{blob,time:++time});writes++;},async abort(){}};}};
     },
   };}
-  return {root:directory(''),files,get writes(){return writes;}};
+  return {root:directory(''),files,get writes(){return writes;},get reads(){return reads;}};
 }
 const disk=folder(),writer=save.createWriter(disk.root);
-const engine={bundleSha256:'bundle-a',files:['MSAP.py','AA2Codon.py','trimAlnSeq.py','sequence_audit.py','msap_io.py'].map(name=>({name,sha256:digest(name)})),aligners:{mafft:{packageVersion:'test',maximumMemoryBytes:4294967296}}};
+const engine={bundleSha256:'bundle-a',files:['MSAP.py','AA2Codon.py','trimAlnSeq.py','sequence_audit.py','msap_io.py','rename_taxa.py'].map(name=>({name,sha256:digest(name)})),aligners:{mafft:{packageVersion:'test',maximumMemoryBytes:4294967296}}};
 const input={name:'gene.fa',blob:new File(['>a\nATGGCT\n'],'gene.fa')};
 async function fingerprint(file){const source=await save.readBlob(file);return {name:file.name,bytes:source.size,sha256:await hash.blob(source)};}
 const options={seqtype:'codon',notrim:true};
 const store=reuse.create(disk.root,engine,options,{fingerprint});
 assert.equal(await store.restore(input),null);
+assert.equal(await store.restoreBatch([input]),null);
 const products=[];
 for(const name of ['gene.mafft.codon.aln.fasta','gene.mafft.prot.aln.fasta','gene.sequence_changes.tsv']){
   const file=save.record({name,content:'>a\nATGGCT\n'});
@@ -64,6 +66,49 @@ const path='alignments/gene.mafft.codon.aln.fasta',original=disk.files.get(path)
 disk.files.set(path,{...original,blob:new Blob(['>a\nATGGCC\n'])});
 assert.equal(await store.restore(input),null,'Same-size corrupt alignments must fail SHA validation');
 disk.files.set(path,original);
+// A complete stage hit reads only its manifest, not locus caches or saved products.
+const batchCheckpoint=await store.checkpointBatch([input],products);
+assert.ok(batchCheckpoint);writer.save(batchCheckpoint);await writer.settle();
+const reads=disk.reads;
+const fast=await store.restoreBatch([input]);
+assert.equal(disk.reads-reads,1);assert.equal(fast.files.length,3);
+assert.ok(fast.files.every(file=>file.storage.disk.root));
+assert.equal(await save.readText(fast.files[0]),'>a\nATGGCT\n');
+assert.equal(await store.restoreBatch([{...input,blob:new File(['>a\nATGGCT\n'],'gene.fa',{lastModified:input.blob.lastModified+1})}]),null);
+assert.equal(await store.restoreBatch([{...input,blob:new Blob(['>a\nATGGCT\n'])}]),null);
+assert.equal(await reuse.create(disk.root,engine,{...options,genetic_code:2},{fingerprint}).restoreBatch([input]),null);
+disk.files.delete(path);
+assert.ok(await store.restoreBatch([input]),'Stage hits defer output reads until actual use');
+await assert.rejects(()=>save.readText(fast.files.find(file=>file.name.includes('.codon.'))),/not found/);
+disk.files.set(path,original);
+await store.clearBatch();assert.equal(await store.restoreBatch([input]),null);
+
+// Renaming binds mapping content, source alignment hashes and renamer sources.
+const aligned=products.filter(file=>file.name.endsWith('.aln.fasta'));
+const mapping={name:'mapping.tsv',bytes:10,sha256:digest('mapping')};
+const rename=reuse.createRename(disk.root,engine,mapping)('raw');
+assert.deepEqual(Array.from((await rename.restore(aligned)).files),[]);
+const renamed=aligned.map(file=>save.record({name:`renamed/${file.name.includes('.codon.')?'codon':'prot'}/raw/${file.name}`,content:'>taxon\nAA\n',size:10,sha256:digest('>taxon\nAA\n')}));
+for(const file of renamed)writer.save(file);await writer.settle();
+const renameCheckpoint=rename.checkpoint(aligned,renamed);assert.ok(renameCheckpoint);writer.save(renameCheckpoint);await writer.settle();
+const renameReads=disk.reads, cachedRename=await rename.restore(aligned);
+assert.equal(cachedRename.complete,true);assert.equal(disk.reads-renameReads,1);
+assert.equal(cachedRename.files.length,2);
+const changedAlignment=[{...aligned[0],sha256:digest('new alignment')},aligned[1]];
+const partial=await rename.restore(changedAlignment);
+assert.equal(partial.complete,false);assert.equal(partial.files.length,1);assert.ok(partial.files[0].name.includes('/prot/'));
+assert.equal((await reuse.createRename(disk.root,engine,{...mapping,sha256:digest('new map')})('raw').restore(aligned)).files.length,0);
+const newRenamer=structuredClone(engine);newRenamer.files.find(file=>file.name==='rename_taxa.py').sha256=digest('new implementation');
+assert.equal((await reuse.createRename(disk.root,newRenamer,mapping)('raw').restore(aligned)).files.length,0);
+await rename.clear();assert.equal((await rename.restore(aligned)).complete,false);
+writer.save({name:'phyloprep-run.json',content:JSON.stringify({engine_metadata:engine,inputs:[{...mapping,input_key:'mapping'}],outputs:[
+  ...aligned.map(file=>({name:'alignments/'+file.name,bytes:file.size,sha256:file.sha256})),
+  ...renamed.map(file=>({name:file.name,bytes:file.size,sha256:file.sha256}))]})});await writer.settle();
+const oldRunRename=await reuse.createRename(disk.root,engine,mapping)('raw').restore(aligned);
+assert.equal(oldRunRename.complete,false,'Legacy manifests must use per-file checks, not the complete-stage fast path');
+assert.equal(oldRunRename.files.length,2);
+
+
 const cachePath=checkpoint.name;disk.files.delete(cachePath);
 const previous={engine_metadata:engine,parameters:options,inputs:[await fingerprint(input)],outputs:products.map(file=>({name:'alignments/'+file.name,bytes:file.size,sha256:file.sha256}))};
 writer.save({name:'phyloprep-run.json',content:JSON.stringify(previous)});await writer.settle();

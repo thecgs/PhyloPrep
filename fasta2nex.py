@@ -125,6 +125,30 @@ def write_nexus(matrix, handle, seqtype):
     handle.write('  ;\nend;\n')
 
 
+def export_formats(infile, phylip, nexus, seqtype='DNA', progress=None):
+    """Prepare one bounded spool for both formats, sharing IDs, lengths and edits."""
+    from fasta2phy import write_phylip
+    phylip, nexus = Path(phylip), Path(nexus)
+    reports = [str(path) + '.sequence_changes.tsv' for path in (phylip, nexus)]
+    destinations = [phylip, nexus, *reports]
+    for index, destination in enumerate(destinations):
+        check_output_path(destination, [infile, *destinations[:index]])
+    matrix, changes = prepare_records(infile, seqtype, phylip.absolute().parent)
+    try:
+        for path, writer in ((phylip, write_phylip), (nexus, lambda data, handle: write_nexus(data, handle, seqtype))):
+            if progress:
+                progress(path)
+            with atomic_output(path, inputs=[infile]) as handle:
+                writer(matrix, handle)
+        if changes:
+            for report in reports:
+                changes.publish(report)
+        return {'sequence_count': len(matrix.records), 'alignment_length': matrix.length}
+    finally:
+        matrix.close()
+        changes.close()
+
+
 def fasta2nex(infile, outfile=None, seqtype='DNA', changes_report=None):
     """Convert an aligned FASTA file to NEXUS using bounded memory."""
     check_output_path(outfile, inputs=[infile])

@@ -59,6 +59,12 @@ def test_codon_pipeline_and_resume(tmp_path, fake_aligner, mapping_alias):
         for seqtype in ("codon", "prot"):
             paths = (output / "qc" / seqtype / variant / "alignment.pass.tsv").read_text()
             assert f".{seqtype}{suffix}" in paths
+            if mapping_alias:
+                from msap_io import expand_input_paths
+                renamed = output / 'renamed' / seqtype / variant
+                pathlist = renamed / f'all.{seqtype}{suffix}.pathlist'
+                assert pathlist.read_text().splitlines() == [f'gene.mafft.{seqtype}{suffix}']
+                assert expand_input_paths([pathlist]) == [str((renamed / f'gene.mafft.{seqtype}{suffix}').resolve())]
     assert source.read_text() == ">a\nGCTGGT\n>b\nGCCGGA\n"
     result = invoke(tmp_path, env, *args)
     assert result.returncode == 0, result.stdout + result.stderr

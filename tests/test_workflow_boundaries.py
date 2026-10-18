@@ -127,8 +127,16 @@ def test_identical_independent_and_paired_sets_reuse_matrix_products(tmp_path, m
     calls = []
     build = phyloprep.build_group_matrices
     def record(*arguments):
-        calls.append(arguments[2]['stage'])
+        context = arguments[2]
+        assert context['independent_count'] == context['paired_count'] == 1
+        assert context['paired_matches_independent']
+        calls.append(context['stage'])
         return build(*arguments)
+    read_text = Path.read_text
+    def no_retained_reread(path, *arguments, **keywords):
+        assert not path.name.endswith('.retained.tsv'), 'Retained-set decisions should reuse QC metadata'
+        return read_text(path, *arguments, **keywords)
+    monkeypatch.setattr(Path, 'read_text', no_retained_reread)
     monkeypatch.setattr(phyloprep, 'build_group_matrices', record)
     stage = tmp_path/'stage'
     phyloprep.prepare_variant(args, root, stage, 'raw')

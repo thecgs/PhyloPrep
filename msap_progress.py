@@ -2,6 +2,7 @@
 from contextlib import contextmanager
 from contextvars import ContextVar
 import json
+import os
 import sys
 import time
 
@@ -25,14 +26,14 @@ class ProgressReporter:
 
     def update(self, label=None, completed=None, status=None, force=True):
         now = self.clock()
-        if not force and now - self.last_update < self.interval:
-            return
         if label is not None:
             self.label = label
         if completed is not None:
             self.completed = completed
         if status:
             self.counts[status] = self.counts.get(status, 0) + 1
+        if not force and now - self.last_update < self.interval:
+            return
         elapsed = max(0.0, now - self.started)
         # ETA is only an estimate based on completed units; stage runtimes differ.
         eta = elapsed * (self.total - self.completed) / self.completed if self.completed else None
@@ -74,3 +75,20 @@ def report_phase(args, label):
     reporter = getattr(args, '_progress', None)
     if reporter is not None:
         reporter.update(label)
+
+
+def current_progress():
+    return _CURRENT.get()
+
+
+def task_progress(scope, total, unit='loci'):
+    """Use the same event/log schema standalone, in a subprocess, and in Pyodide."""
+    parent = current_progress()
+    reporter = ProgressReporter(scope, total, unit, callback=parent.callback if parent else None)
+    reporter.parent_label = parent.label if parent else os.environ.get('PHYLOPREP_PROGRESS_LABEL', '')
+    return reporter
+
+
+def task_label(reporter, label):
+    prefix = getattr(reporter, 'parent_label', '')
+    return f'{prefix} | {label}' if prefix else label

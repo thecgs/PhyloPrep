@@ -5,7 +5,6 @@ from __future__ import annotations
 import contextlib
 import io
 import importlib
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -399,8 +398,9 @@ def _visible_output_files(root, manifest_only=False):
     return files
 
 
-def _export_output_files(root, files, path_lists=()):
+def _export_output_files(root, files, path_lists=(), fingerprints=None):
     """Prepare portable list copies; never change paths used by the engine."""
+    from msap_io import file_digest
     root = Path(root).resolve()
     list_paths = {Path(path).resolve() for path in path_lists}
     for item in files:
@@ -426,11 +426,7 @@ def _export_output_files(root, files, path_lists=()):
                     target.write(entry + '\n')
             path = exported
             item.update(path=str(path), size=path.stat().st_size)
-        digest = hashlib.sha256()
-        with path.open('rb') as handle:
-            for chunk in iter(lambda: handle.read(1024 * 1024), b''):
-                digest.update(chunk)
-        item['sha256'] = digest.hexdigest()
+        item['sha256'] = fingerprints.signature(path)['sha256'] if fingerprints is not None else file_digest(path)
     return files
 
 
@@ -443,11 +439,12 @@ def _phyloprep_finalize_steps(file_manifest, options, output_root, engine_root="
     mapping_supplied = False
     phyloprep = None
     archived = {}
+    fingerprints = None
 
     def current_outputs():
         files = _visible_output_files(root, manifest_only=manifest_only)
         if manifest_only:
-            files = _export_output_files(root, files)
+            files = _export_output_files(root, files, fingerprints=fingerprints)
             return list({**archived, **{item['name']: item for item in files}}.values())
         return files
 
@@ -458,10 +455,12 @@ def _phyloprep_finalize_steps(file_manifest, options, output_root, engine_root="
         phyloprep = importlib.import_module("phyloprep")
         sequence_audit = importlib.import_module("sequence_audit")
         rename_taxa = importlib.import_module("rename_taxa")
+        fingerprints = rename_taxa.FileFingerprintCache()
 
         sources = [Path(item["path"]) for item in file_manifest if item.get("role") == "source"]
         batch_outputs = [item for item in file_manifest if item.get("role") == "batch-output"]
         mapping_items = [item for item in file_manifest if item.get("role") == "mapping"]
+        cached_renamed = {item.get("rename_path"): item for item in file_manifest if item.get("role") == "renamed-output"}
         if not sources:
             raise ValueError("No source FASTA files were supplied to the PhyloPrep browser finalizer.")
         phyloprep.write_paths(root / 'inputs.pathlist', [source.name for source in sources])
@@ -538,6 +537,7 @@ def _phyloprep_finalize_steps(file_manifest, options, output_root, engine_root="
             _report_dependency_error=options.get('report_dependency_error'),
             _report_context=options.get('report_context'),
             _browser_runtime=True,
+            _fingerprints=fingerprints,
             missing_taxa=str(options.get("missing_taxa", "pad-gaps")),
             min_length=number("min_length", 1, int),
             max_n_ratio=number("max_n_ratio", 1.0),
@@ -572,13 +572,37 @@ def _phyloprep_finalize_steps(file_manifest, options, output_root, engine_root="
             for index, variant in enumerate(variants):
                 if disk_backed:
                     yield {"load_variant": variant, "files": []}
+                # Deferred files have now been read, SHA-256 verified and staged by the worker.
+                for item in file_manifest:
+                    if item.get('on_disk') and item.get('sha256') and item.get('verified_on_load'):
+                        if item.get('role') == 'batch-output':
+                            target = alignments / Path(item['name']).name
+                        elif item.get('role') == 'renamed-output':
+                            relative = Path(item['rename_path'])
+                            if relative.is_absolute() or '..' in relative.parts or relative.parts[0] != 'renamed':
+                                raise ValueError('Invalid cached rename path')
+                            target = root / relative
+                        else:
+                            continue
+                        if target.is_file():
+                            fingerprints.remember(target, item['sha256'])
                 if incremental and mapping:
                     args._prepared_renamed = {}
                     kinds = ('codon', 'prot') if args.seqtype == 'codon' else (args.seqtype,)
                     for kind in kinds:
                         paths = phyloprep.alignment_paths(args, root, kind, variant)
                         renamed = []
-                        iterator = phyloprep.iter_renamed_alignments(args, paths, root, kind, variant)
+                        pending = []
+                        for source in paths:
+                            relative = f"renamed/{kind}/{variant}/{source.name}"
+                            target = root / relative
+                            item = cached_renamed.get(relative)
+                            if item is not None and target.is_file():
+                                renamed.append(target)
+                                archived[relative] = dict(name=relative, path=str(target), size=target.stat().st_size, sha256=item["sha256"])
+                            else:
+                                pending.append(source)
+                        iterator = phyloprep.iter_renamed_alignments(args, pending, root, kind, variant)
                         while True:
                             with analysis_step():
                                 try:
@@ -588,11 +612,14 @@ def _phyloprep_finalize_steps(file_manifest, options, output_root, engine_root="
                                 report_phase(args, f'{variant}/{kind}: renamed {target.name}')
                             renamed.append(target)
                             item = dict(name=target.relative_to(root).as_posix(), path=str(target), size=target.stat().st_size)
-                            checkpoint = _export_output_files(root, [item])
+                            checkpoint = _export_output_files(root, [item], fingerprints=fingerprints)
                             archived[item['name']] = dict(item)
                             # Keep the OPFS working copy for QC; saving is now per locus.
                             yield checkpoint
-                        args._prepared_renamed[(kind, variant)] = renamed
+                        by_name = {path.name: path for path in renamed}
+                        args._prepared_renamed[(kind, variant)] = [by_name[path.name] for path in paths]
+                    if options.get("rename_checkpoints"):
+                        yield {"rename_checkpoint": variant, "files": []}
                 # Each runPythonAsync call can have a different Context. Leave
                 # progress/log/engine scopes before yielding files to JavaScript.
                 with analysis_step():
@@ -616,9 +643,11 @@ def _phyloprep_finalize_steps(file_manifest, options, output_root, engine_root="
                                     continue
                                 item.update(name=folder + '/' + item['name'], release=True)
                                 checkpoint.append(item)
-                    checkpoint = _export_output_files(root, checkpoint)
+                    checkpoint = _export_output_files(root, checkpoint, fingerprints=fingerprints)
                     archived.update((item['name'], dict(item)) for item in checkpoint)
                     yield checkpoint
+                    # Saved branch files have been released; do not retain a run-wide cache.
+                    fingerprints.clear()
             with analysis_step():
                 report_phase(args, 'Publishing matrices')
                 phyloprep.publish_matrices(matrix_root, root, variants, block_signals=False)

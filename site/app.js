@@ -128,7 +128,7 @@ const modules = [
       { flag: "-s", label: "Alignment software", description: "Runs locally through Biowasm/WebAssembly. MAFFT E-INS-i is the browser default through Biowasm's compiled tbfast + dvtditr pipeline; CLI -s mafft continues to use upstream mafft --auto and can differ.", type: "select", value: "mafft", options: [["mafft", "MAFFT E-INS-i (Biowasm, default)"], ["muscle", "MUSCLE (Biowasm)"]], token: "align_software" },
       { flag: "-t", label: "Threads per locus", description: "Browser fixed to one thread for GitHub Pages/WebAssembly compatibility.", type: "select", value: "1", options: [["1", "1 (browser fixed)"]], token: "thread" },
       { flag: "-j", label: "Concurrent loci", description: "Browser edition processes loci sequentially to keep memory predictable.", type: "select", value: "1", options: [["1", "1 (browser sequential)"]], token: "jobs" },
-      { flag: "--no-resume", label: "Recompute existing alignments", description: "With a selected output folder, matching saved alignments are verified and reused by default. Check to rerun alignment and trimming. QC and matrices are always rebuilt.", type: "checkbox", value: false, token: "no_resume" },
+      { flag: "--no-resume", label: "Recompute existing alignments", description: "With a selected output folder, complete checkpoints skip alignment and renaming; otherwise loci are checked individually. Check to recompute alignment, trimming and renaming. QC and matrices are always rebuilt.", type: "checkbox", value: false, token: "no_resume" },
       { flag: "-ts", label: "Trimming software", description: "Browser fixed to PhyloPrep's bundled trimAlnSeq.py.", type: "select", value: "trimAlnSeq", options: [["trimAlnSeq", "trimAlnSeq.py (browser fixed)"]], token: "trim_software" },
       { flag: "-n, --notrim", label: "Skip trimming", description: "Process raw alignments only.", type: "checkbox", value: false, token: "notrim" },
       { flag: "--no-report", label: "Skip HTML report", description: "The English report is generated after matrix publication by default. Report failures preserve all completed analysis outputs and show the reason.", type: "checkbox", value: false, token: "no_report" },
@@ -160,7 +160,7 @@ const modules = [
       { flag: "-s", label: "Alignment software", description: "Runs locally through Biowasm/WebAssembly. MAFFT E-INS-i is the browser default through Biowasm's compiled tbfast + dvtditr pipeline; CLI -s mafft continues to use upstream mafft --auto and can differ.", type: "select", value: "mafft", options: [["mafft", "MAFFT E-INS-i (Biowasm, default)"], ["muscle", "MUSCLE (Biowasm)"]], token: "align_software" },
       { flag: "-t", label: "Threads per locus", description: "Browser fixed to one thread.", type: "select", value: "1", options: [["1", "1 (browser fixed)"]], token: "thread" },
       { flag: "-j", label: "Concurrent loci", description: "Browser edition processes loci sequentially.", type: "select", value: "1", options: [["1", "1 (browser sequential)"]], token: "jobs" },
-      { flag: "--no-resume", label: "Recompute existing alignments", description: "With a selected output folder, matching saved alignments are verified and reused by default. Check to rerun alignment and trimming. QC and matrices are always rebuilt.", type: "checkbox", value: false, token: "no_resume" },
+      { flag: "--no-resume", label: "Recompute existing alignments", description: "With a selected output folder, complete checkpoints skip alignment and renaming; otherwise loci are checked individually. Check to recompute alignment, trimming and renaming. QC and matrices are always rebuilt.", type: "checkbox", value: false, token: "no_resume" },
       { flag: "-ts", label: "Trimming software", description: "Browser fixed to PhyloPrep's bundled trimAlnSeq.py.", type: "select", value: "trimAlnSeq", options: [["trimAlnSeq", "trimAlnSeq.py (browser fixed)"]], token: "trim_software" },
       { flag: "-n, --notrim", label: "Skip trimming", description: "Keep raw alignments only.", type: "checkbox", value: false, token: "notrim" },
       proteinStopParameter(),
@@ -1397,6 +1397,12 @@ function createPyodideWorker() {
     const message = event.data;
     if (pyodideWorker !== worker || !activeWorkerRun || message.runId !== activeWorkerRun.id) return;
     try {
+      if (message.type === "rename-checkpoint") {
+        Promise.resolve(activeWorkerRun.onRenameCheckpoint?.(message.variant)).then(() => {
+          worker.postMessage({type:'output-chunk-ack',runId:message.runId,sequence:message.sequence});
+        }).catch(fail);
+        return;
+      }
       if (message.type === "output-file-reuse") {
         const previous = producedFiles.get(message.name);
         if (!previous) {
@@ -1513,9 +1519,10 @@ function runInWorker(payload) {
   const worker = pyodideWorker || createPyodideWorker();
   const runId = ++nextRunId;
   return new Promise((resolve, reject) => {
-    activeWorkerRun = { id: runId, resolve, reject, streamedOutputs: new Map(), deferPublish: Boolean(payload.deferPublish) };
+    activeWorkerRun = { id: runId, resolve, reject, streamedOutputs: new Map(), deferPublish: Boolean(payload.deferPublish), onRenameCheckpoint: payload.onRenameCheckpoint };
     try {
-      worker.postMessage({ type: payload.type || "run", runId, ...payload, files: payload.files?.map(PhyloPrepSave.wireFile), incrementalSave: Boolean(outputSaveSession) });
+      const {onRenameCheckpoint, ...workerPayload}=payload;
+      worker.postMessage({ type: payload.type || "run", runId, ...workerPayload, files: payload.files?.map(PhyloPrepSave.wireFile), incrementalSave: Boolean(outputSaveSession) });
     } catch (error) {
       activeWorkerRun = undefined;
       pyodideWorker = undefined;
@@ -1900,41 +1907,60 @@ async function runMsapBatchBrowserWorkflow(request) {
   const cacheFiles=[];
   const progressStarted = performance.now();
   let engineMetadata;
-  for (let index = 0; index < inputs.length; index += 1) {
-    const input = inputs[index];
-    showLocusProgress(index, inputs.length, progressStarted, `Aligning ${input.name}`);
-    const heartbeat = setInterval(() => showLocusProgress(index, inputs.length, progressStarted, `Aligning ${input.name}`), 1000);
-    let result;
-    try {
-      if(reuse && !request.options.no_resume){
-        showLocusProgress(index,inputs.length,progressStarted,`Checking saved alignment ${input.name}`);
-        result=await reuse.restore(input);
-        if(result){reusedLoci++;showLocusProgress(index,inputs.length,progressStarted,`Reusing verified alignment ${input.name}`);}
-      }
-      if(!result)result = await runMsapBrowserWorkflow({
-        ...request, script: "MSAP.py", files: [input], outputName: "", usesPathList: false,
-        expectedBundle:reuseEngine?.bundleSha256,
-      });
-    } finally {
-      clearInterval(heartbeat);
-    }
-    showLocusProgress(index + 1, inputs.length, progressStarted, input.name);
-    engineMetadata = result.engineMetadata;
-    const products = request.pipelineOutput
-      ? result.files.filter(file => !file.name.includes("/") && (file.name.endsWith(".aln.fasta") || file.name.endsWith(".sequence_changes.tsv")))
-      : result.files;
-    products.forEach(PhyloPrepSave.record);
-    outputs.push(...products);
-    const available = request.pipelineOutput
-      ? products.map(file => PhyloPrepSave.record({ ...file, name: `alignments/${file.name}` }))
-      : products;
-    if(result.reused && outputSaveSession)for(const file of available)outputSaveSession.adopt?.(file);
+  const completedBatch=reuse && !request.options.no_resume ? await reuse.restoreBatch(inputs) : null;
+  if(completedBatch){
+    setRunStage(2, `Alignment checkpoint found; skipping alignment stage (${inputs.length} loci)`);
+    outputs.push(...completedBatch.files);
+    engineMetadata=completedBatch.engineMetadata;
+    reusedLoci=inputs.length;
+    const available=request.pipelineOutput?completedBatch.files.map(file=>PhyloPrepSave.record({...file,name:'alignments/'+file.name})):completedBatch.files;
+    for(const file of available)outputSaveSession.adopt?.(file);
     await publishProducedFiles(available);
+  }else{
+    if(reuse)await reuse.clearBatch();
+    for (let index = 0; index < inputs.length; index += 1) {
+      const input = inputs[index];
+      showLocusProgress(index, inputs.length, progressStarted, `Aligning ${input.name}`);
+      const heartbeat = setInterval(() => showLocusProgress(index, inputs.length, progressStarted, `Aligning ${input.name}`), 1000);
+      let result;
+      try {
+        if(reuse && !request.options.no_resume){
+          showLocusProgress(index,inputs.length,progressStarted,`Checking saved alignment ${input.name}`);
+          result=await reuse.restore(input);
+          if(result){reusedLoci++;showLocusProgress(index,inputs.length,progressStarted,`Reusing verified alignment ${input.name}`);}
+        }
+        if(!result)result = await runMsapBrowserWorkflow({
+          ...request, script: "MSAP.py", files: [input], outputName: "", usesPathList: false,
+          expectedBundle:reuseEngine?.bundleSha256,
+        });
+      } finally {
+        clearInterval(heartbeat);
+      }
+      showLocusProgress(index + 1, inputs.length, progressStarted, input.name);
+      engineMetadata = result.engineMetadata;
+      const products = request.pipelineOutput
+        ? result.files.filter(file => !file.name.includes("/") && (file.name.endsWith(".aln.fasta") || file.name.endsWith(".sequence_changes.tsv")))
+        : result.files;
+      products.forEach(PhyloPrepSave.record);
+      outputs.push(...products);
+      const available = request.pipelineOutput
+        ? products.map(file => PhyloPrepSave.record({ ...file, name: `alignments/${file.name}` }))
+        : products;
+      if(result.reused && outputSaveSession)for(const file of available)outputSaveSession.adopt?.(file);
+      await publishProducedFiles(available);
+      if(reuse && outputSaveSession){
+        await outputSaveSession.settle();
+        if(!outputSaveSession.error){
+          const checkpoint=await reuse.checkpoint(input,result,products);
+          if(checkpoint){cacheFiles.push(checkpoint);await publishProducedFiles([checkpoint]);}
+        }
+      }
+    }
     if(reuse && outputSaveSession){
       await outputSaveSession.settle();
       if(!outputSaveSession.error){
-        const checkpoint=await reuse.checkpoint(input,result,products);
-        if(checkpoint){cacheFiles.push(checkpoint);await publishProducedFiles([checkpoint]);}
+        const checkpoint=await reuse.checkpointBatch(inputs,outputs);
+        if(checkpoint){cacheFiles.push(checkpoint);await publishProducedFiles([checkpoint]);await outputSaveSession.settle();}
       }
     }
   }
@@ -1959,7 +1985,7 @@ async function runMsapBatchBrowserWorkflow(request) {
     engineMetadata,
     reusedLoci,
     cacheFiles,
-    summary: `Processed ${inputs.length} loci with the browser MSAP batch workflow (${reusedLoci} verified saved loci reused).`,
+    summary: `Processed ${inputs.length} loci with the browser MSAP batch workflow (${reusedLoci} saved loci reused).`,
     provenance: `Browser MSAP_batch adapter · untouched MSAP.py + ${externalAlignerLabel(request.options.align_software || "mafft")}`,
   };
 }
@@ -1971,19 +1997,51 @@ async function runPhyloPrepBrowserWorkflow(request) {
   // Alignment WASM heaps cannot shrink; release idle engines before matrix construction.
   releaseIdleWorkers({pyodide:true});
   const sources = batch.inputs;
-  const batchProducts = batch.files.map(file => ({ ...file, role: "batch-output" }));
+  const batchProducts = batch.files.map(file => {
+    const name='alignments/'+file.name;
+    const saved=typeof producedFiles==='undefined'?undefined:producedFiles.get(name);
+    const reusable=saved && saved.sha256===file.sha256 && saved.size===file.size && outputSaveSession?.saved(saved);
+    return {...file,role:'batch-output',...(reusable?{saved_output_name:name}:{})};
+  });
+  const renameStages=new Map(), renamedInputs=[];
+  if(mapping && outputSaveSession && globalThis.PhyloPrepReuse){
+    const rename=PhyloPrepReuse.createRename(outputSaveSession.root,batch.engineMetadata,await fileFingerprint(mapping));
+    if(rename)for(const variant of request.options.notrim?['raw']:['raw','trimmed']){
+      const files=batch.files.filter(file=>file.name.endsWith('.aln.fasta') && file.name.endsWith('.trimmed.aln.fasta')===(variant==='trimmed'));
+      const stage=rename(variant);
+      setRunStage(2, `Looking for ${variant} rename checkpoint`);
+      const cached=request.options.no_resume?{files:[],complete:false}:await stage.restore(files);
+      // Invalidate the durable marker before any renamed output can be replaced.
+      await stage.clear();
+      renameStages.set(variant,{stage,files});
+      if(cached.complete)setRunStage(2, `Rename checkpoint found; skipping ${variant} renaming (${files.length} alignments)`);
+      else setRunStage(2, `No matching ${variant} rename checkpoint; ${cached.files.length} alignments verified individually`);
+      for(const file of cached.files){outputSaveSession.adopt?.(file);renamedInputs.push({...file,role:'renamed-output',rename_path:file.name});}
+      await publishProducedFiles(cached.files);
+    }
+  }
+  const renameCacheFiles=[];
   const finalFiles = [
     ...sources.map((file) => ({ ...file, role: "source" })),
     ...(mapping ? [{ ...mapping, role: "mapping" }] : []),
     ...batchProducts,
+    ...renamedInputs,
   ];
-  setRunStage(2, "Running PhyloPrep QC and matrix construction");
+  setRunStage(2, "Preparing saved alignments and downstream processing");
   const result = await runInWorker({
     type: "phyloprep-finalize",
+    onRenameCheckpoint: async variant=>{
+      const item=renameStages.get(variant);
+      if(!item)return;
+      await outputSaveSession.settle();
+      if(outputSaveSession.error)return;
+      const checkpoint=item.stage.checkpoint(item.files,producedFiles);
+      if(checkpoint){renameCacheFiles.push(checkpoint);await publishProducedFiles([checkpoint]);await outputSaveSession.settle();}
+    },
     script: "phyloprep.py",
     expectedBundle: batch.engineMetadata?.bundleSha256,
     files: finalFiles,
-    options: { ...request.options, report_context: {
+    options: { ...request.options, rename_checkpoints:renameStages.size>0, report_context: {
       reused_loci: batch.reusedLoci || 0,
       engine_metadata: batch.engineMetadata,
       runtime: { pyodide: '0.27.2', aligner: externalAlignerLabel(request.options.align_software || 'mafft') },
@@ -1991,7 +2049,7 @@ async function runPhyloPrepBrowserWorkflow(request) {
     outputName: "",
     usesPathList: false,
   });
-  result.files.push(...(batch.cacheFiles || []));
+  result.files.push(...(batch.cacheFiles || []),...renameCacheFiles);
   result.reused_loci = batch.reusedLoci || 0;
   if (["failed", "skipped"].includes(result.report?.status) && typeof reportFolder?.removeEntry === 'function') {
     try { await reportFolder.removeEntry('phyloprep-report.html'); }

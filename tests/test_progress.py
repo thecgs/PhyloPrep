@@ -111,3 +111,35 @@ def test_batch_failed_tasks_are_counted_without_success_label(tmp_path, fake_ali
     assert 'failed=1' in result.stderr
     assert 'Finished with failures' in result.stderr
     assert '| Complete |' not in result.stderr
+
+
+def test_throttling_retains_all_task_counts():
+    now = [0.0]
+    events = []
+    reporter = ProgressReporter('test', 3, 'loci', clock=lambda: now[0], callback=events.append, stream=io.StringIO())
+    reporter.update('start')
+    reporter.update('first', completed=1, status='included', force=False)
+    reporter.update('second', completed=2, status='included', force=False)
+    assert len(events) == 1
+    reporter.update('third', completed=3, status='skipped')
+    assert json.loads(events[-1])['counts'] == {'included': 2, 'skipped': 1}
+
+
+def test_concatenation_streams_nested_phases_and_failure(tmp_path):
+    from get_supergenes import get_supergenes
+    source = tmp_path / 'gene.fa'
+    source.write_text('>a\nAAA\n>b\nCCC\n')
+    events = []
+    parent = ProgressReporter('PhyloPrep', 4, 'stages', callback=events.append, stream=io.StringIO())
+    parent.update('raw/nucl: concatenating loci')
+    with progress_context(parent):
+        get_supergenes([str(source)], str(tmp_path / 'matrix'))
+    child = [json.loads(event) for event in events if json.loads(event)['scope'] == 'get_supergenes']
+    assert child and all('raw/nucl: concatenating loci' in event['label'] for event in child)
+    for label in ['Scanning loci', 'Concatenating loci', 'Writing supermatrix', 'Complete']:
+        assert any(label in event['label'] for event in child)
+    assert parent.completed == 0
+    source.write_text('>a\nAAA\n>a\nCCC\n')
+    with progress_context(parent), pytest.raises(ValueError, match='duplicate'):
+        get_supergenes([str(source)], str(tmp_path / 'bad'))
+    assert 'Failed' in json.loads(events[-1])['label']

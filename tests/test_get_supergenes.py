@@ -179,7 +179,13 @@ def test_spool_handles_many_taxa_and_padding(tmp_path):
     assert 'b_fa = 4-6;' in Path(prefix + '_part_iqtree.txt').read_text()
 
 
-def test_input_change_preserves_old_matrix_and_cleans_spools(tmp_path, monkeypatch):
+@pytest.mark.parametrize('content,reason', [
+    ('>a\nAAA\n>b\nCC\n', 'has length 2, expected 3'),
+    ('>a\nAAA\n>a\nCCC\n', 'duplicate sequence ID'),
+    ('', 'empty alignment'),
+    ('>a\nAA\n>b\nCC\n', 'alignment length differs from the first pass'),
+])
+def test_invalid_second_pass_preserves_old_matrix_and_cleans_spools(tmp_path, monkeypatch, content, reason):
     import get_supergenes as module
     source = tmp_path / 'a.fa'
     write_alignment(source, [('a', 'AAA'), ('b', 'CCC')])
@@ -187,11 +193,46 @@ def test_input_change_preserves_old_matrix_and_cleans_spools(tmp_path, monkeypat
     Path(prefix + '.fasta').write_text('old matrix')
     original = module.read_alignment
     def changing(path):
-        result = original(path)
-        source.write_text('>a\nTTT\n>b\nCCC\n')
-        return result
+        source.write_text(content)
+        return original(path)
     monkeypatch.setattr(module, 'read_alignment', changing)
-    with pytest.raises(ValueError, match='Input changed'):
+    with pytest.raises(ValueError, match=reason):
         module.get_supergenes([str(source)], prefix)
     assert Path(prefix + '.fasta').read_text() == 'old matrix'
     assert not list(tmp_path.glob('.supergenes-*'))
+
+
+@pytest.mark.parametrize('policy', ['pad-gaps', 'skip-gene'])
+def test_two_sequence_passes_without_content_hashing(tmp_path, monkeypatch, policy):
+    import get_supergenes as module
+    import msap_io
+    from collections import Counter
+    sources = [tmp_path / 'first.fa', tmp_path / 'second.fa']
+    for source, sequence in zip(sources, ['AAA', 'CCC']):
+        write_alignment(source, [('a', sequence), ('b', sequence)])
+    reads = Counter()
+    original = module.SeqIO.parse
+    def parse(path, *args, **kwargs):
+        reads[Path(path)] += 1
+        return original(path, *args, **kwargs)
+    def unexpected_digest(*args, **kwargs):
+        raise AssertionError('Concatenation must not hash alignment contents')
+    monkeypatch.setattr(module.SeqIO, 'parse', parse)
+    monkeypatch.setattr(msap_io, 'file_digest', unexpected_digest)
+    prefix = str(tmp_path / 'matrix')
+    module.get_supergenes([str(source) for source in sources], prefix, missing_taxa=policy)
+    assert reads == Counter({source: 2 for source in sources})
+    assert Path(prefix + '.fasta').read_text() == '>a\nAAACCC\n>b\nAAACCC\n'
+
+
+@pytest.mark.parametrize('content,reason', [
+    ('>a\nAAA\n>a\nCCC\n', 'duplicate sequence ID'),
+    ('>a\nAAA\n>b\nCC\n', 'has length 2, expected 3'),
+])
+def test_scan_preserves_structural_checks(tmp_path, content, reason):
+    from get_supergenes import get_supergenes
+    source = tmp_path / 'invalid.fa'
+    source.write_text(content)
+    with pytest.raises(ValueError, match=reason):
+        get_supergenes([str(source)], str(tmp_path / 'matrix'))
+    assert not (tmp_path / 'matrix.fasta').exists()

@@ -394,7 +394,7 @@ def test_disk_backed_branches_release_original_and_renamed_after_use(tmp_path, m
         assert result['ok'], result
         files = {file['name']: file for file in result['files']}
         assert all('alignments/' + name in files for name in products)
-        assert len([name for name in files if name.startswith('renamed/')]) == 4
+        assert len([name for name in files if name.startswith('renamed/') and name.endswith('.aln.fasta')]) == 4
         assert (root / 'matrices/codon/raw/supermatrix.fasta').read_text() == '>sp_a\nATGGCT\n>sp_b\nATGGCT\n'
         assert (root / 'matrices/paired/codon/raw/supermatrix.fasta').read_text() == '>sp_a\nATGGCT\n>sp_b\nATGGCT\n'
         for name in ('qc/codon/raw/alignment.pass.tsv', 'qc/codon/trimmed/alignment.pass.tsv'):
@@ -402,3 +402,84 @@ def test_disk_backed_branches_release_original_and_renamed_after_use(tmp_path, m
         assert source.read_text().startswith('>gene_a')
     finally:
         steps.close()
+
+
+@pytest.mark.parametrize('reuse_protein', [True, False])
+def test_rename_checkpoint_reuses_saved_targets_before_qc(tmp_path, monkeypatch, reuse_protein):
+    """Cached targets skip rename_fasta; missing entries alone are recomputed."""
+    import hashlib
+    browser = browser_module()
+    source = tmp_path / 'gene.fa'
+    source.write_text('>g1\nATGGCT\n>g2\nATGGCT\n')
+    mapping = tmp_path / 'mapping.tsv'
+    mapping.write_text('g1\tsp_a\ng2\tsp_b\n')
+    root = tmp_path / 'out'
+    manifest = [dict(role='source', name=source.name, path=str(source)),
+                dict(role='mapping', name=mapping.name, path=str(mapping))]
+    products = {'gene.mafft.codon.aln.fasta': '>g1\nATGGCT\n>g2\nATGGCT\n',
+                'gene.mafft.prot.aln.fasta': '>g1\nMA\n>g2\nMA\n'}
+    for name, content in products.items():
+        manifest.append(dict(role='batch-output', name=name, path=str(tmp_path / name), on_disk=True))
+        if '.prot.' in name and not reuse_protein:
+            continue
+        kind = 'codon' if '.codon.' in name else 'prot'
+        relative = f'renamed/{kind}/raw/{name}'
+        text = content.replace('g1', 'sp_a').replace('g2', 'sp_b')
+        manifest.append(dict(role='renamed-output', name='cached-'+name, rename_path=relative,
+                             path=str(tmp_path / ('cached-'+name)), on_disk=True,
+                             sha256=hashlib.sha256(text.encode()).hexdigest()))
+    calls = []
+    original = phyloprep.rename_fasta
+    def rename(source, *args, **kwargs):
+        calls.append(source.name)
+        return original(source, *args, **kwargs)
+    monkeypatch.setattr(phyloprep, 'rename_fasta', rename)
+    steps = browser._phyloprep_finalize_steps(manifest,
+        dict(seqtype='codon', notrim=True, no_report=True, rename_checkpoints=True),
+        str(root), str(ROOT), manifest_only=True, incremental=True, disk_backed=True)
+    first = json.loads(browser.advance_phyloprep_finalize(steps))
+    assert first['load_variant'] == 'raw'
+    for name, content in products.items():
+        (root / 'alignments' / name).write_text(content)
+    for item in manifest:
+        if item['role'] == 'renamed-output':
+            target = root / item['rename_path']
+            target.parent.mkdir(parents=True, exist_ok=True)
+            name = target.name
+            target.write_text(products[name].replace('g1', 'sp_a').replace('g2', 'sp_b'))
+    checkpoints = []
+    while True:
+        step = json.loads(browser.advance_phyloprep_finalize(steps))
+        if not step.get('pending'):
+            result = step
+            break
+        checkpoints.append(step)
+        if step.get('rename_checkpoint'):
+            assert not (root / 'matrices').exists(), 'Rename checkpoint must precede QC/matrices'
+    assert result['ok'], result
+    assert calls == ([] if reuse_protein else ['gene.mafft.prot.aln.fasta'])
+    assert sum(step.get('rename_checkpoint') == 'raw' for step in checkpoints) == 1
+    assert (root / 'matrices/codon/raw/supermatrix.fasta').read_text() == '>sp_a\nATGGCT\n>sp_b\nATGGCT\n'
+    assert len([item for item in result['files'] if item['name'].startswith('renamed/') and item['name'].endswith('.aln.fasta')]) == 2
+
+
+def test_exported_rename_pathlists_are_complete_and_portable(tmp_path):
+    from msap_io import expand_input_paths
+    browser = browser_module()
+    source = tmp_path / 'gene.fa'
+    source.write_text('>g1\nACGT\n>g2\nACGA\n')
+    aligned = tmp_path / 'gene.mafft.nucl.aln.fasta'
+    aligned.write_text(source.read_text())
+    mapping = tmp_path / 'mapping.tsv'
+    mapping.write_text('g1\tsp_a\ng2\tsp_b\n')
+    root = tmp_path / 'out'
+    result = json.loads(browser.run_phyloprep_finalize([
+        dict(role='source', name=source.name, path=str(source)),
+        dict(role='batch-output', name=aligned.name, path=str(aligned)),
+        dict(role='mapping', name=mapping.name, path=str(mapping))],
+        dict(seqtype='nucl', notrim=True, no_report=True), str(root), str(ROOT), manifest_only=True))
+    assert result['ok'], result
+    name = 'renamed/nucl/raw/all.nucl.aln.fasta.pathlist'
+    item = next(file for file in result['files'] if file['name'] == name)
+    assert Path(item['path']).read_text() == aligned.name + '\n'
+    assert expand_input_paths([root / name]) == [str(root / 'renamed/nucl/raw' / aligned.name)]
