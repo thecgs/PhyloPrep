@@ -2,6 +2,8 @@
 """Rename FASTA sequence IDs using a mapping table and safe-name rules."""
 from __future__ import annotations
 import argparse, csv, sys
+import contextlib, hashlib, io, os
+from pathlib import Path
 from Bio import SeqIO
 from msap_io import atomic_output, check_output_path, file_signature
 
@@ -9,32 +11,112 @@ def normalized_taxon_id(identifier):
     return identifier.replace(":", "_").replace(",", "_").replace("(", "_").replace(")", "_")
 
 
-def read_mapping(mapping_file):
+def file_stamp(path):
+    path = Path(path)
+    stat = path.stat()
+    return (str(path.resolve()), stat.st_size, stat.st_mtime_ns,
+            stat.st_ctime_ns, stat.st_dev, stat.st_ino)
+
+
+class FileFingerprintCache:
+    """Reuse verified digests only within one run while file metadata matches."""
+    def __init__(self):
+        self.entries = {}
+
+    def peek(self, path):
+        stamp = file_stamp(path)
+        entry = self.entries.get(stamp[0])
+        return entry[1] if entry and entry[0] == stamp else None
+
+    def remember(self, path, sha256):
+        stamp = file_stamp(path)
+        signature = dict(path=stamp[0], size=stamp[1], mtime_ns=stamp[2], sha256=sha256)
+        self.entries[stamp[0]] = (stamp, signature)
+        return signature
+
+    def signature(self, path):
+        cached = self.peek(path)
+        if cached is not None:
+            return cached
+        before = file_stamp(path)
+        signature = file_signature(path)
+        if file_stamp(path) != before:
+            raise ValueError(f"File changed while fingerprinting: {path}")
+        self.entries[before[0]] = (before, signature)
+        return signature
+
+    def forget(self, path):
+        self.entries.pop(str(Path(path).resolve()), None)
+
+    def clear(self):
+        self.entries.clear()
+
+
+class _DigestReader(io.RawIOBase):
+    def __init__(self, source, digest):
+        self.source, self.digest = source, digest
+
+    def readable(self):
+        return True
+
+    def readinto(self, buffer):
+        count = self.source.readinto(buffer)
+        if count:
+            self.digest.update(memoryview(buffer)[:count])
+        return count
+
+
+@contextlib.contextmanager
+def _hashed_text_input(path):
+    digest = hashlib.sha256()
+    with open(path, 'rb') as raw, io.TextIOWrapper(
+            io.BufferedReader(_DigestReader(raw, digest)), encoding='utf-8') as source:
+        yield source, digest
+
+
+class _DigestWriter:
+    def __init__(self, target):
+        self.target, self.digest = target, hashlib.sha256()
+
+    def write(self, text):
+        count = self.target.write(text)
+        # atomic_output uses UTF-8 with native newline translation.
+        self.digest.update(text.replace('\n', os.linesep).encode('utf-8'))
+        return count
+
+
+def _read_mapping_rows(handle):
     mapping = {}
-    with open(mapping_file, encoding="utf-8", newline="") as handle:
-        for row in csv.reader(handle, delimiter="\t"):
-            if not row or row[0].startswith("#"):
-                continue
-            if len(row) < 2:
-                raise ValueError("Mapping table requires two tab-separated columns: old_id and new_id")
-            old_id, new_id = normalized_taxon_id(row[0]), normalized_taxon_id(row[1])
-            if old_id in mapping and mapping[old_id] != new_id:
-                raise ValueError(f"Conflicting mapping after OrthoFinder normalization: {row[0]}")
-            mapping[old_id] = new_id
+    for row in csv.reader(handle, delimiter="\t"):
+        if not row or row[0].startswith("#"):
+            continue
+        if len(row) < 2:
+            raise ValueError("Mapping table requires two tab-separated columns: old_id and new_id")
+        old_id, new_id = normalized_taxon_id(row[0]), normalized_taxon_id(row[1])
+        if old_id in mapping and mapping[old_id] != new_id:
+            raise ValueError(f"Conflicting mapping after OrthoFinder normalization: {row[0]}")
+        mapping[old_id] = new_id
     return mapping
 
 
+def read_mapping(mapping_file):
+    with open(mapping_file, encoding="utf-8", newline="") as handle:
+        return _read_mapping_rows(handle)
+
+
 def read_mapping_snapshot(mapping_file):
-    """Bind parsed IDs to the exact mapping version used by the workflow."""
-    signature = file_signature(mapping_file)
-    mapping = read_mapping(mapping_file)
-    if file_signature(mapping_file) != signature:
+    """Hash the exact mapping bytes while parsing, without extra file reads."""
+    before = file_stamp(mapping_file)
+    with _hashed_text_input(mapping_file) as (source, digest):
+        mapping = _read_mapping_rows(source)
+    if file_stamp(mapping_file) != before:
         raise ValueError("Mapping changed while being read; rerun with a stable mapping file")
+    signature = dict(path=before[0], size=before[1], mtime_ns=before[2], sha256=digest.hexdigest())
     return mapping, signature
 
 
 def rename_fasta(infile, outfile, mapping_file=None, map_output=None, allow_duplicate_ids=False,
-                 mapping=None):
+                 mapping=None, fingerprints=None, input_sha256=None):
     if mapping_file is not None and mapping is not None:
         raise ValueError("Provide either mapping_file or mapping, not both")
     inputs = [infile] + ([mapping_file] if mapping_file else [])
@@ -61,9 +143,19 @@ def rename_fasta(infile, outfile, mapping_file=None, map_output=None, allow_dupl
                 map_rows.append((old, new))
             yield record
 
-    with open(infile) as source, atomic_output(outfile, inputs=[infile]) as handle:
-        if not SeqIO.write(renamed_records(source), handle, "fasta"):
+    with contextlib.ExitStack() as stack:
+        if fingerprints is not None and input_sha256 is None:
+            source, input_digest = stack.enter_context(_hashed_text_input(infile))
+        else:
+            source = stack.enter_context(open(infile))
+            input_digest = None
+        handle = stack.enter_context(atomic_output(outfile, inputs=[infile]))
+        writer = _DigestWriter(handle) if fingerprints is not None and not str(outfile).endswith('.gz') else handle
+        if not SeqIO.write(renamed_records(source), writer, "fasta"):
             raise ValueError("No sequences found in input FASTA.")
+    if fingerprints is not None:
+        fingerprints['source'] = input_sha256 or input_digest.hexdigest()
+        fingerprints['target'] = writer.digest.hexdigest() if isinstance(writer, _DigestWriter) else file_signature(outfile)['sha256']
     if map_output:
         with atomic_output(map_output) as handle:
             handle.write("original_id\trenamed_id\n")

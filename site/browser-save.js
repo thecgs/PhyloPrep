@@ -14,6 +14,24 @@
     });
     return file;
   }
+  const directories = new WeakMap();
+  async function diskHandle(disk) {
+    if (disk.handle) return disk.handle;
+    const parts = disk.path?.split('/');
+    if (!disk.root || !parts?.length || parts.some(part => !part || part === '.' || part === '..' || part.includes('\\'))) throw Error('Invalid saved file reference');
+    let cache = directories.get(disk.root);
+    if (!cache) directories.set(disk.root, cache = new Map([['', Promise.resolve(disk.root)]]));
+    let prefix = '';
+    for (const part of parts.slice(0, -1)) {
+      const parent = cache.get(prefix); prefix += part + '/';
+      if (!cache.has(prefix)) {
+        const key=prefix, promise=parent.then(directory => directory.getDirectoryHandle(part));
+        cache.set(key,promise);
+        promise.catch(()=>{if(cache.get(key)===promise)cache.delete(key);});
+      }
+    }
+    return (await cache.get(prefix)).getFileHandle(parts.at(-1));
+  }
   async function readBlob(file) {
     const storage = file.storage;
     if (typeof (storage ? storage.content : file.content) === 'string') {
@@ -22,8 +40,8 @@
     if (storage?.blob || file.blob) return storage?.blob || file.blob;
     const disk = storage?.disk || file.disk;
     if (!disk) throw new Error(`Output content is unavailable: ${file.name}`);
-    const source = await disk.handle.getFile();
-    if (source.size !== disk.size || source.lastModified !== disk.lastModified) {
+    const source = await (await diskHandle(disk)).getFile();
+    if (source.size !== disk.size || (disk.lastModified !== undefined && source.lastModified !== disk.lastModified)) {
       throw new Error(`Saved file changed on disk: ${file.name}. Restore the original file before retrying.`);
     }
     return source;
@@ -146,5 +164,5 @@
     async function retry() { await settle(); failure = null; }
     return { root, save, adopt, settle, ready, saved, state, retry, stats, get error() { return failure; } };
   }
-  globalThis.PhyloPrepSave = { createWriter, record, readBlob, readText, wireFile };
+  globalThis.PhyloPrepSave = { createWriter, record, readBlob, readText, wireFile, diskHandle };
 })();

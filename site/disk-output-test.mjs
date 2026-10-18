@@ -82,6 +82,23 @@ assert.equal(await (await vm.runInContext('readDiskInput(file)',worker)).text(),
 worker.file.sha256='0'.repeat(64);
 await assert.rejects(vm.runInContext('readDiskInput(file)',worker),/checksum mismatch/);
 
+// Disk verification is fused into the one required staging read.
+const stagedBytes=new TextEncoder().encode('>a\n'+'ATG'.repeat(400000)+'\n');
+const stagedBlob=new Blob([stagedBytes]);let inputSlices=0, closedInputs=0;
+const stagedBacking=new Map(),removedInputs=[];
+worker.runtime={FS:{
+ open(path){stagedBacking.set(path,new Uint8Array(stagedBytes.length));return {path};},
+ write(stream,bytes,offset,length,position){stagedBacking.get(stream.path).set(bytes.subarray(offset,offset+length),position);return length;},
+ close(){closedInputs++;},unlink(path){removedInputs.push(path);stagedBacking.delete(path);},
+}};
+worker.stagingSource={size:stagedBlob.size,slice(start,end){inputSlices++;return stagedBlob.slice(start,end);}};
+worker.stagingSha=(await import('node:crypto')).createHash('sha256').update(stagedBytes).digest('hex');
+await vm.runInContext('writeBlobInput(runtime,"/staged",stagingSource,stagingSha)',worker);
+assert.equal(inputSlices,Math.ceil(stagedBytes.length/(1024*1024)),'Staging must read each input chunk once');
+assert.deepEqual(stagedBacking.get('/staged'),stagedBytes);
+await assert.rejects(vm.runInContext('writeBlobInput(runtime,"/corrupt",stagingSource,"0".repeat(64))',worker),/checksum mismatch/);
+assert.ok(removedInputs.includes('/corrupt'));assert.equal(closedInputs,2);
+
 // A reused renamed alignment is released only after confirmed disk saving.
 let messages=[], saved=true, readsFromFS=0;
 const backing=new Map(), released=[];

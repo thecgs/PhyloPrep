@@ -22,7 +22,8 @@ from MSAP_batch import build_parser as batch_parser
 from msap_io import (atomic_output, expand_input_paths,
                      file_digest, file_signature, read_json, NoGenesIncludedError)
 from msap_matrix import AlignmentSpool
-from rename_taxa import rename_fasta, read_mapping_snapshot, normalized_taxon_id
+from rename_taxa import (rename_fasta, read_mapping_snapshot, normalized_taxon_id,
+                         FileFingerprintCache, file_stamp)
 
 SCRIPTS = Path(__file__).resolve().parent
 QC_VALUES = {
@@ -175,31 +176,36 @@ def rename_state_path(directory, source):
     return Path(directory) / f".phyloprep-rename-{key}.json"
 
 
-def valid_rename_state(state, source, mapping, target, mapping_signature=None, script_digest=None):
+def valid_rename_state(state, source, mapping, target, mapping_signature=None, script_digest=None, fingerprints=None):
+    fingerprints = fingerprints or FileFingerprintCache()
+    if (state.get('version') != RENAME_STATE_VERSION or state.get('status') != 'complete' or
+            (mapping_signature is not None and state.get('mapping') != mapping_signature) or
+            (script_digest is not None and state.get('rename_taxa_sha256') != script_digest)):
+        return False
     try:
         if Path(target).is_symlink():
             return False
         expected = {
             "version": RENAME_STATE_VERSION,
             "status": "complete",
-            "source": file_signature(source),
+            "source": fingerprints.signature(source),
             "mapping": mapping_signature if mapping_signature is not None else file_signature(mapping),
             "rename_taxa_sha256": script_digest if script_digest is not None else file_digest(SCRIPTS / "rename_taxa.py"),
-            "outputs": {"alignment": file_signature(target)},
+            "outputs": {"alignment": fingerprints.signature(target)},
         }
     except OSError:
         return False
     return state == expected
 
 
-def write_rename_state(path, source_signature, mapping_signature, script_digest, target):
+def write_rename_state(path, source_signature, mapping_signature, script_digest, target, output_signature=None):
     state = {
         "version": RENAME_STATE_VERSION,
         "status": "complete",
         "source": source_signature,
         "mapping": mapping_signature,
         "rename_taxa_sha256": script_digest,
-        "outputs": {"alignment": file_signature(target)},
+        "outputs": {"alignment": output_signature if output_signature is not None else file_signature(target)},
     }
     with atomic_output(path) as handle:
         json.dump(state, handle, indent=2, sort_keys=True)
@@ -312,34 +318,53 @@ def iter_renamed_alignments(args, paths, root, seqtype, variant):
     if mapping_signature is None:
         args.taxon_mapping, mapping_signature = read_mapping_snapshot(args.mapping)
         args.mapping_signature = mapping_signature
-    if file_signature(args.mapping) != mapping_signature:
+    fingerprints = getattr(args, '_fingerprints', None)
+    if fingerprints is None:
+        args._fingerprints = fingerprints = FileFingerprintCache()
+    mapping_stamp = file_stamp(args.mapping)
+    if (mapping_stamp[0], mapping_stamp[1], mapping_stamp[2]) != (
+            mapping_signature['path'], mapping_signature['size'], mapping_signature['mtime_ns']):
         raise ValueError("Mapping changed after it was read; rerun before renaming alignments")
-    script_digest = file_digest(SCRIPTS / "rename_taxa.py")
+    script = SCRIPTS / 'rename_taxa.py'
+    script_digest = fingerprints.signature(script)['sha256']
+    script_stamp = file_stamp(script)
     for source in paths:
         target = renamed_dir / source.name
         state_path = rename_state_path(renamed_dir, source)
         if not args.no_resume and valid_rename_state(
-                read_json(state_path), source, args.mapping, target, mapping_signature, script_digest):
+                read_json(state_path), source, args.mapping, target, mapping_signature, script_digest, fingerprints):
             print(f"[phyloprep] rename {source.name}: skipped (already complete)", flush=True)
             yield target
+            if not getattr(args, '_browser_runtime', False):
+                fingerprints.forget(source)
+                fingerprints.forget(target)
             continue
-        source_signature = file_signature(source)
+        source_stamp = file_stamp(source)
+        known = fingerprints.peek(source)
+        digests = {}
         try:
-            rename_fasta(source, target, allow_duplicate_ids=True, mapping=args.taxon_mapping)
+            rename_fasta(source, target, allow_duplicate_ids=True, mapping=args.taxon_mapping,
+                         fingerprints=digests, input_sha256=known['sha256'] if known else None)
         except ValueError as error:
             raise ValueError(
                 f"ID mapping cannot rename {source} to unique taxon IDs. "
                 "Each QC-passing alignment must contain at most one sequence for each mapped taxon. "
                 "Multi-copy orthogroups should retain gene IDs for gene-tree methods such as ASTRAL-Pro3."
             ) from error
-        if file_signature(source) != source_signature:
+        if file_stamp(source) != source_stamp:
             raise ValueError(
                 f"Rename inputs changed while processing {source}; outputs were not checkpointed. Rerun the pipeline."
             )
-        write_rename_state(state_path, source_signature, mapping_signature, script_digest, target)
+        source_signature = fingerprints.remember(source, digests['source'])
+        output_signature = fingerprints.remember(target, digests['target'])
+        # Browser recovery uses saved stage catalogs; CLI state files are not exported or consumed there.
+        if not getattr(args, '_browser_runtime', False):
+            write_rename_state(state_path, source_signature, mapping_signature, script_digest, target, output_signature)
         yield target
-    if (file_signature(args.mapping) != mapping_signature or
-            file_digest(SCRIPTS / "rename_taxa.py") != script_digest):
+        if not getattr(args, '_browser_runtime', False):
+            fingerprints.forget(source)
+            fingerprints.forget(target)
+    if file_stamp(args.mapping) != mapping_stamp or file_stamp(script) != script_stamp:
         raise ValueError("Rename mapping or implementation changed during processing; rerun the pipeline")
 
 
