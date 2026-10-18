@@ -1,5 +1,6 @@
 import io
 import json
+import pytest
 
 from msap_progress import ProgressReporter, heartbeat, progress_context
 
@@ -40,7 +41,8 @@ def test_stage_progress_has_no_time_percentage_or_eta():
     assert len(events) == count
 
 
-def test_browser_python_progress_streams_before_result(tmp_path, monkeypatch):
+@pytest.mark.parametrize('no_report', [False, True])
+def test_browser_python_progress_streams_before_result(tmp_path, monkeypatch, no_report):
     import importlib.util
     from pathlib import Path
     import phyloprep
@@ -61,9 +63,10 @@ def test_browser_python_progress_streams_before_result(tmp_path, monkeypatch):
     monkeypatch.setattr(phyloprep, 'prepare_variant', variant)
     result = json.loads(browser.run_phyloprep_finalize(
         [dict(role='source', path=str(source), name=source.name)],
-        dict(seqtype='prot', notrim=True), str(tmp_path / 'out'), str(root), progress_callback=events.append))
+        dict(seqtype='prot', notrim=True, no_report=no_report), str(tmp_path / 'out'), str(root), progress_callback=events.append))
     assert result['ok']
-    assert json.loads(events[-1])['completed'] == 2
+    final = json.loads(events[-1])
+    assert final['completed'] == final['total'] == (2 if no_report else 3)
     assert json.loads(events[-1])['label'] == 'Complete'
 
 
