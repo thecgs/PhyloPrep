@@ -21,7 +21,7 @@ import sys
 import time
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable, NamedTuple
 
 from msap_progress import task_progress, task_label
 from msap_io import (atomic_output, read_fasta_alignment, expand_input_paths,
@@ -32,6 +32,12 @@ from sequence_audit import add_macse_options, add_protein_options, normalize_wor
 STOP = False
 STATE_VERSION = 2
 SKIPPED_LOCUS_EXIT = 3
+
+
+class TaskResult(NamedTuple):
+    key: str
+    status: str
+    verified_outputs: tuple[Path, ...] = ()
 
 
 def _stop_handler(signum: int, _frame: Any) -> None:
@@ -147,8 +153,8 @@ def _manifest_valid(manifest: dict[str, Any], root: Path, expected: list[Path]) 
     return True
 
 
-def _write_path_lists(root: Path, args: argparse.Namespace, inputs: list[Path]) -> None:
-    """Write absolute-path lists for each alignment type produced by the batch."""
+def _write_path_lists(root: Path, args: argparse.Namespace, verified_outputs: Iterable[Path]) -> None:
+    """List only outputs already validated or successfully published in this run."""
     list_dir = root / "path-lists"
     list_dir.mkdir(parents=True, exist_ok=True)
     suffixes = ["prot.aln.fasta", "codon.aln.fasta"] if args.seqtype in {"codon", "pseudogene"} else [f"{args.seqtype}.aln.fasta"]
@@ -159,20 +165,7 @@ def _write_path_lists(root: Path, args: argparse.Namespace, inputs: list[Path]) 
             suffix = f'{kind}.{variant}'
             if suffix not in suffixes:
                 (list_dir / f'all.{suffix}.pathlist').unlink(missing_ok=True)
-    valid_outputs = set()
-    for source in inputs:
-        state = _read_json(root / f".msap-batch-state-{_input_key(source)}.json")
-        expected = _expected_alignment_outputs(args, source, root)
-        try:
-            valid = (state.get("version") == STATE_VERSION and
-                     state.get("status") == "complete" and
-                     state.get("input") == _signature(source) and
-                     state.get("configuration") == args.run_configuration and
-                     _manifest_valid(state.get("outputs"), root, expected))
-        except OSError:
-            valid = False
-        if valid:
-            valid_outputs.update(expected)
+    valid_outputs = set(verified_outputs)
     for suffix in suffixes:
         files = sorted(path for path in valid_outputs if path.name.endswith("." + suffix))
         list_path = list_dir / f"all.{suffix}.pathlist"
@@ -305,7 +298,7 @@ def _publish_task(stage, root, state_file, running, report_name):
     _recover_publication(backup, root)
 
 
-def _run_one(args: argparse.Namespace, infile: Path, root: Path) -> tuple[str, str]:
+def _run_one(args: argparse.Namespace, infile: Path, root: Path) -> TaskResult:
     key = _input_key(infile)
     state_file = root / f".msap-batch-state-{key}.json"
     signature = _signature(infile)
@@ -314,11 +307,11 @@ def _run_one(args: argparse.Namespace, infile: Path, root: Path) -> tuple[str, s
     if not args.no_resume and state.get("version") == STATE_VERSION and state.get("input") == signature and \
             state.get("configuration") == args.run_configuration:
         if state.get("status") == "skipped":
-            return key, "skipped (no coding residues)"
+            return TaskResult(key, "skipped (no coding residues)")
         if state.get("status") == "complete" and _manifest_valid(state.get("outputs"), root, expected):
-            return key, "skipped (already complete)"
+            return TaskResult(key, "skipped (already complete)", tuple(expected))
     if STOP:
-        return key, "cancelled before start"
+        return TaskResult(key, "cancelled before start")
 
     staging_root = root / ".msap-batch-staging"
     staging_root.mkdir(parents=True, exist_ok=True)
@@ -343,7 +336,7 @@ def _run_one(args: argparse.Namespace, infile: Path, root: Path) -> tuple[str, s
             raise KeyboardInterrupt
         if process.returncode == SKIPPED_LOCUS_EXIT:
             _atomic_json(state_file, {**running, "status": "skipped", "outputs": {}, "finished": time.time()})
-            return key, "skipped (no coding residues)"
+            return TaskResult(key, "skipped (no coding residues)")
         if process.returncode != 0:
             raise subprocess.CalledProcessError(process.returncode, command)
         for path in _expected_alignment_outputs(args, infile, stage):
@@ -355,7 +348,7 @@ def _run_one(args: argparse.Namespace, infile: Path, root: Path) -> tuple[str, s
         raise
 
     _publish_task(stage, root, state_file, running, f'{infile.stem}.sequence_changes.tsv')
-    return key, "completed"
+    return TaskResult(key, "completed", tuple(expected))
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -479,7 +472,8 @@ def main(argv: list[str] | None = None) -> int:
                         infile = futures[future]
                         status_kind = 'failed'
                         try:
-                            key, status = future.result()
+                            result = future.result()
+                            status = result.status
                             status_kind = ('skipped' if status.startswith('skipped') else
                                            'cancelled' if status.startswith('cancelled') else 'completed')
                             print(f"[MSAP_batch] {status}: {infile} -> {root}", flush=True)
@@ -499,7 +493,16 @@ def main(argv: list[str] | None = None) -> int:
                 print("Cancellation requested; active jobs will not be promoted to results.", file=sys.stderr)
                 failures += 1
         progress.update(task_label(progress, 'Cancelled; writing diagnostics' if STOP else 'Writing pathlists and audit reports'))
-        _write_path_lists(root, args, inputs)
+        # Executor shutdown has joined active tasks. Include successful results even
+        # if cancellation interrupted consumption of futures; never infer completion
+        # from leftover files or reread durable states/input/output fingerprints.
+        verified_outputs = set()
+        for future in futures:
+            try:
+                verified_outputs.update(future.result().verified_outputs)
+            except (Exception, KeyboardInterrupt):
+                pass  # Failed/cancelled jobs have no current validated outputs.
+        _write_path_lists(root, args, verified_outputs)
         # Failed jobs retain diagnostics in staging; never summarize stale successful reports.
         for report_name in ('sequence_changes',):
             report_paths = []

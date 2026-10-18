@@ -284,7 +284,7 @@ python MSAP.py -i pseudo.fa -st pseudogene --macse-jar macse_v2.07.jar
 ```
 
 Outputs use `GENE.ALIGNER.{nucl|prot|codon}[.trimmed].aln.fasta`; audit reports are retained. In codon mode, default trimming uses one shared site mask for the paired protein and back-translated codon alignments. For each amino-acid/codon site, gap, codon-N, and protein-X fractions are evaluated together; if any selected threshold rejects the site, the amino-acid column and its complete codon triplet are removed together. trimAl codon mode likewise transfers retained protein columns to complete codon triplets.
-Trimmed FASTA alignments always end in `.trimmed.aln.fasta`, for both trimming programs and all sequence types (including MACSE outputs). Batch path lists use `all.TYPE.trimmed.aln.fasta.pathlist`. Raw alignments retain `.aln.fasta`.
+Trimmed FASTA alignments always end in `.trimmed.aln.fasta`, for both trimming programs and all sequence types (including MACSE outputs). Batch path lists use `all.TYPE.trimmed.aln.fasta.pathlist`. Pathlists reuse the current batch task results after successful publication or resume validation; generating them does not reread inputs or rehash output files. Failed, cancelled, and no-coding-residue skipped tasks are excluded. Raw alignments retain `.aln.fasta`.
 
 ### `MSAP_batch.py` — concurrent, resumable alignment
 
