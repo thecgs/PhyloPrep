@@ -414,6 +414,13 @@ self.addEventListener("message", async (event) => {
     }
 
     if (request.type === "phyloprep-finalize") {
+      // SQLite is optional report infrastructure. A package/network failure
+      // must never stop alignment QC, matrix publication or output download.
+      if (!request.options.no_report) {
+        try { await runtime.loadPackage("sqlite3"); }
+        catch (error) { request.options = { ...request.options, report_dependency_error:
+          `Could not load the browser report dependency sqlite3: ${error.message || error}` }; }
+      }
       self.postMessage({ type: "stage", runId, stage: "process", label: "Running PhyloPrep QC and matrix construction" });
       const manifest = stage.files.map(({ name, path, role, inputKey, fasta, on_disk }) => ({ name, path, role, inputKey, fasta, on_disk }));
       runtime.globals.set("_phyloprep_progress_callback", (eventJson) => {

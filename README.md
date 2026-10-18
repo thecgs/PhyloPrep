@@ -137,7 +137,26 @@ The complete workflow automatically removes terminal stops from CDS and protein 
 
 ### Offline HTML analysis report
 
-After either a CLI run or saving the browser's complete output folder, run:
+The complete CLI and browser PhyloPrep workflows generate an English HTML report
+automatically **after final matrices have been published**. It appears as
+`phyloprep-report.html` at the output root and is included in browser downloads
+and folder saving. Use `--no-report` ("Skip HTML report" in the browser) to skip
+this additional matrix-statistics calculation.
+
+Report generation is non-fatal: if it fails, completed matrices, QC tables and
+audit files remain available, the analysis remains successful, and a warning
+gives the report error type/reason and a standalone retry command. A previous
+run's HTML is removed after successful matrix publication so it cannot be
+mistaken for a report of the current run. Reporting does not rerun alignments or
+reload released original/renamed alignments. Browser SQLite package-loading
+failures are also treated as report warnings, not analysis failures.
+Current-run metadata scopes the report to the selected sequence mode and raw/
+trimmed branches, excluding saved products from earlier workflow modes. Existing
+analysis files are retained. If a browser folder contains an older HTML report
+and the new report is skipped or fails, the browser removes that managed HTML;
+an inability to remove it is reported as a warning.
+
+To regenerate the report later from a saved output folder, run:
 
 ```bash
 python phyloprep_report.py -i phyloprep-output
@@ -156,8 +175,7 @@ presented as unexplained aggregate totals. Absent files are labeled "Not found
 in saved outputs"; unreadable matrices link to their diagnostic details without
 a success indicator. Nucleotide, protein-only and pseudogene outputs use the
 same catalog with the applicable rows.
-The report is generated on demand; existing CLI/browser analyses do not incur
-the additional matrix-statistics calculation automatically.
+Standalone generation remains available independently of the main workflow.
 
 The report includes locus-processing counts; per-branch QC outcomes, overlapping
 exclusion reasons and mutually exclusive complete reason combinations; statistics

@@ -225,11 +225,29 @@ def padding_stats(path, parts, taxa, db):
                           for taxon in taxa], source=source.name)
 
 
-def qc_summary(root, warnings):
+def active_branch(group, parameters):
+    """Current-run metadata excludes saved branches from previous workflow modes."""
+    workflow = parameters.get('seqtype')
+    if workflow not in {'nucl', 'prot', 'codon', 'pseudogene'}:
+        return True
+    parts = Path(group).parts
+    if (workflow == 'pseudogene') != ('pseudogene' in parts):
+        return False
+    if parameters.get('notrim') and parts and parts[-1] == 'trimmed':
+        return False
+    representations = set(parts) & {'nucl', 'prot', 'codon'}
+    if workflow in {'codon', 'pseudogene'}:
+        return not representations - {'codon', 'prot'}
+    return 'paired' not in parts and (not representations or workflow in representations)
+
+
+def qc_summary(root, warnings, parameters=None):
     result = []
     for path in visible_files(root / "qc"):
         paired = path.name == "loci.details.tsv"
         if path.name != "alignment.details.tsv" and not paired:
+            continue
+        if not active_branch(path.parent.relative_to(root / 'qc'), parameters or {}):
             continue
         passed_list = path_list(path.with_name("alignment.pass.tsv")) if not paired else None
         failed_list = path_list(path.with_name("alignment.fail.tsv")) if not paired else None
@@ -371,23 +389,25 @@ def inclusion(path):
     return dict(kept=kept, skipped=skipped)
 
 
-def build_report(root):
+def build_report(root, run_metadata=None):
     root = Path(root).resolve()
     if not root.is_dir() or not any((root / name).is_dir() for name in ("alignments", "qc", "matrices", "reports")):
         raise ValueError("Input must be a PhyloPrep final output directory")
     warnings = []
     manifest_path = root / "phyloprep-run.json"
-    manifest = read_json(manifest_path) if manifest_path.is_file() else {}
+    manifest = run_metadata if run_metadata is not None else read_json(manifest_path) if manifest_path.is_file() else {}
     if not isinstance(manifest, dict):
         raise ValueError("The run manifest must contain a JSON object")
+    parameters = manifest.get('parameters') or {}
     report = dict(schema="phyloprep-report-v1", report_version=__version__,
                   generated_at=datetime.now(timezone.utc).isoformat(), run_name=root.name,
-                  overview=processing_overview(root, manifest), qc=qc_summary(root, warnings),
+                  overview=processing_overview(root, manifest), qc=qc_summary(root, warnings, parameters),
                   matrices=[], trimming_comparisons=[], warnings=warnings,
                   provenance={key: manifest[key] for key in (
                       "created_at", "module", "script_version", "source_sha256", "parameters", "equivalent_cli",
                       "runtime", "reused_loci", "matrix_padding", "engine_metadata") if key in manifest},
-                  provenance_source="phyloprep-run.json" if manifest else None)
+                  provenance_source=("Current PhyloPrep workflow" if run_metadata is not None
+                                     else "phyloprep-run.json") if manifest else None)
     if manifest:
         report["provenance"]["checksum_inventory"] = {
             key: dict(files=len(manifest[key]), sha256_recorded=sum(bool(item.get("sha256")) for item in manifest[key]))
@@ -405,6 +425,8 @@ def build_report(root):
                 if path.name not in MATRIX_NAMES or not managed(path):
                     continue
                 relative = path.relative_to(root / "matrices")
+                if not active_branch(relative.parent, parameters):
+                    continue
                 seqtype = next((p for p in relative.parts[:-1] if p in {"nucl", "prot", "codon"}), None)
                 if not seqtype:
                     warnings.append(f"Unknown sequence type; matrix not evaluated: {relative}")
@@ -740,23 +762,30 @@ document.querySelectorAll('.chart svg').forEach((svg,i)=>{const b=document.creat
     return ''.join(fragments)
 
 
+def write_report(root, run_metadata=None):
+    """Atomically publish a report; raise errors for the caller to handle."""
+    root = Path(root).resolve()
+    report = build_report(root, run_metadata=run_metadata)
+    output = root / "phyloprep-report.html"
+    content = render_html(report)
+    fd, temporary = tempfile.mkstemp(prefix=".phyloprep-report-", suffix=".html", dir=root)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(content)
+        os.replace(temporary, output)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+    print(f"[PhyloPrep report] Saved {output}", flush=True)
+    return output
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("-i", "--input", required=True, type=Path, help="Final PhyloPrep output directory")
     parser.add_argument("-v", "--version", action="version", version=__version__)
     args = parser.parse_args(argv)
     try:
-        report = build_report(args.input)
-        output = args.input.resolve() / "phyloprep-report.html"
-        content = render_html(report)
-        fd, temporary = tempfile.mkstemp(prefix=".phyloprep-report-", suffix=".html", dir=output.parent)
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                handle.write(content)
-            os.replace(temporary, output)
-        finally:
-            Path(temporary).unlink(missing_ok=True)
-        print(f"[PhyloPrep report] Saved {output}", flush=True)
+        write_report(args.input)
         return 0
     except (ValueError, OSError, KeyError, csv.Error, sqlite3.Error) as error:
         print(f"PhyloPrep report: {error}", file=sys.stderr)

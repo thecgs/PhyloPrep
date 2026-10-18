@@ -79,6 +79,8 @@ matrices are published only after all requested conversions succeed.
                           help="Rename all alignment IDs using this two-column mapping table before QC and concatenation.")
     pipeline.add_argument("--missing-taxa", choices=["skip-gene", "pad-gaps"],
                           default="skip-gene", help="Missing-taxon policy: pad-gaps fills absent sequences with ? (default: skip-gene).")
+    pipeline.add_argument("--no-report", action="store_true",
+                          help="Skip the HTML report normally generated after matrices are published. Report failures do not invalidate completed analysis outputs.")
     qc = parser.add_argument_group("alignment QC options (same defaults as alignment_qc.py)")
     for name, (kind, default) in QC_VALUES.items():
         unit = " (nt for nucl, aa for prot, complete codons for codon)" if name == "min_length" else ""
@@ -367,7 +369,7 @@ def annotate_change_report(path, mapping):
 
 def prepare(args, inputs, root):
     variants = ("raw",) if args.notrim else ("raw", "trimmed")
-    args._progress = ProgressReporter('PhyloPrep', len(variants) + 2, unit='stages')
+    args._progress = ProgressReporter('PhyloPrep', len(variants) + 2 + (not args.no_report), unit='stages')
     with progress_context(args._progress):
         return _prepare(args, inputs, root)
 
@@ -409,9 +411,55 @@ def _prepare(args, inputs, root):
             args._progress.update(f'{variant}: complete', completed=index + 2)
         report_phase(args, 'Publishing matrices')
         publish_matrices(stage_root, root, variants)
-        args._progress.update('Complete', completed=len(variants) + 2)
+        args._progress.update('Matrices published', completed=len(variants) + 2)
 
+    if not args.no_report:
+        report_phase(args, 'Generating HTML report')
+    generate_pipeline_report(args, root)
+    args._progress.update('Complete', completed=args._progress.total)
     print(f"[phyloprep] Complete: {root / 'matrices'}", flush=True)
+
+
+def generate_pipeline_report(args, root, run_metadata=None):
+    """Reporting is optional post-processing and must not roll back analysis."""
+    root = Path(root)
+    output = root / 'phyloprep-report.html'
+    removed_previous = False
+    try:
+        # A report from an earlier run must never describe newly published matrices.
+        output.unlink(missing_ok=True)
+        removed_previous = True
+        if getattr(args, 'no_report', False):
+            return {'status': 'skipped'}
+        dependency_error = getattr(args, '_report_dependency_error', None)
+        if dependency_error:
+            raise RuntimeError(dependency_error)
+        from phyloprep_report import write_report
+        if run_metadata is None:
+            keys = ('seqtype', 'align_software', 'genetic_code', 'notrim',
+                    'missing_taxa', 'min_length', 'max_n_ratio', 'max_x_ratio',
+                    'max_gap_ratio', 'min_nucl_pis', 'min_protein_pis',
+                    'paired_pis_policy', 'allow_internal_stop', 'G', 'N', 'X')
+            run_metadata = dict(module='phyloprep.py',
+                                parameters={key: getattr(args, key) for key in keys if hasattr(args, key)},
+                                runtime={'python': sys.version})
+            if getattr(args, '_browser_runtime', False):
+                run_metadata['runtime']['pyodide'] = '0.27.2'
+            context = getattr(args, '_report_context', None) or {}
+            runtime = {**run_metadata['runtime'], **context.get('runtime', {})}
+            run_metadata.update(context)
+            run_metadata['runtime'] = runtime
+        write_report(root, run_metadata=run_metadata)
+        return {'status': 'generated', 'path': output.name}
+    except Exception as error:
+        reason = f'{type(error).__name__}: {error}'.rstrip(': ')
+        warning = f'HTML report generation failed ({reason}). Completed analysis outputs have been retained.'
+        if not removed_previous:
+            warning += f' An older HTML report may remain at {output}; it does not describe this run.'
+        print(f'[phyloprep] WARNING: {warning}', file=sys.stderr, flush=True)
+        print('[phyloprep] Retry: python phyloprep_report.py -i ' + shlex.quote(str(root)),
+              file=sys.stderr, flush=True)
+        return {'status': 'failed', 'warning': warning}
 
 
 def _group_stage(stage_root, workflow, seqtype, variant, paired=False):

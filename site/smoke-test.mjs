@@ -74,7 +74,7 @@ const batchBlock = app.slice(app.indexOf('script: "MSAP_batch.py"'), app.indexOf
 if (!phyloprepBlock.includes('multiple: true, pathList: true')) throw new Error("phyloprep.py multi-file input must use browser pathlist mode.");
 if (!batchBlock.includes('multiple: true, pathList: true')) throw new Error("MSAP_batch.py multi-file input must use browser pathlist mode.");
 if (!app.includes('name: "path-lists/inputs.pathlist"')) throw new Error("MSAP_batch browser input pathlist output is missing.");
-if (!app.includes('name: "inputs.pathlist"')) throw new Error("PhyloPrep browser input pathlist output is missing.");
+if (!contents['site/browser_runner.py'].includes("phyloprep.write_paths(root / 'inputs.pathlist'")) throw new Error("PhyloPrep browser input pathlist output is missing.");
 
 if (!alignmentWorker.includes('cli.exec("muscle -align "')) throw new Error("MUSCLE must use Aioli single-string exec form.");
 if (alignmentWorker.includes('cli.exec("muscle", [')) throw new Error("Two-argument Aioli exec form must not be used for MUSCLE.");

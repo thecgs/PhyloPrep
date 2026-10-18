@@ -464,6 +464,7 @@ def _phyloprep_finalize_steps(file_manifest, options, output_root, engine_root="
         mapping_items = [item for item in file_manifest if item.get("role") == "mapping"]
         if not sources:
             raise ValueError("No source FASTA files were supplied to the PhyloPrep browser finalizer.")
+        phyloprep.write_paths(root / 'inputs.pathlist', [source.name for source in sources])
         stems = [path.stem for path in sources]
         if len(set(stems)) != len(stems):
             raise ValueError("Input FASTA files must have unique basenames.")
@@ -532,6 +533,10 @@ def _phyloprep_finalize_steps(file_manifest, options, output_root, engine_root="
             taxon_mapping=taxon_mapping,
             mapping_signature=mapping_signature,
             no_resume=True,
+            no_report=bool(options.get('no_report', False)),
+            _report_dependency_error=options.get('report_dependency_error'),
+            _report_context=options.get('report_context'),
+            _browser_runtime=True,
             missing_taxa=str(options.get("missing_taxa", "skip-gene")),
             min_length=number("min_length", 1, int),
             max_n_ratio=number("max_n_ratio", 1.0),
@@ -545,7 +550,7 @@ def _phyloprep_finalize_steps(file_manifest, options, output_root, engine_root="
         phyloprep.validate_pipeline_options(args)
         from msap_progress import ProgressReporter, progress_context, report_phase
         variants = ("raw",) if args.notrim else ("raw", "trimmed")
-        args._progress = ProgressReporter('PhyloPrep', len(variants) + 1, unit='stages', callback=progress_callback)
+        args._progress = ProgressReporter('PhyloPrep', len(variants) + 1 + (not args.no_report), unit='stages', callback=progress_callback)
 
         def browser_run(script, *arguments, cwd=None):
             print("[phyloprep-web] " + " ".join([script, *map(str, arguments)]), flush=True)
@@ -616,7 +621,13 @@ def _phyloprep_finalize_steps(file_manifest, options, output_root, engine_root="
             with analysis_step():
                 report_phase(args, 'Publishing matrices')
                 phyloprep.publish_matrices(matrix_root, root, variants, block_signals=False)
-                args._progress.update('Complete', completed=len(variants) + 1)
+                args._progress.update('Matrices published', completed=len(variants) + 1)
+
+        with analysis_step():
+            if not args.no_report:
+                report_phase(args, 'Generating HTML report')
+            report_result = phyloprep.generate_pipeline_report(args, root)
+            args._progress.update('Complete', completed=args._progress.total)
 
         files = current_outputs()
         if not files:
@@ -625,6 +636,8 @@ def _phyloprep_finalize_steps(file_manifest, options, output_root, engine_root="
             "ok": True,
             "files": files,
             "summary": f"Created {len(files)} files with the browser PhyloPrep pipeline.",
+            "report": report_result,
+            "warnings": [report_result['warning']] if report_result['status'] == 'failed' else [],
             "stdout": stdout.getvalue(),
             "stderr": stderr.getvalue(),
         })

@@ -79,6 +79,11 @@ const server = http.createServer((req,res) => {
       options:{seqtype:'codon',genetic_code:1},outputName:'',usesPathList:false});
     await outputSaveSession.settle();
     if(outputSaveSession.error)throw outputSaveSession.error;
+    const html=result.files.find(file=>file.name==='phyloprep-report.html');
+    if(result.report?.status!=='generated'||!html)throw Error('Automatic HTML report failed: '+JSON.stringify(result.warnings));
+    const reportText=await PhyloPrepSave.readText(html);
+    const reportData=JSON.parse(reportText.match(/id="report-data">(.*?)<\/script>/s)[1]);
+    if(reportData.overview.input_loci!==loci||reportData.matrices.length!==24)throw Error('Automatic report metadata incomplete');
     if(result.files.some(file=>file.content!==undefined||!file.storage.disk))throw Error('Final result text was retained');
     if(result.workspace_storage?.kind!=='opfs'||result.workspace_storage.cached_file_bytes!==0)throw Error('Locus files were not disk-backed');
     const renamed=result.files.filter(file=>file.name.startsWith('renamed/'));
@@ -167,6 +172,7 @@ const server = http.createServer((req,res) => {
      if(aligned!==2)throw Error('End-to-end alignment did not run');
      outputSaveSession=createOutputSaveSession(e2e);producedFiles=new Map();
      const rerun=await runPhyloPrepBrowserWorkflow(request);await outputSaveSession.settle();
+     if(rerun.report?.status!=='generated'||!rerun.files.some(file=>file.name==='phyloprep-report.html'))throw Error('Cached pipeline did not regenerate report');
      if(aligned!==2 || rerun.reused_loci!==2)throw Error('End-to-end cached pipeline recomputed alignment');
      const matrix=rerun.files.find(file=>file.name==='matrices/codon/raw/supermatrix.fasta');
      if(await PhyloPrepSave.readText(matrix)!=='>sp_a\nATGGCTATGGCT\n>sp_b\nATGGCT??????\n>sp_c\nATGGCTATGGCT\n')throw Error('Cached pipeline matrix changed');
@@ -180,5 +186,25 @@ const server = http.createServer((req,res) => {
    return {calls,size:matrix.size};
  });
  console.log(`Real browser verified reuse, --no-resume, changed-file recomputation, no-rewrite adoption, Blob input/output (${extra.size} bytes) and OG extraction passed.`);
+ await context.route('**/sqlite3-*.whl',route=>route.abort('failed'));
+ const reportFailure=await page.evaluate(async()=>{
+   const run=async no_report=>{
+     releaseIdleWorkers({pyodide:true});
+     outputDirectoryHandle=undefined;outputSaveSession=undefined;producedFiles=new Map();
+     return runInWorker({type:'phyloprep-finalize',script:'phyloprep.py',files:[
+       {name:'report-failure.fa',role:'source',content:'>a\nACGT\n>b\nACGA\n'},
+       {name:'report-failure.mafft.nucl.aln.fasta',role:'batch-output',content:'>a\nACGT\n>b\nACGA\n'}],
+       options:{seqtype:'nucl',notrim:true,no_report},outputName:'',usesPathList:false});
+   };
+   try{
+     const failed=await run(false);
+     if(!failed.ok||failed.report?.status!=='failed'||!failed.warnings?.some(w=>w.includes('sqlite3')))throw Error('Report package failure affected analysis');
+     if(!failed.files.some(file=>file.name==='matrices/nucl/raw/supermatrix.fasta')||failed.files.some(file=>file.name==='phyloprep-report.html'))throw Error('Report failure lost matrices or returned stale HTML');
+     const skipped=await run(true);
+     if(!skipped.ok||skipped.report?.status!=='skipped'||skipped.warnings.length)throw Error('--no-report attempted report package loading');
+     return {failed:failed.report.status,skipped:skipped.report.status};
+   }finally{releaseIdleWorkers({pyodide:true});}
+ });
+ console.log('Real browser report package failure retained matrices; --no-report skipped package loading: '+JSON.stringify(reportFailure));
  }finally{clearTimeout(timeout);await browser.close();server.close();}
 })().catch(error=>{console.error(error);server.close();process.exitCode=1;});
