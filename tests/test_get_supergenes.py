@@ -12,10 +12,10 @@ def write_alignment(path, records):
     path.write_text("".join(f">{taxon}\n{sequence}\n" for taxon, sequence in records))
 
 
-def run_supergenes(tmp_path, missing_taxa):
+def run_supergenes(tmp_path, missing_taxa=None):
     complete_gene = tmp_path / "complete.fasta"
     incomplete_gene = tmp_path / "incomplete.fasta"
-    prefix = tmp_path / missing_taxa
+    prefix = tmp_path / (missing_taxa or 'default')
     write_alignment(
         complete_gene,
         [("sp1", "AAA"), ("sp2", "AAA"), ("sp3", "AAA")],
@@ -31,8 +31,7 @@ def run_supergenes(tmp_path, missing_taxa):
             str(incomplete_gene),
             "-p",
             str(prefix),
-            "--missing-taxa",
-            missing_taxa,
+            *(["--missing-taxa", missing_taxa] if missing_taxa else []),
         ],
         check=True,
     )
@@ -54,8 +53,9 @@ def test_skip_gene_omits_a_gene_missing_any_taxon(tmp_path):
     assert f"alignment = {prefix.name}.phy;" in partition_config
 
 
-def test_pad_gaps_preserves_a_gene_missing_a_taxon(tmp_path):
-    prefix = run_supergenes(tmp_path, "pad-gaps")
+@pytest.mark.parametrize('policy', [None, 'pad-gaps'])
+def test_pad_gaps_preserves_a_gene_missing_a_taxon(tmp_path, policy):
+    prefix = run_supergenes(tmp_path, policy)
 
     assert (prefix.parent / f"{prefix.name}.fasta").read_text() == (
         ">sp1\nAAACCC\n>sp2\nAAACCC\n>sp3\nAAA???\n"
@@ -83,6 +83,7 @@ def test_skip_gene_writes_a_report_when_no_gene_can_be_included(tmp_path):
             str(second_gene),
             "-p",
             str(prefix),
+            "--missing-taxa", "skip-gene",
         ],
         capture_output=True,
         text=True,

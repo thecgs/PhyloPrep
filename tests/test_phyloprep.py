@@ -74,13 +74,31 @@ def test_unmapped_gene_ids_that_cannot_concatenate_keep_a_report_and_stop(tmp_pa
     first.write_text(">gene_a\nACGT\n>gene_b\nACGA\n")
     second.write_text(">gene_c\nACGT\n>gene_d\nACGA\n")
     output = tmp_path / "results"
-    result = invoke(tmp_path, env, "-i", first, second, "-st", "nucl", "--notrim", "-o", output, "-t", "1")
+    result = invoke(tmp_path, env, "-i", first, second, "-st", "nucl", "--notrim", "-o", output, "-t", "1", "--missing-taxa", "skip-gene")
     assert result.returncode == 2
     assert "provide phyloprep.py -m TAXA.tsv" in result.stderr
     report = output / "reports/concatenation/nucl/raw/original_ids.report.tsv"
     assert report.exists()
     assert report.read_text().count("\tskipped\tmissing taxa:") == 2
     assert not (output / "matrices").exists()
+
+
+def test_default_padding_keeps_incomplete_loci_without_fourfold_sites(tmp_path, fake_aligner):
+    _, env = fake_aligner
+    first, second = tmp_path / 'gene1.fa', tmp_path / 'gene2.fa'
+    first.write_text('>a\nGCT\n>b\nGCC\n')
+    second.write_text('>b\nGGT\n>c\nGGA\n')
+    output = tmp_path / 'results'
+    result = invoke(tmp_path, env, '-i', first, second, '-o', output,
+                    '-t', '1', '--notrim', '--no-report')
+    assert result.returncode == 0, result.stdout + result.stderr
+    for branch in (output / 'matrices', output / 'matrices/paired'):
+        codon = branch / 'codon/raw'
+        check_formats(codon, 'supermatrix', {'a': 'GCT???', 'b': 'GCCGGT', 'c': '???GGA'})
+        check_formats(codon, 'codon3rd.supermatrix', {'a': 'T?', 'b': 'CT', 'c': '?A'})
+        check_formats(branch / 'prot/raw', 'supermatrix', {'a': 'A?', 'b': 'AG', 'c': '?G'})
+        assert 'all-taxon rule' in (codon / 'fourfold.skipped.txt').read_text()
+        assert all(not (codon / ('fourfold.' + ext)).exists() for ext in ('fasta', 'phy', 'nex'))
 
 
 def test_mapping_that_collapses_paralogs_is_reported_by_qc(tmp_path, fake_aligner):

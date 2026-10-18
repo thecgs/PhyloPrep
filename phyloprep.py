@@ -65,8 +65,9 @@ It preserves native alignments and change reports, and automatically generates
 codon-position and four-fold matrices from inferred coding positions. These do
 not establish functional coding or synonymous-site neutrality. Empty four-fold
 results are skipped with a message. See reports/ for audit TSVs.
-No loci in any independent/paired dataset, or no four-fold sites in a nonempty
-normal codon dataset, is an error; final
+No loci in any independent/paired dataset is an error. A padded codon matrix
+with zero qualifying four-fold sites skips that derived dataset; a complete
+normal codon matrix with zero four-fold sites remains an error. Final
 matrices are published only after all requested conversions succeed.
 """
     for action in parser._actions:
@@ -78,7 +79,7 @@ matrices are published only after all requested conversions succeed.
     pipeline.add_argument("-m", "--mapping", "--map", metavar="TSV",
                           help="Rename all alignment IDs using this two-column mapping table before QC and concatenation.")
     pipeline.add_argument("--missing-taxa", choices=["skip-gene", "pad-gaps"],
-                          default="skip-gene", help="Missing-taxon policy: pad-gaps fills absent sequences with ? (default: skip-gene).")
+                          default="pad-gaps", help="Missing-taxon policy: pad-gaps fills absent sequences with ? (default: pad-gaps).")
     pipeline.add_argument("--no-report", action="store_true",
                           help="Skip the HTML report normally generated after matrices are published. Report failures do not invalidate completed analysis outputs.")
     qc = parser.add_argument_group("alignment QC options (same defaults as alignment_qc.py)")
@@ -762,12 +763,24 @@ def build_group_matrices(args, root, context):
             with AlignmentSpool(fourfold, directory=fourfold.parent):
                 pass
         except ValueError as error:
-            if args.seqtype != 'pseudogene':
+            missing_blocks = stage / 'supermatrix.missing.tsv'
+            padded_empty = False
+            if args.missing_taxa == 'pad-gaps' and missing_blocks.is_file():
+                with missing_blocks.open() as handle:
+                    next(handle, None)
+                    has_padding = next(handle, None) is not None
+                if has_padding:
+                    with fourfold.open() as handle:
+                        padded_empty = not any(line.strip() and not line.startswith('>') for line in handle)
+            if args.seqtype != 'pseudogene' and not padded_empty:
                 raise ValueError(f"No usable four-fold matrix for {seqtype}/{variant} "
                                  "(possibly zero qualifying sites); final matrices were not published") from error
             print(f'[phyloprep] {seqtype}/{variant}: no usable four-fold sites; skipping FASTA/PHY/NEX for this matrix.', flush=True)
             fourfold.unlink()
-            (stage / 'fourfold.skipped.txt').write_text('No usable four-fold sites; no matrix exported.\n')
+            reason = ('No four-fold sites satisfy the all-taxon rule in this padded matrix; '
+                      'other matrices were retained.\n' if padded_empty else
+                      'No usable four-fold sites; no matrix exported.\n')
+            (stage / 'fourfold.skipped.txt').write_text(reason)
         else:
             matrices.append(fourfold)
 

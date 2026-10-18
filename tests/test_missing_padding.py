@@ -49,7 +49,7 @@ def test_padding_coordinates_and_codon_derivatives(tmp_path, monkeypatch):
     complete.write_text('>a\nGCT---GCC\n>b\nGCTGCTGCC\n')
     partial.write_text('>a\nGCTGCC\n')
     prefix = str(tmp_path / 'matrix')
-    get_supergenes([str(complete), str(partial)], prefix, missing_taxa='pad-gaps')
+    get_supergenes([str(complete), str(partial)], prefix)
     source = Path(prefix + '.fasta')
     assert sequences(source) == {'a': 'GCT---GCCGCTGCC', 'b': 'GCTGCTGCC??????'}
     assert sequences(Path(prefix + '.phy'), 'phylip-relaxed') == sequences(source)

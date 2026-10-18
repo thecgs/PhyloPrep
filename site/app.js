@@ -117,7 +117,7 @@ const modules = [
     parameters: [
       { flag: "-st", label: "Sequence type", description: "Browser pipeline supports codon, protein, and nucleotide modes. Pseudogene/MACSE remains CLI-only.", type: "select", value: "codon", options: [["codon", "codon"], ["prot", "prot"], ["nucl", "nucl"]], token: "seqtype" },
       geneticCodeParameter(),
-      { flag: "--missing-taxa", label: "Missing taxa policy", description: "Skip genes missing taxa, or retain them by filling absent sequences with ?. Existing alignment gaps remain -.", type: "select", value: "skip-gene", options: [["skip-gene", "skip-gene"], ["pad-gaps", "pad-gaps (fill with ?)"]], token: "missing_taxa" },
+      { flag: "--missing-taxa", label: "Missing taxa policy", description: "Default pad-gaps retains incomplete loci and fills absent taxon sequences with ?. Select skip-gene to require complete taxon coverage. Existing alignment gaps remain -.", type: "select", value: "pad-gaps", options: [["skip-gene", "skip-gene"], ["pad-gaps", "pad-gaps (fill with ?)"]], token: "missing_taxa" },
       { flag: "-s", label: "Alignment software", description: "Runs locally through Biowasm/WebAssembly. MAFFT E-INS-i is the browser default through Biowasm's compiled tbfast + dvtditr pipeline; CLI -s mafft continues to use upstream mafft --auto and can differ.", type: "select", value: "mafft", options: [["mafft", "MAFFT E-INS-i (Biowasm, default)"], ["muscle", "MUSCLE (Biowasm)"]], token: "align_software" },
       { flag: "-t", label: "Threads per locus", description: "Browser fixed to one thread for GitHub Pages/WebAssembly compatibility.", type: "select", value: "1", options: [["1", "1 (browser fixed)"]], token: "thread" },
       { flag: "-j", label: "Concurrent loci", description: "Browser edition processes loci sequentially to keep memory predictable.", type: "select", value: "1", options: [["1", "1 (browser sequential)"]], token: "jobs" },
@@ -305,7 +305,7 @@ const modules = [
     inputs: ["One or more alignment FASTA files (-i, --input)"], outputs: ["PREFIX.fasta and PREFIX.phy", "Partition files, gene-inclusion report and missing-block provenance"],
     inputFields: [{ key: "inputs", label: "Alignment input files", flag: "-i, --input", multiple: true, pathList: true }],
     outputLabel: "Matrix prefix", outputHelp: "The command-line script derives supermatrix files from this prefix.", defaultOutput: "supergene",
-    parameters: [{ flag: "--missing-taxa", label: "Missing taxa policy", description: "skip-gene excludes incomplete loci; pad-gaps fills absent sequences with ?. Existing alignment gaps remain -.", type: "select", value: "skip-gene", options: [["skip-gene", "skip-gene"], ["pad-gaps", "pad-gaps (fill with ?)"]], token: "missing_taxa" }],
+    parameters: [{ flag: "--missing-taxa", label: "Missing taxa policy", description: "Default pad-gaps fills absent taxon sequences with ?. Explicit skip-gene excludes incomplete loci. Existing alignment gaps remain -.", type: "select", value: "pad-gaps", options: [["skip-gene", "skip-gene"], ["pad-gaps", "pad-gaps (fill with ?)"]], token: "missing_taxa" }],
     command: "python get_supergenes.py -i {inputs} -p {prefix} --missing-taxa {missing_taxa}",
   },
   {
@@ -2023,7 +2023,7 @@ async function buildRunManifest(module, request, result, outputs) {
     report: result.report || null,
     reused_loci: result.reused_loci || result.reusedLoci || 0,
     matrix_padding: ["phyloprep.py", "get_supergenes.py"].includes(module.script)
-      ? { missing_symbol: "?", gap_symbol: "-", block_table_suffix: ".missing.tsv", policy: request.options.missing_taxa || "skip-gene" } : null,
+      ? { missing_symbol: "?", gap_symbol: "-", block_table_suffix: ".missing.tsv", policy: request.options.missing_taxa || "pad-gaps" } : null,
     runtime: {
       pyodide: "0.27.2",
       workspace_storage: result.workspace_storage || {kind:"memfs"},
