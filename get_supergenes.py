@@ -11,7 +11,7 @@ from pathlib import Path
 from collections import OrderedDict
 from contextlib import ExitStack
 from Bio import SeqIO
-from msap_io import atomic_output, expand_input_paths, check_output_path, NoGenesIncludedError, file_signature
+from msap_io import atomic_output, expand_input_paths, check_output_path, NoGenesIncludedError
 
 def tidy_name(file):
     # Strip only the current PhyloPrep alignment suffix.
@@ -133,15 +133,13 @@ def get_supergenes(infiles, prefix, missing_taxa="pad-gaps", input_lists=(), wri
     taxa_seen = set()
     report_rows = []
 
-    # First pass retains only file metadata and the global taxon order.
+    # First pass retains only locus lengths and the global taxon order.
+    # Inputs are expected to remain unchanged throughout concatenation.
     for file in infiles:
         if os.path.getsize(file) == 0:
             report_rows.append((file, "skipped", "empty file"))
             continue
-        signature = file_signature(file)
         taxa, length = scan_alignment(file)
-        if signature != file_signature(file):
-            raise ValueError(f"Input changed while scanning: {file}")
         if not taxa or not length:
             report_rows.append((file, "skipped", "empty alignment" if not taxa else "zero-column alignment"))
             continue
@@ -149,7 +147,7 @@ def get_supergenes(infiles, prefix, missing_taxa="pad-gaps", input_lists=(), wri
             if taxon not in taxa_seen:
                 taxa_order.append(taxon)
                 taxa_seen.add(taxon)
-        alignments.append((file, length, signature))
+        alignments.append((file, length))
 
     # A single locus is loaded at a time in the second pass. Spools use actual
     # disk on the CLI and reduce duplicated Python strings in browser MEMFS.
@@ -161,12 +159,12 @@ def get_supergenes(infiles, prefix, missing_taxa="pad-gaps", input_lists=(), wri
         spool = TaxonSpool(directory, taxa_order)
         try:
             selected_alignments = []
-            for file, alignment_length, signature in alignments:
-                if signature != file_signature(file):
-                    raise ValueError(f"Input changed before concatenation: {file}")
+            for file, alignment_length in alignments:
                 sequences, error = read_alignment(file)
-                if error or signature != file_signature(file):
-                    raise ValueError(f"Input changed during concatenation: {file}")
+                if error:
+                    raise ValueError(f"{file}: {error}")
+                if len(next(iter(sequences.values()))) != alignment_length:
+                    raise ValueError(f"{file}: alignment length differs from the first pass ({alignment_length})")
                 missing = [taxon for taxon in taxa_order if taxon not in sequences]
                 if missing and missing_taxa == "skip-gene":
                     reason = "missing taxa: " + ", ".join(missing)

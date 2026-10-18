@@ -319,6 +319,8 @@ In the complete `phyloprep.py -st codon` workflow the merged `reports/sequence_c
 
 ### `get_supergenes.py` — supermatrix and partitions
 
+Concatenation uses two sequence-reading passes: the first determines the global taxon order and locus lengths; the second appends one locus at a time to temporary taxon files. Duplicate-ID and equal-length checks remain in both passes. The concatenator does not compute SHA-256 fingerprints or repeatedly hash input contents; inputs are expected to remain unchanged during processing. Workflow checkpoint and output-provenance checksums are unchanged.
+
 Concatenates aligned genes and writes `PREFIX.fasta`, `PREFIX.phy`, a report, and partition files. By default, `pad-gaps` retains incomplete loci by filling absent sequences with `?`; explicit `--missing-taxa skip-gene` excludes them. Both policies preserve original alignment gaps as `-`. A sparse `PREFIX.missing.tsv` records only artificial missing blocks, using 1-based inclusive coordinates in the full concatenated matrix (nt for nucleotide/codon matrices, aa for protein matrices). It contains `locus`, `taxon`, `start`, `end`, `length` and `fill_character`; the locus ID matches the partition name. With no padded blocks, the table contains its header only.
 
 ```bash
