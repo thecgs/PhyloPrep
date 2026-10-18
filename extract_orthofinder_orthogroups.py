@@ -232,7 +232,7 @@ def extract_orthologs(orthogroups: Path, sequence_directory: Path, outdir: Path,
             f"{len(taxa)} selected taxa ({incomplete} retained OGs are incomplete). Multi-copy taxa are omitted, "
             "not resolved by choosing a copy. To retain incomplete loci during downstream concatenation, "
             "use phyloprep.py --missing-taxa pad-gaps (or get_supergenes.py --missing-taxa pad-gaps); "
-            "the default skip-gene policy excludes loci missing a target taxon.", file=sys.stderr)
+            "pad-gaps is the default. Explicit --missing-taxa skip-gene excludes loci missing a target taxon.", file=sys.stderr)
     if longest_copy:
         print(
             "WARNING: --copy-mode all-copies --longest-copy selects representatives by non-ambiguous length, "

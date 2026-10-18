@@ -119,7 +119,7 @@ class TaxonSpool:
                 self.paths[taxon].unlink()
 
 
-def get_supergenes(infiles, prefix, missing_taxa="skip-gene", input_lists=(), write_phylip=True):
+def get_supergenes(infiles, prefix, missing_taxa="pad-gaps", input_lists=(), write_phylip=True):
     """Create a supermatrix while handling taxa missing from individual genes."""
     infiles = list(infiles)
     destinations = [prefix + suffix for suffix in
@@ -287,8 +287,8 @@ if __name__ == '__main__':
     required.add_argument('-p', '--prefix', metavar='PREFIX', required=True,
                           help='Prefix for supermatrix, partition, and report files.')
     optional.add_argument('--missing-taxa', choices=['skip-gene', 'pad-gaps'],
-                          default='skip-gene',
-                          help='Missing-taxon policy: skip-gene excludes incomplete loci; pad-gaps fills absent sequences with ? (default: skip-gene).')
+                          default='pad-gaps',
+                          help='Missing-taxon policy: skip-gene excludes incomplete loci; pad-gaps fills absent sequences with ? (default: pad-gaps).')
     optional.add_argument('--no-phylip', action='store_true',
                           help='Skip PHYLIP output when a downstream converter will generate it.')
     optional.add_argument('-h', '--help', action='help', 

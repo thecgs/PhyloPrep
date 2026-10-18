@@ -526,6 +526,7 @@ def _phyloprep_finalize_steps(file_manifest, options, output_root, engine_root="
             align_software=str(options.get("align_software", "mafft")),
             notrim=bool(options.get("notrim", False)),
             genetic_code=int(options.get("genetic_code", 1)),
+            fourfold_missing_policy=str(options.get('fourfold_missing_policy', 'ignore-missing')),
             G=number("gap_ratio", 0.2),
             N=number("n_ratio", 0.2),
             X=number("x_ratio", 0.2),
@@ -537,7 +538,7 @@ def _phyloprep_finalize_steps(file_manifest, options, output_root, engine_root="
             _report_dependency_error=options.get('report_dependency_error'),
             _report_context=options.get('report_context'),
             _browser_runtime=True,
-            missing_taxa=str(options.get("missing_taxa", "skip-gene")),
+            missing_taxa=str(options.get("missing_taxa", "pad-gaps")),
             min_length=number("min_length", 1, int),
             max_n_ratio=number("max_n_ratio", 1.0),
             max_x_ratio=number("max_x_ratio", 1.0),
@@ -658,7 +659,13 @@ def _phyloprep_finalize_steps(file_manifest, options, output_root, engine_root="
         technical_error = stderr.getvalue().strip() or "The browser PhyloPrep pipeline failed."
         if phyloprep is not None and isinstance(error, phyloprep.NoGenesIncludedError):
             files = current_outputs()
-            if mapping_supplied:
+            if options.get('missing_taxa', 'pad-gaps') == 'pad-gaps':
+                user_error = (
+                    "No supermatrix could be built. Missing-taxon padding (pad-gaps) is already enabled. "
+                    "Inspect supermatrix.report.tsv and QC reports, and verify taxon IDs and any map.tsv mapping. "
+                    "Diagnostic reports and intermediate outputs are available below."
+                )
+            elif mapping_supplied:
                 user_error = (
                     "No supermatrix could be built with missing-taxa=skip-gene because no locus retained the full "
                     "taxon set. Inspect supermatrix.report.tsv. If taxa are genuinely absent, use pad-gaps; if the "

@@ -45,6 +45,17 @@ assert.ok(!modules.find(m => m.script === 'rename_taxa.py').parameters.some(p =>
 const workerContext = vm.createContext({ self: { addEventListener() {} } });
 vm.runInContext(await readFile('site/pyodide-worker.js', 'utf8'), workerContext);
 workerContext.stage = { fastaFiles: [{path:'/cds.fa'}, {path:'/prot.fa'}], outputRoot:'/out' };
+for (const script of ['phyloprep.py','extract_4-fold_degenerated_sites.py']) {
+  const parameter=modules.find(module=>module.script===script).parameters.find(parameter=>parameter.token==='fourfold_missing_policy');
+  assert.equal(parameter.value,'ignore-missing');
+  assert.deepEqual(Array.from(parameter.options,pair=>pair[0]),['ignore-missing','require-all']);
+}
+workerContext.request={script:'extract_4-fold_degenerated_sites.py',options:{},outputName:'fourfold.fa'};
+let fourfoldArgs=vm.runInContext('originalArguments(request,stage)',workerContext);
+assert.equal(fourfoldArgs[fourfoldArgs.indexOf('--fourfold-missing-policy')+1],'ignore-missing');
+workerContext.request.options.fourfold_missing_policy='require-all';
+fourfoldArgs=vm.runInContext('originalArguments(request,stage)',workerContext);
+assert.equal(fourfoldArgs[fourfoldArgs.indexOf('--fourfold-missing-policy')+1],'require-all');
 workerContext.request = { script:'AA2Codon.py', options:{ genetic_code:'2' }, outputName:'codon.fa' };
 assert.ok(!vm.runInContext('originalArguments(request, stage)', workerContext).includes('-g'));
 workerContext.request.options.validate_translation = true;

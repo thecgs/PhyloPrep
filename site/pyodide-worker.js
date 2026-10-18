@@ -322,9 +322,9 @@ function originalArguments(request, stage) {
     case "calulate_4dtv_and_correction.py":
       return ["-i", ...listInputs(stage), "-o", output, "-g", option(values.genetic_code, "1")];
     case "extract_4-fold_degenerated_sites.py":
-      return ["-i", inputFile(stage), "-o", output, "-g", option(values.genetic_code, "1")];
+      return ["-i", inputFile(stage), "-o", output, "-g", option(values.genetic_code, "1"), '--fourfold-missing-policy', option(values.fourfold_missing_policy, 'ignore-missing')];
     case "get_supergenes.py":
-      return ["-i", ...listInputs(stage), "-p", outputPath(stage, request.outputName, "supergene"), "--missing-taxa", option(values.missing_taxa, "skip-gene")];
+      return ["-i", ...listInputs(stage), "-p", outputPath(stage, request.outputName, "supergene"), "--missing-taxa", option(values.missing_taxa, "pad-gaps")];
     case "filter_sequences.py":
       return ["-i", inputFile(stage), "-o", output, "-st", option(values.seqtype, "nucl"), "--min-length", option(values.min_length, "0"), "--max-gap-ratio", option(values.max_gap_ratio, "1"), "--max-n-ratio", option(values.max_n_ratio, "1"), "--max-x-ratio", option(values.max_x_ratio, "1"), ...(stage.keepTaxa ? ["--keep-taxa", stage.keepTaxa] : []), ...(stage.removeTaxa ? ["--remove-taxa", stage.removeTaxa] : [])];
     case "rename_taxa.py": {

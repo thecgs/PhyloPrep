@@ -79,6 +79,12 @@ const geneticCodeOptions = [
   ["33", "33. Cephalodiscidae Mitochondrial UAA-Tyr Code"],
 ];
 
+function fourfoldMissingPolicyParameter() {
+  return {flag: '--fourfold-missing-policy', label: 'Fourfold missing-codon policy',
+    description: 'ignore-missing skips only complete ??? codons when deciding eligibility and requires at least two observed taxa. Every observed codon must qualify and share the first two bases. require-all requires every taxon to qualify. NNN, gaps and partial missing codons exclude a site in both modes; output missing bases remain ?.',
+    type: 'select', value: 'ignore-missing', options: [['ignore-missing', 'Ignore complete missing codons (???)'], ['require-all', 'Require all taxa to be evaluable']], token: 'fourfold_missing_policy'};
+}
+
 function geneticCodeParameter() {
   return {
     flag: "-g TABLE",
@@ -117,7 +123,8 @@ const modules = [
     parameters: [
       { flag: "-st", label: "Sequence type", description: "Browser pipeline supports codon, protein, and nucleotide modes. Pseudogene/MACSE remains CLI-only.", type: "select", value: "codon", options: [["codon", "codon"], ["prot", "prot"], ["nucl", "nucl"]], token: "seqtype" },
       geneticCodeParameter(),
-      { flag: "--missing-taxa", label: "Missing taxa policy", description: "Skip genes missing taxa, or retain them by filling absent sequences with ?. Existing alignment gaps remain -.", type: "select", value: "skip-gene", options: [["skip-gene", "skip-gene"], ["pad-gaps", "pad-gaps (fill with ?)"]], token: "missing_taxa" },
+      fourfoldMissingPolicyParameter(),
+      { flag: "--missing-taxa", label: "Missing taxa policy", description: "Default pad-gaps retains incomplete loci and fills absent taxon sequences with ?. Select skip-gene to require complete taxon coverage. Existing alignment gaps remain -.", type: "select", value: "pad-gaps", options: [["skip-gene", "skip-gene"], ["pad-gaps", "pad-gaps (fill with ?)"]], token: "missing_taxa" },
       { flag: "-s", label: "Alignment software", description: "Runs locally through Biowasm/WebAssembly. MAFFT E-INS-i is the browser default through Biowasm's compiled tbfast + dvtditr pipeline; CLI -s mafft continues to use upstream mafft --auto and can differ.", type: "select", value: "mafft", options: [["mafft", "MAFFT E-INS-i (Biowasm, default)"], ["muscle", "MUSCLE (Biowasm)"]], token: "align_software" },
       { flag: "-t", label: "Threads per locus", description: "Browser fixed to one thread for GitHub Pages/WebAssembly compatibility.", type: "select", value: "1", options: [["1", "1 (browser fixed)"]], token: "thread" },
       { flag: "-j", label: "Concurrent loci", description: "Browser edition processes loci sequentially to keep memory predictable.", type: "select", value: "1", options: [["1", "1 (browser sequential)"]], token: "jobs" },
@@ -138,7 +145,7 @@ const modules = [
       { flag: "--paired-pis-policy", label: "Paired PIS policy", description: "Codon workflow only. Decide how the minimum PIS threshold is applied to the paired codon/protein locus: both must pass, either may pass, or only codon/protein PIS controls retention. Additional paired matrices use the same locus set; independent matrices use each representation's own passing loci.", type: "select", value: "both", options: [["both", "both"], ["either", "either"], ["codon", "codon"], ["protein", "protein"]], token: "paired_pis_policy" },
       { flag: "--allow-internal-stop", label: "Allow internal stop", description: "Retain a protein locus or codon/protein locus pair when an internal stop is observed directly or recorded by MSAP as masked to NNN/X. The masked NNN/X is never restored.", type: "checkbox", value: false, token: "allow_internal_stop" },
     ],
-    command: "python phyloprep.py -i {inputs} -o phyloprep-results{mapping_option} -st {seqtype} -s {align_software} -t 1 -j 1 -g {genetic_code} -ts trimAlnSeq -G {gap_ratio} -N {n_ratio} -X {x_ratio} --missing-taxa {missing_taxa} --min-length {min_length} --max-n-ratio {max_n_ratio} --max-x-ratio {max_x_ratio} --max-gap-ratio {max_gap_ratio}{min_nucl_pis_option}{min_protein_pis_option} --paired-pis-policy {paired_pis_policy} --protein-stop-symbol {protein_stop_symbol_cli}{allow_internal_stop}{notrim_option}{no_report_option}",
+    command: "python phyloprep.py -i {inputs} -o phyloprep-results{mapping_option} -st {seqtype} -s {align_software} -t 1 -j 1 -g {genetic_code} -ts trimAlnSeq -G {gap_ratio} -N {n_ratio} -X {x_ratio} --missing-taxa {missing_taxa} --fourfold-missing-policy {fourfold_missing_policy} --min-length {min_length} --max-n-ratio {max_n_ratio} --max-x-ratio {max_x_ratio} --max-gap-ratio {max_gap_ratio}{min_nucl_pis_option}{min_protein_pis_option} --paired-pis-policy {paired_pis_policy} --protein-stop-symbol {protein_stop_symbol_cli}{allow_internal_stop}{notrim_option}{no_report_option}",
   },
   {
     script: "MSAP_batch.py", title: "Batch alignment workflow", category: "Batch", browser: true, browserWorkflow: "batch", inputListKey: "inputs", cliOutputDir: "msap-results",
@@ -296,8 +303,8 @@ const modules = [
     inputs: ["Codon-alignment FASTA (-i, --input)"], outputs: ["Four-fold-site FASTA (-o, --out)"],
     inputFields: [{ key: "input", label: "Alignment input files", flag: "-i, --input" }],
     outputLabel: "Output file name", outputHelp: "FASTA file containing extracted sites.", defaultOutput: "fourfold-sites.fasta",
-    parameters: [geneticCodeParameter()],
-    command: "python extract_4-fold_degenerated_sites.py -i {input} -o {output} -g {genetic_code}",
+    parameters: [geneticCodeParameter(), fourfoldMissingPolicyParameter()],
+    command: "python extract_4-fold_degenerated_sites.py -i {input} -o {output} -g {genetic_code} --fourfold-missing-policy {fourfold_missing_policy}",
   },
   {
     script: "get_supergenes.py", title: "Build supergenes", category: "Matrix", browser: true,
@@ -305,7 +312,7 @@ const modules = [
     inputs: ["One or more alignment FASTA files (-i, --input)"], outputs: ["PREFIX.fasta and PREFIX.phy", "Partition files, gene-inclusion report and missing-block provenance"],
     inputFields: [{ key: "inputs", label: "Alignment input files", flag: "-i, --input", multiple: true, pathList: true }],
     outputLabel: "Matrix prefix", outputHelp: "The command-line script derives supermatrix files from this prefix.", defaultOutput: "supergene",
-    parameters: [{ flag: "--missing-taxa", label: "Missing taxa policy", description: "skip-gene excludes incomplete loci; pad-gaps fills absent sequences with ?. Existing alignment gaps remain -.", type: "select", value: "skip-gene", options: [["skip-gene", "skip-gene"], ["pad-gaps", "pad-gaps (fill with ?)"]], token: "missing_taxa" }],
+    parameters: [{ flag: "--missing-taxa", label: "Missing taxa policy", description: "Default pad-gaps fills absent taxon sequences with ?. Explicit skip-gene excludes incomplete loci. Existing alignment gaps remain -.", type: "select", value: "pad-gaps", options: [["skip-gene", "skip-gene"], ["pad-gaps", "pad-gaps (fill with ?)"]], token: "missing_taxa" }],
     command: "python get_supergenes.py -i {inputs} -p {prefix} --missing-taxa {missing_taxa}",
   },
   {
@@ -689,6 +696,7 @@ function updateContextualParameters() {
     if (card) card.dataset.contextHidden = String(Boolean(hidden));
   };
   hide("genetic_code", script === "AA2Codon.py" ? !elements.parameterList.querySelector('[data-parameter="validate_translation"]')?.checked : seqtype === "prot" || seqtype === "nucl");
+  hide('fourfold_missing_policy', script === 'phyloprep.py' && !['codon', 'pseudogene'].includes(seqtype));
   hide("max_copies_per_taxon", elements.parameterList.querySelector('[data-parameter="copy_mode"]')?.value !== "all-copies");
   hide("longest_copy", elements.parameterList.querySelector('[data-parameter="copy_mode"]')?.value !== "all-copies");
   if (script === "extract_orthofinder_orthogroups.py") hide("seqtype", elements.parameterList.querySelector('[data-parameter="copy_mode"]')?.value !== "all-copies" || !elements.parameterList.querySelector('[data-parameter="longest_copy"]')?.checked);
@@ -2034,7 +2042,7 @@ async function buildRunManifest(module, request, result, outputs) {
     report: result.report || null,
     reused_loci: result.reused_loci || result.reusedLoci || 0,
     matrix_padding: ["phyloprep.py", "get_supergenes.py"].includes(module.script)
-      ? { missing_symbol: "?", gap_symbol: "-", block_table_suffix: ".missing.tsv", policy: request.options.missing_taxa || "skip-gene" } : null,
+      ? { missing_symbol: "?", gap_symbol: "-", block_table_suffix: ".missing.tsv", policy: request.options.missing_taxa || "pad-gaps" } : null,
     runtime: {
       pyodide: "0.27.2",
       workspace_storage: result.workspace_storage || {kind:"memfs"},

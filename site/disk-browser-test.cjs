@@ -218,8 +218,8 @@ const server = http.createServer((req,res) => {
    // Identity alignment for identical sequences; original MSAP/Python stages remain real.
    runBrowserAlignment=async sequence=>{aligned++;return sequence;};
    try{
-     const request={options:{seqtype:'codon',notrim:true,missing_taxa:'pad-gaps'},files:[
-       ...[0,1].map(i=>({name:`e2e${i}.fa`,inputKey:'inputs',fasta:true,blob:new File([i===0?'>g1\nATGGCT\n>g2\nATGGCT\n>g3\nATGGCT\n':'>g1\nATGGCT\n>g3\nATGGCT\n'],`e2e${i}.fa`)})),
+     const request={options:{seqtype:'codon',notrim:true},files:[
+       ...[0,1].map(i=>({name:`e2e${i}.fa`,inputKey:'inputs',fasta:true,blob:new File([i===0?'>g1\nATGGCT\n>g2\nATGGCT\n':'>g1\nATGGCT\n>g3\nATGGCT\n'],`e2e${i}.fa`)})),
        {name:'mapping.tsv',inputKey:'mapping',fasta:false,blob:new File(['g1\tsp_a\ng2\tsp_b\ng3\tsp_c\n'],'mapping.tsv')}]};
      await runPhyloPrepBrowserWorkflow(request);await outputSaveSession.settle();
      if(aligned!==2)throw Error('End-to-end alignment did not run');
@@ -228,13 +228,25 @@ const server = http.createServer((req,res) => {
      if(rerun.report?.status!=='generated'||!rerun.files.some(file=>file.name==='phyloprep-report.html'))throw Error('Cached pipeline did not regenerate report');
      if(aligned!==2 || rerun.reused_loci!==2)throw Error('End-to-end cached pipeline recomputed alignment');
      const matrix=rerun.files.find(file=>file.name==='matrices/codon/raw/supermatrix.fasta');
-     if(await PhyloPrepSave.readText(matrix)!=='>sp_a\nATGGCTATGGCT\n>sp_b\nATGGCT??????\n>sp_c\nATGGCTATGGCT\n')throw Error('Cached pipeline matrix changed');
+     if(await PhyloPrepSave.readText(matrix)!=='>sp_a\nATGGCTATGGCT\n>sp_b\nATGGCT??????\n>sp_c\n??????ATGGCT\n')throw Error('Cached pipeline matrix changed');
      for(const extension of ['phy','nex']){
        const file=rerun.files.find(file=>file.name===`matrices/codon/raw/supermatrix.${extension}`);
        if(!(await PhyloPrepSave.readText(file)).includes('??????'))throw Error('Padding marker lost during export');
      }
      const missing=rerun.files.find(file=>file.name==='matrices/codon/raw/supermatrix.missing.tsv');
      if(!(await PhyloPrepSave.readText(missing)).includes('e2e1\tsp_b\t7\t12\t6\t?'))throw Error('Missing block provenance lost');
+     const fourfold=rerun.files.find(file=>file.name==='matrices/codon/raw/fourfold.fasta');
+     if(await PhyloPrepSave.readText(fourfold)!=='>sp_a\nTT\n>sp_b\nT?\n>sp_c\n?T\n')throw Error('Default observed-taxon fourfold selection failed');
+     const html=rerun.files.find(file=>file.name==='phyloprep-report.html');
+     const report=JSON.parse((await PhyloPrepSave.readText(html)).match(/id="report-data">(.*?)<\/script>/s)[1]);
+     if(report.provenance.parameters.fourfold_missing_policy!=='ignore-missing')throw Error('Fourfold rule missing from report provenance');
+     const strictFolder=await e2e.getDirectoryHandle('strict-fourfold',{create:true});
+     outputDirectoryHandle=strictFolder;outputSaveSession=createOutputSaveSession(strictFolder);producedFiles=new Map();
+     const strict=await runPhyloPrepBrowserWorkflow({...request,options:{...request.options,fourfold_missing_policy:'require-all'}});
+     await outputSaveSession.settle();
+     const skipped=strict.files.find(file=>file.name==='matrices/codon/raw/fourfold.skipped.txt');
+     if(!skipped || !(await PhyloPrepSave.readText(skipped)).includes('all-taxon rule'))throw Error('Strict fourfold strategy did not skip an empty dataset');
+     if(strict.files.some(file=>file.name==='matrices/codon/raw/fourfold.fasta'))throw Error('Strict selection published empty fourfold FASTA');
    }finally{runBrowserAlignment=align;releaseIdleWorkers({pyodide:true});}
    return {calls,size:matrix.size};
  });
