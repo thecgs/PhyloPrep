@@ -112,7 +112,7 @@ const modules = [
       { key: "inputs", label: "Input FASTA files", flag: "-i, --input", multiple: true, pathList: true },
       { key: "mapping", label: "Taxon mapping table", flag: "-m, --mapping", accept: ".tsv,.txt,.csv", required: false },
     ],
-    outputs: ["Per-locus alignments and audit reports", "QC reports", "Optional renamed alignments", "Independent and paired raw/trimmed supermatrices", "Codon-position and four-fold matrices", "FASTA/PHYLIP/NEXUS exports"],
+    outputs: ["Per-locus alignments and audit reports", "QC reports", "Optional renamed alignments", "Independent and paired raw/trimmed supermatrices", "Codon-position and four-fold matrices", "FASTA/PHYLIP/NEXUS exports", "English HTML analysis report"],
     outputLabel: "Pipeline output", outputHelp: "Browser output is collected as downloadable files or written into the selected local folder.", defaultOutput: "", hideOutputName: true,
     parameters: [
       { flag: "-st", label: "Sequence type", description: "Browser pipeline supports codon, protein, and nucleotide modes. Pseudogene/MACSE remains CLI-only.", type: "select", value: "codon", options: [["codon", "codon"], ["prot", "prot"], ["nucl", "nucl"]], token: "seqtype" },
@@ -124,6 +124,7 @@ const modules = [
       { flag: "--no-resume", label: "Recompute existing alignments", description: "With a selected output folder, matching saved alignments are verified and reused by default. Check to rerun alignment and trimming. QC and matrices are always rebuilt.", type: "checkbox", value: false, token: "no_resume" },
       { flag: "-ts", label: "Trimming software", description: "Browser fixed to PhyloPrep's bundled trimAlnSeq.py.", type: "select", value: "trimAlnSeq", options: [["trimAlnSeq", "trimAlnSeq.py (browser fixed)"]], token: "trim_software" },
       { flag: "-n, --notrim", label: "Skip trimming", description: "Process raw alignments only.", type: "checkbox", value: false, token: "notrim" },
+      { flag: "--no-report", label: "Skip HTML report", description: "The English report is generated after matrix publication by default. Report failures preserve all completed analysis outputs and show the reason.", type: "checkbox", value: false, token: "no_report" },
       proteinStopParameter(),
       { flag: "-G", label: "Maximum gap proportion", description: "Maximum gap ratio per site during trimming. Range: 0–1.", type: "number", value: "0.2", step: "0.01", token: "gap_ratio" },
       { flag: "-N", label: "Maximum N proportion", description: "Maximum N ratio per site during nucleotide/codon trimming. Range: 0–1.", type: "number", value: "0.2", step: "0.01", token: "n_ratio" },
@@ -137,7 +138,7 @@ const modules = [
       { flag: "--paired-pis-policy", label: "Paired PIS policy", description: "Codon workflow only. Decide how the minimum PIS threshold is applied to the paired codon/protein locus: both must pass, either may pass, or only codon/protein PIS controls retention. Additional paired matrices use the same locus set; independent matrices use each representation's own passing loci.", type: "select", value: "both", options: [["both", "both"], ["either", "either"], ["codon", "codon"], ["protein", "protein"]], token: "paired_pis_policy" },
       { flag: "--allow-internal-stop", label: "Allow internal stop", description: "Retain a protein locus or codon/protein locus pair when an internal stop is observed directly or recorded by MSAP as masked to NNN/X. The masked NNN/X is never restored.", type: "checkbox", value: false, token: "allow_internal_stop" },
     ],
-    command: "python phyloprep.py -i {inputs} -o phyloprep-results{mapping_option} -st {seqtype} -s {align_software} -t 1 -j 1 -g {genetic_code} -ts trimAlnSeq -G {gap_ratio} -N {n_ratio} -X {x_ratio} --missing-taxa {missing_taxa} --min-length {min_length} --max-n-ratio {max_n_ratio} --max-x-ratio {max_x_ratio} --max-gap-ratio {max_gap_ratio}{min_nucl_pis_option}{min_protein_pis_option} --paired-pis-policy {paired_pis_policy} --protein-stop-symbol {protein_stop_symbol_cli}{allow_internal_stop}{notrim_option}",
+    command: "python phyloprep.py -i {inputs} -o phyloprep-results{mapping_option} -st {seqtype} -s {align_software} -t 1 -j 1 -g {genetic_code} -ts trimAlnSeq -G {gap_ratio} -N {n_ratio} -X {x_ratio} --missing-taxa {missing_taxa} --min-length {min_length} --max-n-ratio {max_n_ratio} --max-x-ratio {max_x_ratio} --max-gap-ratio {max_gap_ratio}{min_nucl_pis_option}{min_protein_pis_option} --paired-pis-policy {paired_pis_policy} --protein-stop-symbol {protein_stop_symbol_cli}{allow_internal_stop}{notrim_option}{no_report_option}",
   },
   {
     script: "MSAP_batch.py", title: "Batch alignment workflow", category: "Batch", browser: true, browserWorkflow: "batch", inputListKey: "inputs", cliOutputDir: "msap-results",
@@ -932,6 +933,7 @@ function valuesForCommand() {
     map_output_option: parameterValues.map_output ? ` --map-output ${cliQuote(mapOutputPath)}` : "",
     allow_duplicate_ids_option: parameterValues.allow_duplicate_ids ? " --allow-duplicate-ids" : "",
     notrim_option: parameterValues.notrim ? " -n" : "",
+    no_report_option: parameterValues.no_report ? " --no-report" : "",
     strip_taxon_prefix_option: parameterValues.strip_taxon_prefix ? " --strip-taxon-prefix" : "",
     max_copies_per_taxon_option: parameterValues.max_copies_per_taxon !== undefined ? ` --max-copies-per-taxon ${parameterValues.max_copies_per_taxon}` : "",
     longest_copy_option: parameterValues.longest_copy ? ` --longest-copy -st ${parameterValues.seqtype || "codon"}` : "",
@@ -1944,6 +1946,7 @@ async function runMsapBatchBrowserWorkflow(request) {
 }
 
 async function runPhyloPrepBrowserWorkflow(request) {
+  const reportFolder = outputSaveSession?.root;
   const mapping = request.files.find(file => file.inputKey === "mapping");
   const batch = await runMsapBatchBrowserWorkflow({ ...request, pipelineOutput: true });
   // Alignment WASM heaps cannot shrink; release idle engines before matrix construction.
@@ -1961,17 +1964,23 @@ async function runPhyloPrepBrowserWorkflow(request) {
     script: "phyloprep.py",
     expectedBundle: batch.engineMetadata?.bundleSha256,
     files: finalFiles,
-    options: request.options,
+    options: { ...request.options, report_context: {
+      reused_loci: batch.reusedLoci || 0,
+      engine_metadata: batch.engineMetadata,
+      runtime: { pyodide: '0.27.2', aligner: externalAlignerLabel(request.options.align_software || 'mafft') },
+    } },
     outputName: "",
     usesPathList: false,
   });
   result.files.push(...(batch.cacheFiles || []));
   result.reused_loci = batch.reusedLoci || 0;
-  if (sources.length > 1) {
-    result.files.push({
-      name: "inputs.pathlist",
-      content: selectedInputPathList(sources),
-    });
+  if (["failed", "skipped"].includes(result.report?.status) && typeof reportFolder?.removeEntry === 'function') {
+    try { await reportFolder.removeEntry('phyloprep-report.html'); }
+    catch (error) {
+      if (error.name !== 'NotFoundError') {
+        result.warnings = [...(result.warnings || []), `An older HTML report could not be removed from the output folder: ${error.message}. It does not describe this run.`];
+      }
+    }
   }
   return result;
 }
@@ -2011,6 +2020,7 @@ async function buildRunManifest(module, request, result, outputs) {
     outputs: outputManifest,
     provenance: result.provenance || null,
     warnings: result.warnings || [],
+    report: result.report || null,
     reused_loci: result.reused_loci || result.reusedLoci || 0,
     matrix_padding: ["phyloprep.py", "get_supergenes.py"].includes(module.script)
       ? { missing_symbol: "?", gap_symbol: "-", block_table_suffix: ".missing.tsv", policy: request.options.missing_taxa || "skip-gene" } : null,

@@ -236,7 +236,7 @@ const adapter=vm.createContext({ PhyloPrepSave, Blob, outputSaveSession:undefine
     ]};
   },
   releaseIdleWorkers:()=>{},
-  runInWorker:async request=>{finalized++;finalRequest=request;return {files:[{name:'matrices/result.fasta',content:'matrix'}]};},
+  runInWorker:async request=>{finalized++;finalRequest=request;return {files:[{name:'matrices/result.fasta',content:'matrix'}, {name:'inputs.pathlist',content:'first.fa\nsecond.fa\n'}]};},
 });
 vm.runInContext(slice('function fileStem(', 'function showLocusProgress('),adapter);
 const validateInputs=adapter.requireUniqueStems,buildLists=adapter.batchPathLists,mergeReports=adapter.mergeTsvContents;
@@ -270,3 +270,16 @@ adapter.request.files=[];
 await assert.rejects(vm.runInContext('runPhyloPrepBrowserWorkflow(request)',adapter),/Select at least one FASTA/);
 assert.equal(aligned,alignedBeforeFailure);
 console.log('Single input validation, pipeline-only product retention and standalone list/report outputs passed.');
+
+// A failed/skipped report never leaves a previous run's managed HTML in the folder.
+const removedReports=[];
+adapter.request={options:{},files:[{inputKey:'inputs',name:'first.fa',content:'>a\nATG'}]};
+adapter.outputSaveSession={root:{removeEntry:async name=>{removedReports.push(name);}}};
+adapter.runInWorker=async()=>({files:[],report:{status:'failed'},warnings:['SQLite report failed']});
+const withoutReport=await vm.runInContext('runPhyloPrepBrowserWorkflow(request)',adapter);
+assert.equal(removedReports.at(-1),'phyloprep-report.html');
+assert.ok(withoutReport.warnings.includes('SQLite report failed'));
+adapter.outputSaveSession={root:{removeEntry:async()=>{throw new Error('folder permission lost');}}};
+const retainedOldReport=await vm.runInContext('runPhyloPrepBrowserWorkflow(request)',adapter);
+assert.ok(retainedOldReport.warnings.some(message=>message.includes('folder permission lost')));
+console.log('Non-fatal report warnings and previous-HTML cleanup checks passed.');

@@ -263,7 +263,7 @@ def test_incremental_finalize_resumes_in_different_contexts(tmp_path, monkeypatc
         assert result['ok'], result
         matrices = [file for file in result['files'] if file['name'].startswith('matrices/')]
         assert matrices and all(Path(file['path']).is_file() for file in matrices)
-        assert events[-1]['completed'] == events[-1]['total'] == (2 if notrim else 3)
+        assert events[-1]['completed'] == events[-1]['total'] == (3 if notrim else 4)
     finally:
         Context().run(steps.close)
 
