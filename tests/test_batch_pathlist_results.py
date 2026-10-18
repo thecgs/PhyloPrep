@@ -59,6 +59,7 @@ def test_batch_reuses_fresh_and_resumed_results(tmp_path, fake_aligner, monkeypa
 
 
 def test_cancelled_batch_lists_only_confirmed_success(tmp_path, monkeypatch):
+    monkeypatch.setattr(batch, 'STOP', False)
     monkeypatch.setattr(batch.signal, 'signal', lambda *args: None)
     monkeypatch.setattr(batch, '_configuration', lambda args: {})
     sources = [tmp_path / f'{name}.fa' for name in ('complete', 'cancelled', 'skipped', 'failed')]
