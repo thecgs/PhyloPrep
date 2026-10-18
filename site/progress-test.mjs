@@ -7,12 +7,15 @@ const source = (start, end) => app.slice(app.indexOf(start), app.indexOf(end, ap
 const messages = [];
 const timers = new Set();
 let clock = 0;
+const stageClasses = [1,2,3].map(stage => ({dataset:{stage:String(stage)}, classes:new Set(),
+  get classList(){return {add:(...names)=>names.forEach(name=>this.classes.add(name)),
+    remove:(...names)=>names.forEach(name=>this.classes.delete(name))};}}));
 const elements = {
   command:{textContent:"test command"},run: { disabled: true }, cancelRun: {}, runtimeStatus: {}, runStageLabel: {},
-  runStages: { querySelectorAll: () => [] }, outputName: { value: '' }, useNextStep: {},
+  runStages: { querySelectorAll: () => stageClasses }, outputName: { value: '' }, useNextStep: {},
   log: { set textContent(value) { messages.push(value); }, get textContent() { return messages.at(-1); } },
 };
-const context = vm.createContext({releaseIdleWorkers:()=>{}, PhyloPrepSave, Blob,
+const context = vm.createContext({releaseIdleWorkers:()=>{}, PhyloPrepSave, Blob, TextDecoder,
   elements, performance: { now: () => clock += 101 }, Map,
   setInterval: callback => { timers.add(callback); return callback; },
   clearInterval: callback => timers.delete(callback),
@@ -63,9 +66,10 @@ let worker;
 context.Worker = class {
   constructor() { this.handlers = {}; worker = this; }
   addEventListener(type, handler) { this.handlers[type] = handler; }
+  postMessage() {}
 };
 context.pyodideWorker = undefined;
-context.activeWorkerRun = {id:1};
+context.activeWorkerRun = {id:1,streamedOutputs:new Map()};
 elements.run.disabled = true;
 vm.runInContext(source('function createPyodideWorker(', 'function runInWorker('), context);
 vm.runInContext('createPyodideWorker()', context);
@@ -75,4 +79,24 @@ worker.handlers.message({data:{type:'progress',runId:1,progress:{completed:1,tot
 assert.match(elements.log.textContent, /1\/3 stages.*raw: QC/);
 assert.equal(elements.runStageLabel.textContent, 'Processing locally');
 assert.equal(elements.runtimeStatus.textContent, 'Processing locally');
+assert.equal(timers.size,1);
+worker.handlers.message({data:{type:'stage',runId:1,stage:'process',label:'Checking saved branch outputs'}});
+assert.equal(timers.size,0,'A new stage must stop the previous QC heartbeat');
+worker.handlers.message({data:{type:'output-chunk',runId:1,transferId:'rename-1',index:0,name:'renamed/codon/raw/gene.aln.fasta',bytes:new Uint8Array([65])}});
+assert.equal(elements.runStageLabel.textContent,'Processing locally');
+assert.ok(stageClasses[1].classes.has('active'));
+assert.ok(!stageClasses[1].classes.has('complete'),'Intermediate saves must not mark analysis complete');
+assert.match(elements.log.textContent,/intermediate output \(analysis continues\)/);
+context.producedFiles.set('renamed/codon/raw/gene.aln.fasta',{name:'renamed/codon/raw/gene.aln.fasta'});
+worker.handlers.message({data:{type:'output-file-reuse',runId:1,transferId:'branch-end',release:true,index:0,fileCount:1,name:'renamed/codon/raw/gene.aln.fasta'}});
+assert.match(elements.log.textContent,/Reusing saved output.*checking temporary-file release/);
+assert.equal(elements.runStageLabel.textContent,'Processing locally');
+context.activeWorkerRun.deferPublish=true;
+worker.handlers.message({data:{type:'output-chunk',runId:1,index:1,name:'gene.prot.aln.fasta',bytes:new Uint8Array([65])}});
+assert.equal(elements.runStageLabel.textContent,'Processing locally','Per-locus MSAP output remains part of analysis');
+context.activeWorkerRun.deferPublish=false;
+worker.handlers.message({data:{type:'output-chunk',runId:1,index:2,name:'matrices/codon/raw/supermatrix.fasta',bytes:new Uint8Array([65])}});
+assert.equal(elements.runStageLabel.textContent,'Saving output');
+assert.ok(stageClasses[1].classes.has('complete'));
+assert.match(elements.log.textContent,/Receiving final output/);
 console.log('Workspace progress, output-save counts, worker messages and heartbeat cleanup checks passed.');

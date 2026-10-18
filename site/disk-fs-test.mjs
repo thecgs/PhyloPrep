@@ -6,17 +6,21 @@ vm.runInContext(await readFile('site/browser-disk-fs.js','utf8'),scope);
 const {filesystem,open}=scope.PhyloPrepDiskFS;
 assert.equal(await open({},'/work'),null,'Unavailable OPFS must retain the existing fallback');
 const codes={ENOSPC:51,EIO:29,EINVAL:28};
-let data=new Uint8Array(0),fail=false,flushes=0,partial=Infinity;
+let data=new Uint8Array(0),fail=false,flushes=0,partial=Infinity,badWrite;
 const access={
+ getSize(){return data.length;},
+ truncate(size){data=data.slice(0,size);},
  write(view,{at}) {
+  if(badWrite!==undefined)return badWrite;
   if(fail) {const e=new Error('quota exceeded');e.name='QuotaExceededError';throw e;}
   if(data.length<at+view.length){const next=new Uint8Array(Math.max(at+view.length,data.length*2,4096));next.set(data);data=next;}
   const length=Math.min(view.length,partial);data.set(view.subarray(0,length),at);return length;
  },
- read(view,{at}) {const length=Math.min(view.length,partial);view.set(data.subarray(at,at+length));return length;},
+ read(view,{at}) {const length=Math.max(0,Math.min(view.length,partial,data.length-at));view.set(data.subarray(at,at+length));return length;},
  flush(){flushes++;},
 };
 const FS={
+ getPath:node=>'/work/'+node.name,
  isDir:mode=>(mode&0xf000)===0x4000,isFile:mode=>(mode&0xf000)===0x8000,
  ErrnoError:class extends Error{constructor(errno){super(String(errno));this.errno=errno;}},
  filesystems:{},
@@ -67,6 +71,29 @@ partial=7;
 const partialNode=create('partial');write(partialNode,new Uint8Array(31).fill(12));
 assert.deepEqual(read(partialNode),new Uint8Array(31).fill(12),'Short disk reads/writes must complete without losing bytes');
 partial=Infinity;
+const failedGrowth=create('failed-growth.aln.fasta');
+badWrite=4294967288;
+assert.throws(()=>write(failedGrowth,new Uint8Array([7])),error=>error.errno===codes.EIO);
+assert.match(disk.failure,/expected_bytes=4096, actual_bytes=4294967288/);
+assert.equal(failedGrowth.usedBytes,0);
+assert.equal(failedGrowth.diskBlocks.size,0,'A failed write must not create a phantom readable block');
+badWrite=undefined;
+write(failedGrowth,new Uint8Array([7]));assert.deepEqual(read(failedGrowth),new Uint8Array([7]));
+root.node_ops.unlink(root,'failed-growth.aln.fasta');
+const tail=create('tail');write(tail,new Uint8Array(1000000).fill(42));
+const largeSize=access.getSize();
+const originalStream={node:tail},duplicate={node:tail};
+tail.stream_ops.open(originalStream);tail.stream_ops.dup(duplicate);
+root.node_ops.unlink(root,'tail');tail.stream_ops.close(originalStream);
+assert.deepEqual(read(tail),new Uint8Array(1000000).fill(42),'A duplicate descriptor must keep an unlinked spool alive');
+assert.equal(access.getSize(),largeSize);
+tail.stream_ops.close(duplicate);
+assert.ok(access.getSize()<largeSize,'Closing the last reader must return unused backing-file tail space');
+const truncated=create('truncated.aln.fasta');write(truncated,new Uint8Array(9000).fill(5));
+data=new Uint8Array(0);
+assert.throws(()=>read(truncated),error=>error.errno===codes.EIO);
+assert.match(disk.failure,/incomplete data: file="\/work\/truncated.aln.fasta"/);
+assert.match(disk.failure,/file_size=9000, file_offset=0, disk_offset=\d+, expected_bytes=4096, actual_bytes=0, backing_size=0/);
 fail=true;
 assert.throws(()=>write(create('quota'),new Uint8Array([1])),error=>error.errno===codes.ENOSPC);
 assert.match(disk.failure,/temporary disk is full/);
