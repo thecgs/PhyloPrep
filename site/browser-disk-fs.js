@@ -3,7 +3,7 @@
 (() => {
   const BLOCK = 4096;
   function filesystem(FS, access, codes) {
-    const memory = FS.filesystems.MEMFS, free = [], zero = new Uint8Array(BLOCK);
+    const memory = FS.filesystems.MEMFS, free = new Set(), zero = new Uint8Array(BLOCK);
     let next = 0, files = 0, bytes = 0, peak = 0, reads = 0, writes = 0, failure;
     function details(node, position, at, expected, actual) {
       let path = node?.name || '(unknown file)', size = 'unavailable';
@@ -24,21 +24,32 @@
       let done = 0;
       while (done < view.byteLength) {
         const count = io(() => access.write(view.subarray(done), {at:at + done}));
+        // Some Chromium quota failures return an unsigned error value instead
+        // of throwing. A positive value alone does not prove that bytes landed.
         if (!Number.isInteger(count) || count <= 0 || count > view.byteLength - done) {
-          failure = `Browser temporary disk could not complete a write: ${details(node, position, at + done, view.byteLength - done, count)}.`;
+          failure = `Browser temporary disk could not complete a write: ${details(node, position, at + done, view.byteLength - done, count)}. Check browser storage quota and free disk space.`;
           throw new FS.ErrnoError(codes.EIO);
         }
         done += count;
+      }
+    }
+    function reclaimTail() {
+      while (next && free.delete(next - 1)) next--;
+      // Free interior blocks remain reusable; unused tail blocks can also
+      // return actual storage quota, rather than leaving a large backing file.
+      if (access.truncate && access.getSize && io(() => access.getSize()) > next * BLOCK) {
+        io(() => access.truncate(next * BLOCK));
       }
     }
     function resize(node, size) {
       if (size < 0) throw new FS.ErrnoError(codes.EINVAL);
       if (size < node.usedBytes) {
         for (const [index, block] of node.diskBlocks) {
-          if (index * BLOCK >= size) { free.push(block); node.diskBlocks.delete(index); }
+          if (index * BLOCK >= size) { free.add(block); node.diskBlocks.delete(index); }
         }
         const remainder = size % BLOCK, block = node.diskBlocks.get(Math.floor(size / BLOCK));
         if (remainder && block !== undefined) writeAll(zero.subarray(remainder), block * BLOCK + remainder, node, size);
+        reclaimTail();
       }
       bytes += size - node.usedBytes; peak = Math.max(peak, bytes);
       node.usedBytes = size; node.timestamp = Date.now(); node.diskDirty = true;
@@ -47,8 +58,9 @@
       if (!node.diskBlocks || node.diskGone) return;
       node.diskUnlinked = true;
       if (node.diskOpen) return;
-      for (const block of node.diskBlocks.values()) free.push(block);
+      for (const block of node.diskBlocks.values()) free.add(block);
       node.diskBlocks.clear(); bytes -= node.usedBytes; files--; node.diskGone = true;
+      reclaimTail();
     }
     function patch(node) {
       const original = node.node_ops;
@@ -72,6 +84,7 @@
         const previous = node.stream_ops;
         node.stream_ops = {
           open(stream) { stream.node.diskOpen++; },
+          dup(stream) { stream.node.diskOpen++; },
           close(stream) {
             const target=stream.node;
             try { if (target.diskDirty) { io(()=>access.flush()); target.diskDirty=false; } }
@@ -109,9 +122,10 @@
               const chunk=Math.min(length-done,BLOCK-within);
               let block=target.diskBlocks.get(index);
               if (block === undefined) {
-                block=free.length ? free.pop() : next++;
+                block=free.size ? free.values().next().value : next++;
+                free.delete(block);
                 try { writeAll(zero,block*BLOCK,target,position+done); }
-                catch(error) { free.push(block); throw error; }
+                catch(error) { free.add(block); reclaimTail(); throw error; }
                 target.diskBlocks.set(index,block);
               }
               writeAll(buffer.subarray(offset+done,offset+done+chunk),block*BLOCK+within,target,position+done);
