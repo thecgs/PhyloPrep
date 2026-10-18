@@ -23,7 +23,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from msap_progress import ProgressReporter
+from msap_progress import task_progress, task_label
 from msap_io import (atomic_output, read_fasta_alignment, expand_input_paths,
                      file_digest as _digest, file_signature as _signature, read_json as _read_json)
 from sequence_audit import add_macse_options, add_protein_options, normalize_workflow, merge_reports, relocate_change_report
@@ -463,8 +463,8 @@ def main(argv: list[str] | None = None) -> int:
         except ValueError as error:
             parser.error(str(error))
         failures = 0
-        progress = ProgressReporter('MSAP_batch', len(inputs), unit='loci')
-        progress.update('Aligning loci')
+        progress = task_progress('MSAP_batch', len(inputs), unit='loci')
+        progress.update(task_label(progress, 'Aligning loci'))
         with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as executor:
             futures = {executor.submit(_run_one, args, infile, root): infile for infile in inputs}
             try:
@@ -482,23 +482,23 @@ def main(argv: list[str] | None = None) -> int:
                             key, status = future.result()
                             status_kind = ('skipped' if status.startswith('skipped') else
                                            'cancelled' if status.startswith('cancelled') else 'completed')
-                            print(f"[{status}] {infile} -> {root}", flush=True)
+                            print(f"[MSAP_batch] {status}: {infile} -> {root}", flush=True)
                         except KeyboardInterrupt:
                             STOP = True
                             failures += 1
                             status_kind = 'cancelled'
                         except Exception as error:  # report all tasks, then return non-zero
                             failures += 1
-                            print(f"[failed] {infile}: {error}", file=sys.stderr, flush=True)
+                            print(f"[MSAP_batch] failed: {infile}: {error}", file=sys.stderr, flush=True)
                         completed += 1
-                        progress.update(infile.name, completed=completed, status=status_kind)
+                        progress.update(task_label(progress, f'{status_kind}: {infile.name}'), completed=completed, status=status_kind)
             except KeyboardInterrupt:
                 STOP = True
                 for future in futures:
                     future.cancel()
                 print("Cancellation requested; active jobs will not be promoted to results.", file=sys.stderr)
                 failures += 1
-        progress.update('Cancelled; writing diagnostics' if STOP else 'Writing pathlists and audit reports')
+        progress.update(task_label(progress, 'Cancelled; writing diagnostics' if STOP else 'Writing pathlists and audit reports'))
         _write_path_lists(root, args, inputs)
         # Failed jobs retain diagnostics in staging; never summarize stale successful reports.
         for report_name in ('sequence_changes',):
@@ -508,7 +508,7 @@ def main(argv: list[str] | None = None) -> int:
                 directory = stage if stage.exists() else root
                 report_paths.append(directory / f'{source.stem}.{report_name}.tsv')
             merge_reports(report_paths, root / 'reports' / f'{report_name}.tsv')
-        progress.update('Cancelled' if STOP else 'Finished with failures' if failures else 'Complete')
+        progress.update(task_label(progress, 'Cancelled' if STOP else 'Finished with failures' if failures else 'Complete'))
         return 130 if STOP else (1 if failures else 0)
 
 

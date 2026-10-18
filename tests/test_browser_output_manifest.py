@@ -394,7 +394,7 @@ def test_disk_backed_branches_release_original_and_renamed_after_use(tmp_path, m
         assert result['ok'], result
         files = {file['name']: file for file in result['files']}
         assert all('alignments/' + name in files for name in products)
-        assert len([name for name in files if name.startswith('renamed/')]) == 4
+        assert len([name for name in files if name.startswith('renamed/') and name.endswith('.aln.fasta')]) == 4
         assert (root / 'matrices/codon/raw/supermatrix.fasta').read_text() == '>sp_a\nATGGCT\n>sp_b\nATGGCT\n'
         assert (root / 'matrices/paired/codon/raw/supermatrix.fasta').read_text() == '>sp_a\nATGGCT\n>sp_b\nATGGCT\n'
         for name in ('qc/codon/raw/alignment.pass.tsv', 'qc/codon/trimmed/alignment.pass.tsv'):
@@ -460,4 +460,26 @@ def test_rename_checkpoint_reuses_saved_targets_before_qc(tmp_path, monkeypatch,
     assert calls == ([] if reuse_protein else ['gene.mafft.prot.aln.fasta'])
     assert sum(step.get('rename_checkpoint') == 'raw' for step in checkpoints) == 1
     assert (root / 'matrices/codon/raw/supermatrix.fasta').read_text() == '>sp_a\nATGGCT\n>sp_b\nATGGCT\n'
-    assert len([item for item in result['files'] if item['name'].startswith('renamed/')]) == 2
+    assert len([item for item in result['files'] if item['name'].startswith('renamed/') and item['name'].endswith('.aln.fasta')]) == 2
+
+
+def test_exported_rename_pathlists_are_complete_and_portable(tmp_path):
+    from msap_io import expand_input_paths
+    browser = browser_module()
+    source = tmp_path / 'gene.fa'
+    source.write_text('>g1\nACGT\n>g2\nACGA\n')
+    aligned = tmp_path / 'gene.mafft.nucl.aln.fasta'
+    aligned.write_text(source.read_text())
+    mapping = tmp_path / 'mapping.tsv'
+    mapping.write_text('g1\tsp_a\ng2\tsp_b\n')
+    root = tmp_path / 'out'
+    result = json.loads(browser.run_phyloprep_finalize([
+        dict(role='source', name=source.name, path=str(source)),
+        dict(role='batch-output', name=aligned.name, path=str(aligned)),
+        dict(role='mapping', name=mapping.name, path=str(mapping))],
+        dict(seqtype='nucl', notrim=True, no_report=True), str(root), str(ROOT), manifest_only=True))
+    assert result['ok'], result
+    name = 'renamed/nucl/raw/all.nucl.aln.fasta.pathlist'
+    item = next(file for file in result['files'] if file['name'] == name)
+    assert Path(item['path']).read_text() == aligned.name + '\n'
+    assert expand_input_paths([root / name]) == [str(root / 'renamed/nucl/raw' / aligned.name)]

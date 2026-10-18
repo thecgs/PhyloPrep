@@ -139,7 +139,10 @@ const server = http.createServer((req,res) => {
     if(reportData.overview.input_loci!==loci||reportData.matrices.length!==24)throw Error('Automatic report metadata incomplete');
     if(result.files.some(file=>file.content!==undefined||!file.storage.disk))throw Error('Final result text was retained');
     if(result.workspace_storage?.kind!=='opfs'||result.workspace_storage.cached_file_bytes!==0)throw Error('Locus files were not disk-backed');
-    const renamed=result.files.filter(file=>file.name.startsWith('renamed/'));
+    const renamed=result.files.filter(file=>file.name.startsWith('renamed/') && file.name.endsWith('.aln.fasta'));
+    const renamedLists=result.files.filter(file=>file.name.startsWith('renamed/') && file.name.endsWith('.pathlist'));
+    if(renamedLists.length!==4)throw Error('Missing per-directory rename pathlists');
+    for(const file of renamedLists){const lines=(await PhyloPrepSave.readText(file)).trim().split('\n');if(lines.length!==loci || lines.some(line=>line.includes('/')))throw Error('Rename pathlist is incomplete or not portable');}
     const matrix=result.files.find(file=>file.name==='matrices/codon/raw/supermatrix.fasta');
     const paired=result.files.find(file=>file.name==='matrices/paired/codon/raw/supermatrix.fasta');
     const expected=`>sp_a\n${unit.repeat(loci)}\n>sp_b\n${unit.repeat(loci)}\n`;

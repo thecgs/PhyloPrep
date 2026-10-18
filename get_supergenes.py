@@ -11,6 +11,7 @@ from pathlib import Path
 from collections import OrderedDict
 from contextlib import ExitStack
 from Bio import SeqIO
+from msap_progress import task_progress, task_label, progress_context, current_progress, heartbeat
 from msap_io import atomic_output, expand_input_paths, check_output_path, NoGenesIncludedError
 
 def tidy_name(file):
@@ -31,6 +32,7 @@ def read_alignment(file):
     sequences = {}
     expected_length = None
     for record in SeqIO.parse(file, "fasta"):
+        heartbeat()
         if record.id in sequences:
             raise ValueError(f"{file}: duplicate sequence ID: {record.id}")
         if expected_length is None:
@@ -51,6 +53,7 @@ def scan_alignment(file):
     seen = set()
     length = None
     for record in SeqIO.parse(file, "fasta"):
+        heartbeat()
         if record.id in seen:
             raise ValueError(f"{file}: duplicate sequence ID: {record.id}")
         seen.add(record.id)
@@ -94,12 +97,16 @@ class TaxonSpool:
 
     def write_outputs(self, prefix, taxa, length, write_phylip):
         self.close()
+        progress = current_progress()
+        if progress:
+            progress.total, progress.unit = len(taxa), 'taxa'
+            progress.update(task_label(progress, 'Writing supermatrix'), completed=0)
         with ExitStack() as stack:
             fasta = stack.enter_context(atomic_output(prefix + '.fasta'))
             phylip = stack.enter_context(atomic_output(prefix + '.phy')) if write_phylip else None
             if phylip:
                 phylip.write(f'{len(taxa)} {length}\n')
-            for taxon in taxa:
+            for index, taxon in enumerate(taxa, 1):
                 fasta.write(f'>{taxon}\n')
                 if phylip:
                     phylip.write(taxon + ' ')
@@ -109,6 +116,7 @@ class TaxonSpool:
                         if not chunk:
                             break
                         fasta.write(chunk)
+                        heartbeat()
                         if phylip:
                             phylip.write(chunk)
                 fasta.write('\n')
@@ -117,11 +125,27 @@ class TaxonSpool:
                 # In Pyodide these files also occupy memory; release each one
                 # as its final outputs are written instead of keeping all spools.
                 self.paths[taxon].unlink()
+                if progress:
+                    progress.update(task_label(progress, f'Writing supermatrix: {taxon}'), completed=index,
+                                    force=index == len(taxa))
 
 
 def get_supergenes(infiles, prefix, missing_taxa="pad-gaps", input_lists=(), write_phylip=True):
     """Create a supermatrix while handling taxa missing from individual genes."""
     infiles = list(infiles)
+    progress = task_progress('get_supergenes', len(infiles))
+    with progress_context(progress):
+        try:
+            return _concatenate(infiles, prefix, missing_taxa, input_lists, write_phylip, progress)
+        except (OSError, ValueError):
+            progress.update(task_label(progress, 'Failed'), status='failed')
+            raise
+        except KeyboardInterrupt:
+            progress.update(task_label(progress, 'Cancelled'), status='cancelled')
+            raise
+
+
+def _concatenate(infiles, prefix, missing_taxa, input_lists, write_phylip, progress):
     destinations = [prefix + suffix for suffix in
                     (".report.tsv", ".missing.tsv", "_partition_finder.cfg.txt", "_part_iqtree.txt", ".fasta")]
     if write_phylip:
@@ -135,7 +159,9 @@ def get_supergenes(infiles, prefix, missing_taxa="pad-gaps", input_lists=(), wri
 
     # First pass retains only locus lengths and the global taxon order.
     # Inputs are expected to remain unchanged throughout concatenation.
-    for file in infiles:
+    progress.update(task_label(progress, 'Scanning loci'), completed=0)
+    for index, file in enumerate(infiles, 1):
+        progress.update(task_label(progress, f'Scanning loci: {Path(file).name}'), completed=index - 1, force=False)
         if os.path.getsize(file) == 0:
             report_rows.append((file, "skipped", "empty file"))
             continue
@@ -149,6 +175,9 @@ def get_supergenes(infiles, prefix, missing_taxa="pad-gaps", input_lists=(), wri
                 taxa_seen.add(taxon)
         alignments.append((file, length))
 
+    progress.update(task_label(progress, 'Scan complete'), completed=len(infiles))
+    progress.total = len(alignments)
+    progress.update(task_label(progress, 'Concatenating loci'), completed=0)
     # A single locus is loaded at a time in the second pass. Spools use actual
     # disk on the CLI and reduce duplicated Python strings in browser MEMFS.
     with atomic_output(prefix + '.missing.tsv', inputs=infiles) as missing_report, \
@@ -159,7 +188,8 @@ def get_supergenes(infiles, prefix, missing_taxa="pad-gaps", input_lists=(), wri
         spool = TaxonSpool(directory, taxa_order)
         try:
             selected_alignments = []
-            for file, alignment_length in alignments:
+            for index, (file, alignment_length) in enumerate(alignments, 1):
+                progress.update(task_label(progress, f'Concatenating loci: {Path(file).name}'), completed=index - 1, force=False)
                 sequences, error = read_alignment(file)
                 if error:
                     raise ValueError(f"{file}: {error}")
@@ -171,6 +201,7 @@ def get_supergenes(infiles, prefix, missing_taxa="pad-gaps", input_lists=(), wri
                     report_rows.append((file, "skipped", reason))
                     print(f"Skipping {file}: {reason}", file=sys.stderr)
                     del sequences
+                    progress.update(completed=index, status='skipped', force=index == len(alignments))
                     continue
                 report_rows.append((file, "padded" if missing else "included",
                                     "missing taxa: " + ", ".join(missing) if missing else ""))
@@ -182,11 +213,13 @@ def get_supergenes(infiles, prefix, missing_taxa="pad-gaps", input_lists=(), wri
                     spool.append(taxon, sequences.get(taxon), alignment_length)
                 matrix_length += alignment_length
                 del sequences
+                progress.update(completed=index, status='included', force=index == len(alignments))
             spool.close()
             _write_supermatrix_products(prefix, report_rows, selected_alignments,
                                         taxa_order, spool, write_phylip)
         finally:
             spool.close()
+    progress.update(task_label(progress, f'Complete: {len(selected_alignments)} loci; {len(taxa_order)} taxa; {matrix_length} sites'))
     return None
 
 

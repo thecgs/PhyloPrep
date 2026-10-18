@@ -16,12 +16,12 @@ import subprocess
 import sys
 import tempfile
 
-from msap_progress import ProgressReporter, progress_context, report_phase, heartbeat
+from msap_progress import ProgressReporter, progress_context, report_phase, heartbeat, current_progress
 from sequence_audit import normalize_workflow, merge_reports
 from MSAP_batch import build_parser as batch_parser
 from msap_io import (atomic_output, expand_input_paths,
                      file_digest, file_signature, read_json, NoGenesIncludedError)
-from msap_matrix import AlignmentSpool
+from fasta2nex import export_formats
 from rename_taxa import (rename_fasta, read_mapping_snapshot, normalized_taxon_id,
                          FileFingerprintCache, file_stamp)
 
@@ -141,7 +141,10 @@ def run(script, *arguments, cwd=None):
 
     previous = {sig: signal.signal(sig, cancel) for sig in (signal.SIGINT, signal.SIGTERM)}
     try:
-        process = subprocess.Popen(command, cwd=cwd, start_new_session=True)
+        environment = os.environ.copy()
+        if current_progress() is not None:
+            environment['PHYLOPREP_PROGRESS_LABEL'] = current_progress().label
+        process = subprocess.Popen(command, cwd=cwd, start_new_session=True, env=environment)
         if interrupted:
             cancel(None, None)
         while True:
@@ -537,6 +540,10 @@ def run_group_qc(args, root, stage, seqtype, variant):
     if args.mapping:
         prepared = getattr(args, '_prepared_renamed', {}).get((seqtype, variant))
         qc_paths = prepared if prepared is not None else rename_alignment_matrices(args, selected, root, seqtype, variant)
+    if args.mapping:
+        renamed_dir = root / 'renamed' / seqtype / variant
+        suffix = 'aln.fasta' if variant == 'raw' else 'trimmed.aln.fasta'
+        write_paths(renamed_dir / f'all.{seqtype}.{suffix}.pathlist', [Path(path).name for path in qc_paths])
     qc_dir.mkdir(parents=True, exist_ok=True)
     qc_inputs = qc_dir / "inputs.pathlist"
     write_paths(qc_inputs, qc_paths)
@@ -708,6 +715,9 @@ def synchronize_paired_qc(args, root, variant, codon_context, protein_context):
         independent = sorted(locus for locus in passing if pis[locus] >= threshold)
         write_paths(independent_path, [passing[locus].resolve() for locus in independent])
         context["independent_retained"] = independent_path
+        context['independent_count'] = len(independent)
+        context['paired_count'] = len(common)
+        context['paired_matches_independent'] = independent == common
 
     for context, passing in ((codon_context, codon_pass), (protein_context, protein_pass)):
         retained_path = paired_dir / f"{context['seqtype']}.retained.tsv"
@@ -789,10 +799,19 @@ def build_group_matrices(args, root, context):
         run("extract_4-fold_degenerated_sites.py", "-i", supermatrix,
             "-o", fourfold, "-g", args.genetic_code,
             '--fourfold-missing-policy', getattr(args, 'fourfold_missing_policy', 'ignore-missing'))
+        matrices.append(fourfold)
+
+    for matrix in matrices:
+        label = 'paired' if context.get('paired') else 'independent'
+        def export_progress(path):
+            report_phase(args, f'{variant}/{seqtype} ({label}): exporting {path.name}')
+        report_phase(args, f'{variant}/{seqtype} ({label}): preparing formats for {matrix.name}')
         try:
-            with AlignmentSpool(fourfold, directory=fourfold.parent):
-                pass
+            export_formats(matrix, matrix.with_suffix('.phy'), matrix.with_suffix('.nex'),
+                           'protein' if seqtype == 'prot' else 'DNA', progress=export_progress)
         except ValueError as error:
+            if seqtype != 'codon' or matrix != fourfold:
+                raise
             missing_blocks = stage / 'supermatrix.missing.tsv'
             padded_empty = False
             if args.missing_taxa == 'pad-gaps' and missing_blocks.is_file():
@@ -813,17 +832,6 @@ def build_group_matrices(args, root, context):
                       'other matrices were retained.\n' if padded_empty else
                       'No usable four-fold sites; no matrix exported.\n')
             (stage / 'fourfold.skipped.txt').write_text(reason)
-        else:
-            matrices.append(fourfold)
-
-    for matrix in matrices:
-        label = 'paired' if context.get('paired') else 'independent'
-        report_phase(args, f'{variant}/{seqtype} ({label}): exporting {matrix.with_suffix(".phy").name}')
-        run("fasta2phy.py", "-i", matrix, "-o", matrix.with_suffix(".phy"),
-            "-st", "protein" if seqtype == "prot" else "DNA")
-        report_phase(args, f'{variant}/{seqtype} ({label}): exporting {matrix.with_suffix(".nex").name}')
-        run("fasta2nex.py", "-i", matrix, "-o", matrix.with_suffix(".nex"),
-            "-st", "protein" if seqtype == "prot" else "DNA")
 
 
 class NoAlignmentsPassedQCError(ValueError):
@@ -859,8 +867,7 @@ def prepare_variant(args, root, stage_root, variant):
         paired_loci = synchronize_paired_qc(
             args, root, variant, contexts["codon"], contexts["prot"])
         if not paired_loci and not any(
-                context["independent_retained"].read_text().strip()
-                for context in contexts.values()):
+                context['independent_count'] for context in contexts.values()):
             raise no_passing_paired_qc_error(args, variant, contexts)
         built = False
         for seqtype in ("codon", "prot"):
@@ -868,13 +875,13 @@ def prepare_variant(args, root, stage_root, variant):
             for paired in (False, True):
                 selected = context["paired_retained" if paired else "independent_retained"]
                 stage = _group_stage(stage_root, args.seqtype, seqtype, variant, paired=paired)
-                if not selected.read_text().strip():
+                if not context['paired_count' if paired else 'independent_count']:
                     stage.mkdir(parents=True, exist_ok=True)
                     (stage / "skipped.txt").write_text(
                         "No loci passed " + ("paired" if paired else "independent") + " QC.\n")
                     continue
                 independent_stage = context["stage"]
-                if (paired and selected.read_text() == context["independent_retained"].read_text()
+                if (paired and context['paired_matches_independent']
                         and (independent_stage / "supermatrix.fasta").is_file()):
                     report_phase(args, f'{variant}/{seqtype}: copying independent matrices to paired output')
                     shutil.copytree(independent_stage, stage)

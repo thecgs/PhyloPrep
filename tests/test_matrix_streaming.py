@@ -101,3 +101,26 @@ def test_fourfold_matches_column_definition_across_blocks(tmp_path, code, policy
     fourfold.extract_four_fold_site(source, output, code, policy)
     with AlignmentSpool(output) as matrix:
         assert [''.join(matrix.chunks(i)) for i in range(3)] == [''.join(row) for row in expected]
+
+
+@pytest.mark.parametrize('seqtype,sequence', [('DNA', 'ACGUR?-'), ('protein', 'AB?Z*-')])
+def test_combined_exports_prepare_once_and_match_standalone(tmp_path, monkeypatch, seqtype, sequence):
+    import fasta2nex as nexus
+    source = tmp_path / 'matrix.fa'
+    source.write_text(f'>taxon_a\n{sequence}\n>taxon_b\n{sequence}\n')
+    expected_phy, expected_nex = tmp_path / 'expected.phy', tmp_path / 'expected.nex'
+    fasta2phy(source, expected_phy, seqtype)
+    fasta2nex(source, expected_nex, seqtype)
+    original = nexus.prepare_records
+    calls = []
+    def prepare(*args, **kwargs):
+        calls.append(args[0])
+        return original(*args, **kwargs)
+    monkeypatch.setattr(nexus, 'prepare_records', prepare)
+    actual_phy, actual_nex = tmp_path / 'actual.phy', tmp_path / 'actual.nex'
+    metadata = nexus.export_formats(source, actual_phy, actual_nex, seqtype)
+    assert calls == [source]
+    assert metadata == {'sequence_count': 2, 'alignment_length': len(sequence)}
+    for actual, expected in [(actual_phy, expected_phy), (actual_nex, expected_nex)]:
+        assert actual.read_bytes() == expected.read_bytes()
+        assert Path(str(actual) + '.sequence_changes.tsv').read_bytes() == Path(str(expected) + '.sequence_changes.tsv').read_bytes()

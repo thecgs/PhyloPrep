@@ -6,6 +6,15 @@ from pathlib import Path
 from msap_io import atomic_output, check_output_path
 from fasta2nex import prepare_records
 
+def write_phylip(matrix, out):
+    """Write an already prepared alignment without parsing or normalizing it again."""
+    out.write(f'{len(matrix.records)} {matrix.length}\n')
+    for index, (identifier, _, _) in enumerate(matrix.records):
+        out.write(f'{identifier}  ')
+        for chunk in matrix.chunks(index):
+            out.write(chunk)
+        out.write('\n')
+
 def fasta2phy(infile, outfile, seqtype='DNA', changes_report=None):
 
     check_output_path(outfile, inputs=[infile])
@@ -18,12 +27,7 @@ def fasta2phy(infile, outfile, seqtype='DNA', changes_report=None):
                 changes_report = str(outfile) + '.sequence_changes.tsv'
             check_output_path(changes_report, inputs=[infile, outfile])
         with atomic_output(outfile, inputs=[infile]) as out:
-            out.write(f'{len(matrix.records)} {matrix.length}\n')
-            for index, (identifier, _, _) in enumerate(matrix.records):
-                out.write(f'{identifier}  ')
-                for chunk in matrix.chunks(index):
-                    out.write(chunk)
-                out.write('\n')
+            write_phylip(matrix, out)
         if changes:
             changes.publish(changes_report)
     finally:
