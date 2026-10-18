@@ -20,7 +20,7 @@ import sqlite3
 import sys
 import tempfile
 
-__version__ = "1.0.0"
+__version__ = "1.0.1"
 UNAVAILABLE = "Unavailable"
 BLOCK = 8190
 ALIGNMENT_SUFFIX = re.compile(
@@ -540,6 +540,96 @@ def coverage_chart(matrices):
     return ''.join(svg)
 
 
+def matrix_identity(matrix):
+    """Keep raw/trimmed, sequence representations and selection routes explicit."""
+    parts = matrix["group"].split("/")
+    sequence = next((part for part in parts if part in {"codon", "prot", "nucl"}), matrix["seqtype"])
+    mode = "Pseudogene" if "pseudogene" in parts else "Standard"
+    selection = "Paired QC" if "paired" in parts else "Independent QC"
+    return mode, selection, sequence, parts[-1]
+
+
+def matrix_anchor(matrix):
+    return "matrix-" + hashlib.sha256(matrix["matrix"].encode()).hexdigest()[:16]
+
+
+def representation_name(sequence):
+    return {"codon": "Codon (all positions)", "prot": "Protein", "nucl": "Nucleotide"}.get(sequence, sequence)
+
+
+def derived_name(kind):
+    return {"codon1st": "Codon position 1", "codon2nd": "Codon position 2",
+            "codon3rd": "Codon position 3", "fourfold": "Fourfold-degenerate sites"}.get(kind, kind)
+
+
+def matrix_catalog(matrices):
+    primary = [matrix for matrix in matrices if matrix["kind"] == "full"]
+    if not primary:
+        return '<p class="empty">No primary concatenated matrices were found in the saved outputs.</p>'
+    entries = {matrix_identity(matrix): matrix for matrix in primary}
+    categories = {identity[:3] for identity in entries}
+    # A codon output has a protein counterpart, even if that counterpart was not saved.
+    categories |= {(mode, selection, "prot") for mode, selection, sequence in categories if sequence == "codon"}
+    sequence_order = {"codon": 0, "prot": 1, "nucl": 2}
+    ordered = sorted(categories, key=lambda item: (item[0], item[1], sequence_order.get(item[2], 3)))
+    show_mode = len({category[0] for category in categories}) > 1 or any(category[0] == "Pseudogene" for category in categories)
+    fragments = ['<div class="table-scroll matrix-catalog"><table><thead><tr>']
+    for heading in (["Workflow"] if show_mode else []) + ["Selection", "Sequence type", "Raw", "Trimmed"]:
+        fragments.append(f'<th scope="col">{heading}</th>')
+    fragments.append('</tr></thead><tbody>')
+    for mode, selection, sequence in ordered:
+        fragments.append('<tr>')
+        if show_mode:
+            fragments.append(f'<td class="catalog-mode">{mode}</td>')
+        fragments.append(f'<td class="catalog-selection">{selection}</td><th scope="row">{esc(representation_name(sequence))}</th>')
+        for variant in ("raw", "trimmed"):
+            entry = entries.get((mode, selection, sequence, variant))
+            if entry is None:
+                fragments.append(f'<td data-label="{variant.title()}"><span class="muted">Not found in saved outputs</span></td>')
+                continue
+            evaluated = entry.get("status") == "evaluated"
+            label = "View matrix" if evaluated else "Not evaluated — view details"
+            accessible = f'{mode} / {selection} / {representation_name(sequence)} / {variant.title()}: {label}'
+            fragments.append(f'<td data-label="{variant.title()}"><a class="matrix-link" href="#{matrix_anchor(entry)}" aria-label="{esc(accessible)}">'
+                             + ('<span aria-hidden="true">✓ </span>' if evaluated else '') + esc(label) + '</a>')
+            if evaluated:
+                fragments.append(f'<span class="matrix-meta">{esc(display(entry.get("loci")))} loci · '
+                                 f'{len(entry["taxa"]):,} taxa · {entry["length"]:,} {esc(entry["unit"])}</span>')
+            fragments.append('</td>')
+        fragments.append('</tr>')
+    fragments.append('</tbody></table></div>')
+    return ''.join(fragments)
+
+
+def matrix_details(matrix, matrices):
+    mode, selection, sequence, variant = matrix_identity(matrix)
+    title = f'{selection} · {representation_name(sequence)} · {variant.title()}'
+    if mode == "Pseudogene":
+        title = mode + " · " + title
+    fragments = [f'<details class="matrix-detail" id="{matrix_anchor(matrix)}"><summary>{esc(title)}</summary>']
+    fragments.append(f'<p class="muted">FASTA path relative to the output directory:</p><p><code>{esc("matrices/" + matrix["matrix"])}</code></p>')
+    if matrix.get("status") != "evaluated":
+        fragments.append(f'<p class="note warning">Not evaluated: {esc(matrix.get("error", "Statistics are unavailable."))}</p>')
+    else:
+        fragments.append(table(["Measure", "Value"], [
+            ("Actually included loci", matrix.get("loci")), ("Taxa", len(matrix["taxa"])),
+            ("Alignment length", f'{matrix["length"]:,} {matrix["unit"]}'),
+            ("Complete codons", matrix.get("complete_codons") if sequence == "codon" else "Not applicable"),
+            ("Skipped after QC", matrix.get("skipped_after_qc")),
+            ("Artificial missing blocks", matrix["padding"]["blocks"] if matrix.get("padding") else None),
+            ("Artificially filled characters", matrix["padding"]["characters"] if matrix.get("padding") else None)]))
+    derived = [entry for entry in matrices if entry["group"] == matrix["group"] and entry["kind"] != "full"]
+    if derived:
+        fragments.append('<h3>Datasets derived from this codon matrix</h3>')
+        fragments.append(table(["Dataset", "Source loci", "Length", "FASTA path relative to output directory"], [
+            (derived_name(entry["kind"]), entry.get("loci"),
+             f'{entry["length"]:,} {entry["unit"]}' if entry.get("status") == "evaluated" else "Not evaluated",
+             "matrices/" + entry["matrix"]) for entry in derived]))
+        fragments.append('<p class="muted">These are subsets of the parent codon matrix. Fourfold source-locus counts remain unavailable when no contribution map was recorded.</p>')
+    fragments.append('</details>')
+    return ''.join(fragments)
+
+
 STYLE = """
 :root{color-scheme:light;font-family:system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#172b3a;background:#f3f6f8}
 *{box-sizing:border-box}body{margin:0}main{max-width:1420px;margin:auto;padding:40px 36px}header{border-top:5px solid #197c80;padding:26px 0 18px}
@@ -550,7 +640,9 @@ p{line-height:1.65}a{color:#12676b}nav{display:flex;flex-wrap:wrap;gap:18px;marg
 .table-scroll{overflow:auto;max-height:530px}table{border-collapse:collapse;width:100%;font-size:13px;font-variant-numeric:tabular-nums}th,td{text-align:left;border-bottom:1px solid #e6edf0;padding:11px 13px;vertical-align:top}th{position:sticky;top:0;background:#f1f6f7;white-space:nowrap}td:first-child{max-width:350px;overflow-wrap:anywhere}
 .chart{overflow:auto;margin:16px 0}.chart svg{display:block;min-width:720px;max-width:100%;height:auto}button{border:1px solid #bbced0;background:#fff;color:#12676b;border-radius:6px;padding:8px 12px;cursor:pointer;font:inherit;font-size:12px;margin:8px 8px 8px 0}button:hover{background:#eef8f7}
 details{margin:12px 0}summary{cursor:pointer;font-weight:600}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f3f6f8;padding:16px;border-radius:6px;font-size:12px}.section-number{color:#197c80;font-size:12px;letter-spacing:1px}footer{font-size:12px;color:#566a79;padding:10px 0 25px}
+.matrix-meta{display:block;color:#566a79;font-size:12px;margin-top:7px;line-height:1.6}.matrix-catalog{max-height:none;margin:18px 0}.matrix-catalog th[scope=row]{position:static;white-space:normal;background:white}.matrix-detail{scroll-margin-top:18px;padding:12px;border:1px solid #dde5ea;border-radius:7px}.matrix-detail:target{border-color:#197c80;background:#f5fbfa}.matrix-detail code{overflow-wrap:anywhere;font-size:12px}.matrix-link{font-weight:600}.matrix-link:focus-visible,summary:focus-visible{outline:2px solid #197c80;outline-offset:4px}
 @media(max-width:700px){main{padding:15px}h1{font-size:29px}section{padding:18px}.metric{font-size:24px}}
+@media(max-width:700px){.matrix-catalog{overflow:visible}.matrix-catalog table,.matrix-catalog tbody{display:block}.matrix-catalog thead{display:none}.matrix-catalog tbody tr{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));border:1px solid #dde5ea;border-radius:7px;margin-bottom:14px;padding:4px}.matrix-catalog .catalog-mode,.matrix-catalog .catalog-selection,.matrix-catalog th[scope=row]{grid-column:1/-1;border:0;padding-bottom:4px}.matrix-catalog .catalog-selection{font-weight:600;color:#566a79}.matrix-catalog th[scope=row]{padding-top:2px;padding-bottom:8px}.matrix-catalog td[data-label]{border:0;padding:10px}.matrix-catalog td[data-label]::before{content:attr(data-label);display:block;font-size:12px;color:#566a79;font-weight:600;margin-bottom:8px}.matrix-catalog .matrix-meta{overflow-wrap:anywhere}}
 @media print{body{background:white}main{padding:0;max-width:none}nav,button{display:none}section{break-inside:avoid;border:0;padding:12px 0}.table-scroll{max-height:none;overflow:visible}th{position:static}.chart svg{min-width:0}}
 """
 
@@ -568,10 +660,13 @@ def render_html(report):
                  '<nav><a href="#overview">Overview</a><a href="#qc">Quality control</a><a href="#matrices">Matrices</a><a href="#events">Sequence changes</a><a href="#coverage">Taxon coverage</a><a href="#methods">Methods &amp; provenance</a></nav>',
                  '<button id="download-summary">Download summary JSON</button><button onclick="window.print()">Print / save PDF</button></header>',
                  '<div class="cards">']
-    for label, value in (("Input loci", overview["input_loci"]), ("Aligned loci", overview["aligned_loci"]),
-                         ("Full concatenated matrices", len(full)), ("Evaluated matrix datasets", len(evaluated))):
+    for label, value in (("Input loci", overview["input_loci"]), ("Aligned loci", overview["aligned_loci"])):
         fragments.append(f'<div class="card"><div class="label">{label}</div><div class="metric">{esc(display(value))}</div></div>')
-    fragments.append('</div><section id="overview"><div class="section-number">01 / PROCESSING</div><h2>Locus processing and retention</h2>')
+    fragments.append('</div><section id="matrix-catalog"><h2>Which matrices were produced?</h2>')
+    fragments.append('<p>Find each matrix by selection, sequence type and trimming status. Select an entry to open its locus count, taxon count, length and file path. Codon-position and fourfold datasets are listed under their parent codon matrix.</p>')
+    fragments.append(matrix_catalog(matrices))
+    fragments.append('<p class="muted">Codon matrices contain all codon positions of the retained loci; this does not mean every input locus passed QC. Independent QC selects codon and protein loci separately. Paired QC uses the same retained locus set for both representations. Different selection routes may produce identical contents. FASTA, PHYLIP and NEXUS are formats of the same dataset.</p></section>')
+    fragments.append('<section id="overview"><div class="section-number">01 / PROCESSING</div><h2>Locus processing and retention</h2>')
     fragments.append('<p>Each QC branch and each matrix has its own locus set. Counts across raw/trimmed, codon/protein, and independent/paired outputs must not be added to estimate unique input loci.</p>')
     fragments.append(table(["Measure", "Value"], [("Input loci", overview["input_loci"]), ("Successfully aligned loci", overview["aligned_loci"]),
                                                   ("Recorded alignment failures", overview["failed_alignments"]), ("Reused aligned loci", overview["reused_loci"]),
@@ -600,12 +695,9 @@ def render_html(report):
     fragments.append('<p>Statistics are recomputed from each final FASTA matrix. QC pass counts do not imply inclusion: concatenation can subsequently skip loci with missing taxa. Codon-position lengths are nucleotide columns; full codon matrices also report complete codons.</p>')
     fragments.append(table(["Matrix", "Taxa", "Source loci", "Length", "Unit", "Complete codons", "Variable", "PIS", "Constant", "Unresolved-only", "Gap −", "Missing ?", "Ambiguous", "GC"],
                            [(m["matrix"], len(m["taxa"]), m.get("loci"), m["length"], m["unit"], m["complete_codons"], m["variable"], m["pis"], m["constant"], m["unresolved_only"], pct(m["gap_ratio"]), pct(m["missing_ratio"]), pct(m["ambiguous_ratio"]), "Not applicable" if m["seqtype"] == "prot" else pct(m["gc_ratio"])) for m in evaluated]))
+    fragments.append('<h3>Matrix details and associated datasets</h3>')
     for m in full:
-        if m.get("status") == "evaluated":
-            fragments.append(f'<details><summary>{esc(m["group"])} — inclusion and missing blocks</summary>' + table(["Measure", "Value"], [
-                ("Actually included loci", m.get("loci")), ("Skipped after QC", m.get("skipped_after_qc")),
-                ("Artificial missing blocks", m["padding"]["blocks"] if m.get("padding") else None),
-                ("Artificially filled characters", m["padding"]["characters"] if m.get("padding") else None)]) + '</details>')
+        fragments.append(matrix_details(m, matrices))
     fragments.append('<p class="muted">Fourfold-degenerate source-locus counts are unavailable unless a contribution map is recorded; the parent matrix locus count is not substituted. Literal ? counts include any existing missing markers; only .missing.tsv identifies artificial padding.</p><h3>Raw versus trimmed: matched locus sets</h3>')
     fragments.append(table(["Representation / selection", "Common included loci", "Raw-only loci", "Trimmed-only loci", "Raw common-set columns", "Trimmed common-set columns", "Unit"],
                            [(c["raw"].rsplit("/", 1)[0], c["common_loci"], c.get("raw_only"), c.get("trimmed_only"), c["raw_common_columns"], c["trimmed_common_columns"], c.get("unit")) for c in report["trimming_comparisons"]]))
@@ -639,6 +731,10 @@ def render_html(report):
                       """<script>
 function saveBlob(blob,name){const a=document.createElement('a');const u=URL.createObjectURL(blob);a.href=u;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(u),60000);}
 document.getElementById('download-summary').addEventListener('click',()=>saveBlob(new Blob([document.getElementById('report-data').textContent],{type:'application/json'}),'phyloprep-report-summary.json'));
+function openMatrixDetails(id){const target=document.getElementById(id);if(target&&target.matches('details.matrix-detail')){target.open=true;target.querySelector('summary').focus({preventScroll:true});target.scrollIntoView({block:'start'});}}
+document.querySelectorAll('a.matrix-link').forEach(a=>a.addEventListener('click',()=>openMatrixDetails(a.hash.slice(1))));
+window.addEventListener('hashchange',()=>openMatrixDetails(location.hash.slice(1)));
+if(location.hash)openMatrixDetails(location.hash.slice(1));
 document.querySelectorAll('.chart svg').forEach((svg,i)=>{const b=document.createElement('button');b.textContent='Save chart as SVG';b.addEventListener('click',()=>saveBlob(new Blob([new XMLSerializer().serializeToString(svg)],{type:'image/svg+xml'}),'phyloprep-chart-'+(i+1)+'.svg'));svg.parentElement.appendChild(b);});
 </script></main></body></html>"""])
     return ''.join(fragments)

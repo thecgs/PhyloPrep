@@ -148,6 +148,14 @@ script uses **Python's standard library only** and writes
 `phyloprep-output/phyloprep-report.html`. All report labels are in English. The
 single HTML file embeds SVG charts and summary data, requires no internet
 connection, and offers chart SVG export, summary JSON download, and print/PDF.
+The opening matrix catalog identifies each primary matrix by independent/paired
+QC, sequence representation, and raw/trimmed status. Select an entry to open its
+locus count, taxon count, alignment length and relative FASTA path. Codon-position
+and fourfold datasets are listed under their parent codon matrix rather than
+presented as unexplained aggregate totals. Absent files are labeled "Not found
+in saved outputs"; unreadable matrices link to their diagnostic details without
+a success indicator. Nucleotide, protein-only and pseudogene outputs use the
+same catalog with the applicable rows.
 The report is generated on demand; existing CLI/browser analyses do not incur
 the additional matrix-statistics calculation automatically.
 

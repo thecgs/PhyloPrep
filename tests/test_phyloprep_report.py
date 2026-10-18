@@ -280,3 +280,66 @@ def test_independent_threshold_failure_not_lost(tmp_path):
 def test_invalid_folder_does_not_create_output(tmp_path):
     assert report.main(['-i', str(tmp_path)]) == 1
     assert not (tmp_path / 'phyloprep-report.html').exists()
+
+
+def test_matrix_catalog_has_explicit_routes_and_clickable_details(tmp_path):
+    for group in ('codon/raw', 'codon/trimmed', 'prot/raw', 'prot/trimmed',
+                  'paired/codon/raw', 'paired/codon/trimmed', 'paired/prot/raw', 'paired/prot/trimmed'):
+        directory = matrix(tmp_path, group)
+        if '/codon/' in '/' + group:
+            for name in ('codon1st.supermatrix.fasta', 'codon2nd.supermatrix.fasta',
+                         'codon3rd.supermatrix.fasta', 'fourfold.fasta'):
+                (directory / name).write_text('>a\nAC\n>b\nAT\n')
+    data = report.build_report(tmp_path)
+    output = report.render_html(data)
+    assert 'Full concatenated matrices' not in output
+    assert 'Evaluated matrix datasets' not in output
+    assert 'Which matrices were produced?' in output
+    catalog = output.split('<section id="matrix-catalog">')[1].split('</section>')[0]
+    assert catalog.count('class="matrix-link"') == 8
+    assert 'Independent QC' in catalog and 'Paired QC' in catalog
+    assert 'Codon (all positions)' in catalog and 'Protein' in catalog
+    anchors = re.findall(r'class="matrix-link" href="#([^"]+)"', catalog)
+    assert len(set(anchors)) == 8
+    assert all(f'id="{anchor}"' in output for anchor in anchors)
+    assert output.count('<h3>Datasets derived from this codon matrix</h3>') == 4
+    assert output.count('Codon position 1</td>') == 4
+    assert output.count('Fourfold-degenerate sites</td>') == 4
+    assert 'matrices/paired/codon/raw/supermatrix.fasta' in output
+
+
+@pytest.mark.parametrize('group,label', [('nucl/raw', 'Nucleotide'), ('prot/raw', 'Protein'),
+                                        ('pseudogene/paired/codon/raw', 'Codon (all positions)')])
+def test_catalog_partial_modes_are_not_claimed_produced(tmp_path, group, label):
+    matrix(tmp_path, group)
+    result = report.build_report(tmp_path)
+    catalog = report.matrix_catalog(result['matrices'])
+    assert label in catalog
+    assert catalog.count('class="matrix-link"') == 1
+    assert 'Not found in saved outputs' in catalog
+    if group.startswith('pseudogene'):
+        assert 'Pseudogene' in catalog and 'Paired QC' in catalog
+        assert 'Protein' in catalog  # Explicitly absent protein counterpart.
+    else:
+        assert 'Paired QC' not in catalog
+
+
+def test_catalog_unreadable_matrix_links_to_error_not_success(tmp_path):
+    directory = matrix(tmp_path)
+    (directory / 'supermatrix.fasta').write_text('>a\nAC\n>b\nA\n')
+    data = report.build_report(tmp_path)
+    output = report.render_html(data)
+    catalog = report.matrix_catalog(data['matrices'])
+    assert 'Not evaluated — view details' in catalog
+    assert '✓' not in catalog
+    assert 'Empty or unequal-length sequence' in output
+    assert report.matrix_anchor(data['matrices'][0]) in catalog
+
+
+def test_catalog_empty_and_hostile_paths_are_safe():
+    assert 'No primary concatenated matrices' in report.matrix_catalog([])
+    hostile = dict(group='codon/raw', matrix='codon/raw/<script>alert(1)</script>.fasta',
+                   kind='full', seqtype='codon', status='not_evaluated', error='<img src=x onerror=alert(1)>')
+    output = report.matrix_catalog([hostile]) + report.matrix_details(hostile, [hostile])
+    assert '<script>' not in output and '<img ' not in output
+    assert '&lt;script&gt;' in output
